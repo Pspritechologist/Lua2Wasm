@@ -1,0 +1,10 @@
+[package]
+name = "luant"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dumpster = "2.0.0"
+fastrand = "2.3.0"
+hashbrown = "0.16.1"
+real_float = "0.3.0"
