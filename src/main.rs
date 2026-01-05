@@ -81,6 +81,8 @@ struct Frame {
 }
 
 fn main() {
+	parsing::parse("owo").unwrap();
+
 	let (byte_code, locals, strings, nums) = parsing::parse_asm(include_str!("../src/test.asm"));
 	let stack = run_vm(
 		&byte_code,

@@ -2,19 +2,64 @@ use logos::Logos;
 
 pub use logos;
 
-pub type Lexer<'src> = logos::Lexer<'src, Token>;
-
-pub fn lexer(src: &str) -> Lexer<'_> {
-	Token::lexer(src)
+pub trait TokPat {
+	fn matches(self, tok: Token<'_>) -> bool;
 }
 
-fn handle_block_comment<'s>(lex: &mut logos::Lexer<'s, Token>) -> Result<logos::Skip, LexError<'s>> {
-	let equals = lex.slice().chars().filter(|&c| c == '=').count();
-	let end_pat = format!("]{}]", "=".repeat(equals));
-	let end = dbg!(lex.remainder()).find(&end_pat).ok_or(LexError::UnmatchedBlockComment)?;
-	lex.bump(end + end_pat.len());
+impl TokPat for Token<'_> {
+	fn matches(self, tok: Token<'_>) -> bool {
+		self == tok
+	}
+}
 
-	Ok(logos::Skip)
+impl<F: FnOnce(Token<'_>) -> bool> TokPat for F {
+	fn matches(self, tok: Token<'_>) -> bool {
+		self(tok)
+	}
+}
+
+pub struct Lexer<'s> {
+	inner: logos::Lexer<'s, Token<'s>>,
+	peeked: Option<Token<'s>>,
+}
+
+impl<'s> Lexer<'s> {
+	pub fn peek(&mut self) -> Result<Option<Token<'s>>, LexError<'s>> {
+		if self.peeked.is_none() {
+			self.peeked = self.inner.next().transpose()?;
+		}
+
+		Ok(self.peeked)
+	}
+
+	pub fn next_if(&mut self, pat: impl TokPat) -> Result<Option<Token<'s>>, LexError<'s>> {
+		if let Some(tok) = self.peek()? && pat.matches(tok) {
+			self.peeked = None;
+			return Ok(Some(tok));
+		}
+
+		Ok(None)
+	}
+
+	pub fn resolve_ident(&self, key: IdentKey) -> &'s str {
+		self.inner.extras.resolve_ident(key)
+	}
+}
+
+impl<'s> Iterator for Lexer<'s> {
+	type Item = Result<Token<'s>, LexError<'s>>;
+	fn next(&mut self) -> Option<Self::Item> {
+		self.peeked.take()
+			.map(Ok)
+			.or_else(|| self.inner.next())
+	}
+}
+
+pub fn lexer(src: &str) -> Lexer<'_> {
+	Lexer {
+		inner: Token::lexer(src),
+		peeked: None,
+	}
 }
 
 slotmap::new_key_type! {
@@ -42,13 +87,46 @@ impl<'s> LexExtras<'s> {
 	}
 }
 
+fn handle_comment<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<logos::Skip, LexError<'s>> {
+	if !lex.slice().starts_with("--[") {
+		// Single-line comment
+		let end = lex.remainder().find('\n').unwrap_or(lex.remainder().len());
+		lex.bump(end);
+		return Ok(logos::Skip);
+	}
+
+	// let equals = lex.slice().matches('=').count();
+	let equals = lex.slice().len() - 4; // "--[==[".len() == 6
+	let end_pat = format!("]{}]", "=".repeat(equals));
+	let end = lex.remainder().find(&end_pat).ok_or(LexError::UnmatchedBlockComment)?;
+	lex.bump(end + end_pat.len());
+
+	Ok(logos::Skip)
+}
+
+fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<&'s str, LexError<'s>> {
+	// let equals = lex.slice().matches('=').count();
+	let equals = lex.slice().len() - 2; // "[==[".len() == 4
+	let end_pat = format!("]{}]", "=".repeat(equals));
+	let end = lex.remainder().find(&end_pat).ok_or(LexError::UnmatchedMultiLineString)?;
+
+	let str_end = end - end_pat.len();
+	let s = &lex.remainder()[..str_end];
+	// Multiline-strings ignore the first newline.
+	let s = s.strip_prefix('\n').unwrap_or(s);
+
+	lex.bump(end + end_pat.len());
+	Ok(s)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Logos, strum::IntoStaticStr)]
 #[logos(extras = LexExtras<'s>)]
 #[logos(skip(r"\s+"))]
-#[logos(skip(r"--\[=*\[", handle_block_comment))]
-#[logos(skip(r"--[^\n]*"))]
+#[logos(skip(r"--(\[(=*)\[)?", handle_comment))]
+// #[logos(skip(r"--\[=*\[", handle_block_comment))]
+// #[logos(skip(r"--[^\n]*"))]
 #[logos(error(LexError<'s>, |lex| LexError::InvalidToken(lex.slice())))]
-pub enum Token {
+pub enum Token<'s> {
 	#[token(";")] LineTerm,
 	#[token("[")] BracketOpen,
 	#[token("]")] BracketClose,
@@ -108,31 +186,42 @@ pub enum Token {
 	#[token("break")] Break,
 	#[token("goto")] Goto,
 
-	#[regex(r"[-+]?\d+(\.\d*)?([eE][-+]?\d+)?", |lex| lex.slice().parse())]
+	#[regex(
+		r"[-+]?\d+(\.\d*)?([eE][-+]?\d+)?",
+		|lex| lex.slice().parse()
+	)]
 	Number(f64),
 
-	#[regex(r"[\p{XID_Start}_][\p{XID_Continue}_]*", |lex| {
-		let ident = lex.slice();
-		lex.extras.handle_ident(ident)
-	})]
+	#[regex(
+		r"[\p{XID_Start}_][\p{XID_Continue}_]*",
+		|lex| lex.extras.handle_ident(lex.slice())
+	)]
 	Identifier(IdentKey),
+
+	#[regex(r#""([^"]|\.)*""#)]
+	#[regex(r"'([^']|\.)*'")]
+	String(&'s str),
+	#[regex(r"\[=*\[", handle_block_string)]
+	RawString(&'s str),
 
 	#[token("true")] True,
 	#[token("false")] False,
 	#[token("nil")] Nil,
 }
 
-impl std::fmt::Display for Token {
+impl std::fmt::Display for Token<'_> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			Token::Number(val) => write!(f, "Number({})", val),
-			Token::Identifier(name) => write!(f, "Identifier({:?})", name),
+			Token::Number(val) => write!(f, "Number({val})"),
+			Token::Identifier(name) => write!(f, "Identifier({name:?})"),
+			Token::String(s) => write!(f, "String('{s}')"),
+			Token::RawString(s) => write!(f, "MlString([[{s}]])"),
 			_ => write!(f, "{}", self.tok_type()),
 		}
 	}
 }
 
-impl Token {
+impl Token<'_> {
 	fn tok_type(&self) -> &'static str {
 		self.into()
 	}
@@ -142,6 +231,7 @@ impl Token {
 pub enum LexError<'src> {
 	NumberInvalid,
 	UnmatchedBlockComment,
+	UnmatchedMultiLineString,
 	InvalidToken(&'src str),
 	#[default]
 	Unknown,
@@ -160,6 +250,7 @@ impl std::fmt::Display for LexError<'_> {
 		match self {
 			LexError::NumberInvalid => write!(f, "Invalid float literal"),
 			LexError::UnmatchedBlockComment => write!(f, "Unmatched block comment"),
+			LexError::UnmatchedMultiLineString => write!(f, "Unmatched multi-line string"),
 			LexError::InvalidToken(tok) => write!(f, "Invalid token: {tok}"),
 			LexError::Unknown => write!(f, "Unknown lexing error"),
 		}
