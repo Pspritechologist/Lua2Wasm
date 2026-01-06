@@ -1,14 +1,14 @@
 use crate::parsing::LexerExt;
-use super::{Error, ParseState, Op, IdentKey, LexExtras, expect_tok};
+use super::{Error, ParseState, Op, VariableScope, expect_tok};
 use luant_lexer::{Lexer, Token};
 
-struct LoopState<P> {
-	parent: P,
+struct LoopState<'a, 's> {
+	parent: &'a mut dyn ParseState<'s>,
 	start_pos: usize,
 	end_jumps: Vec<usize>,
 }
-impl<'s, P: ParseState<'s>> LoopState<P> {
-	fn new(parent: P, start_pos: usize) -> Self {
+impl<'a, 's> LoopState<'a, 's> {
+	fn new(parent: &'a mut dyn ParseState<'s>, start_pos: usize) -> Self {
 		Self {
 			parent,
 			start_pos,
@@ -32,8 +32,8 @@ impl<'s, P: ParseState<'s>> LoopState<P> {
 		}
 	}
 }
-impl<'s, P: ParseState<'s>> ParseState<'s> for LoopState<P> {
-	fn parent(&mut self) -> &mut dyn ParseState<'s> { &mut self.parent }
+impl<'a, 's> ParseState<'s> for LoopState<'a, 's> {
+	fn parent(&mut self) -> &mut dyn ParseState<'s> { self.parent }
 	fn get_ops(&self) -> &[Op] { self.parent.get_ops() }
 	fn get_ops_mut(&mut self) -> &mut [Op] { self.parent.get_ops_mut() }
 
@@ -52,13 +52,13 @@ impl<'s, P: ParseState<'s>> ParseState<'s> for LoopState<P> {
 	}
 }
 
-pub fn parse_while<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl ParseState<'s>) -> Result<(), Error<'s>> {
+pub fn parse_while<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut dyn ParseState<'s>) -> Result<(), Error<'s>> {
 	assert!(matches!(head, Token::While));
 
 	let start = state.get_ops().len();
-	let mut state = LoopState::new(state, start);
+	let mut state = VariableScope::new(LoopState::new(state, start));
 
-	let cond = super::try_parse_expr(lexer.next_must()?, lexer, &mut state)?.to_slot(&mut state);
+	// let cond = super::try_parse_expr(lexer.next_must()?, lexer, &mut state)?.set_to_slot(&mut state);
 
 	expect_tok!(lexer, Token::Do)?;
 
@@ -74,7 +74,7 @@ pub fn parse_while<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl 
 		// super::parse_stmt(tok, lexer, &mut state)?;
 	}
 
-	let LoopState { parent: state, end_jumps, .. } = state;
+	let LoopState { parent: state, end_jumps, .. } = state.into_inner();
 
 	let end_pos = state.get_ops().len();
 	end_jumps.into_iter().for_each(|pos| {

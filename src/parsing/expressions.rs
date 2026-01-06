@@ -1,5 +1,5 @@
 use crate::parsing::LexerExt;
-use super::{Error, ParseState, Op, IdentKey, LexExtras, expect_tok};
+use super::{Error, ParseState, ParseStateExt, Op, IdentKey, LexExtras, expect_tok};
 use luant_lexer::{Lexer, Token};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,7 +66,7 @@ pub enum Const<'s> {
 
 pub enum Expr<'s> {
 	Constant(Const<'s>),
-	Local(u8),
+	Local(IdentKey),
 }
 
 impl<'s> Expr<'s> {
@@ -82,39 +82,30 @@ impl<'s> Expr<'s> {
 		matches!(self, Expr::Constant(Const::Null))
 	}
 
-	pub fn to_slot(&self, state: &mut impl ParseState<'s>) -> u8 {
+	pub fn set_to_slot(&self, lexer: &Lexer<'s>, state: &mut impl ParseState<'s>, slot: u8) -> Result<(), Error<'s>> {
 		match self {
-			Expr::Local(slot) => *slot,
+			Expr::Local(ident) => {
+				let local_slot = state.local(lexer, *ident)?;
+				state.emit(Op::Copy(slot, local_slot));
+			},
 			Expr::Constant(Const::Number(n)) => {
-				let slot = state.new_slot();
 				let num_idx = state.number_idx(*n);
 				state.emit(Op::LoadNum(slot, num_idx));
-				slot
 			},
 			Expr::Constant(Const::String(s)) => {
-				let slot = state.new_slot();
 				let str_idx = state.string_idx(s);
 				state.emit(Op::LoadStr(slot, str_idx));
-				slot
 			},
-			Expr::Constant(Const::Bool(b)) => {
-				let slot = state.new_slot();
-				state.emit(Op::LoadBool(slot, *b));
-				slot
-			},
-			Expr::Constant(Const::Null) => {
-				let slot = state.new_slot();
-				state.emit(Op::LoadNull(slot));
-				slot
-			},
+			Expr::Constant(Const::Bool(b)) => state.emit(Op::LoadBool(slot, *b)),
+			Expr::Constant(Const::Null) => state.emit(Op::LoadNull(slot)),
 		}
+
+		Ok(())
 	}
 }
 
 pub fn try_parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl ParseState<'s>) -> Result<Expr<'s>, Error<'s>> {
-
-	
-	let expr = match lexer.next_must()? {
+	let expr = match head {
 		Token::BraceOpen => Expr::Local(parse_table_init(head, lexer, state)?),
 		Token::ParenOpen => {
 			let expr = try_parse_expr(lexer.next_must()?, lexer, state)?;
@@ -128,7 +119,7 @@ pub fn try_parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut im
 		Token::Function => todo!(),
 		Token::Not => todo!(),
 		Token::Number(n) => Expr::Constant(Const::Number(n)),
-		Token::Identifier(i) => todo!(),
+		Token::Identifier(ident) => Expr::Local(ident),
 		Token::String(s) => Expr::Constant(Const::String(s)), //TODO: Escapes.
 		Token::RawString(s) => Expr::Constant(Const::String(s)),
 		Token::True => Expr::Constant(Const::Bool(true)),
@@ -140,27 +131,29 @@ pub fn try_parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut im
 	Ok(expr)
 }
 
-pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl ParseState<'s>) -> Result<u8, Error<'s>> {
+pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl ParseState<'s>) -> Result<IdentKey, Error<'s>> {
 	assert_eq!(head, Token::BraceOpen);
 
-	let dst = state.new_slot();
-	state.emit(Op::LoadTab(dst));
+	let tab_temp = state.new_temporary(lexer);
+	let tab_slot = state.local(lexer, tab_temp)?;
+	state.emit(Op::LoadTab(tab_slot));
 
+	if lexer.next_if(Token::BraceClose)?.is_some() {
+		return Ok(tab_temp);
+	}
+
+	let [key_temp, val_temp] = state.temporaries(lexer);
+	let [key_slot, val_slot] = [state.local(lexer, key_temp)?, state.local(lexer, val_temp)?];
+
+	let mut array_index = 0;
 	loop {
-		let tok = lexer.next_must()?;
-		if tok == Token::BraceClose {
-			break;
-		}
-
-		let mut array_index = 0;
-
 		enum KeyOrArray<'s> {
 			Key(Expr<'s>),
 			Array(Expr<'s>),
 		}
 
 		// parse field or array value.
-		let first = match head {
+		let first = match lexer.next_must()? {
 			Token::Identifier(field) => match lexer.next_if(Token::Assign)? {
 				Some(_) => KeyOrArray::Key(Expr::Constant(Const::String(lexer.resolve_ident(field)))),
 				None => KeyOrArray::Array(try_parse_expr(head, lexer, state)?),
@@ -176,19 +169,18 @@ pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut 
 
 		match first {
 			KeyOrArray::Key(expr) => {
-				let key = expr.to_slot(state);
-				let value = try_parse_expr(lexer.next_must()?, lexer, state)?.to_slot(state);
-				state.emit(Op::Set(dst, key, value));
+				expr.set_to_slot(lexer, state, key_slot)?;
+				try_parse_expr(lexer.next_must()?, lexer, state)?.set_to_slot(lexer, state, val_slot)?;
+				state.emit(Op::Set(tab_slot, key_slot, val_slot));
 			},
 			KeyOrArray::Array(entry) => {
 				array_index += 1; // Lua is 1-indexed.
 
-				let index_slot = state.new_slot();
-				let value = entry.to_slot(state);
+				entry.set_to_slot(lexer, state, val_slot)?;
 
 				let num_idx = state.number_idx(array_index as f64);
-				state.emit(Op::LoadNum(index_slot, num_idx));
-				state.emit(Op::Set(dst, index_slot, value));
+				state.emit(Op::LoadNum(key_slot, num_idx));
+				state.emit(Op::Set(tab_slot, key_slot, val_slot));
 			},
 		}
 
@@ -198,5 +190,5 @@ pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut 
 		}
 	}
 
-	Ok(dst)
+	Ok(tab_temp)
 }

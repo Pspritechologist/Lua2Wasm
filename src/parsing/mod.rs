@@ -1,16 +1,17 @@
 use crate::Operation as Op;
 use luant_lexer::{IdentKey, LexExtras, Lexer, Token};
-use hashbrown::HashMap;
 
+use state::{ParseState, ParseStateExt, RootState, VariableScope};
 use expressions::*;
 use loops::*;
 
 mod asm;
+mod state;
 mod expressions;
 mod loops;
 
 pub use asm::parse_asm;
-use slotmap::SparseSecondaryMap;
+pub use state::Parsed;
 
 pub trait LexerExt<'s> {
 	fn next_must(&mut self) -> Result<Token<'s>, Error<'s>>;
@@ -39,111 +40,7 @@ use expect_tok;
 
 type Error<'s> = Box<dyn std::error::Error + 's>;
 
-#[auto_impl::auto_impl(&mut)]
-trait ParseState<'s> {
-	fn emit(&mut self, op: Op) { self.parent().emit(op) }
-	fn get_ops(&self) -> &[Op];
-	fn get_ops_mut(&mut self) -> &mut [Op];
-	fn number_idx(&mut self, n: f64) -> u16 { self.parent().number_idx(n) }
-	fn string_idx(&mut self, s: &'s str) -> u16 { self.parent().string_idx(s) }
-	fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, pos: usize) -> Result<(), Error<'s>> { self.parent().label(lexer, label, pos) }
-	fn find_label(&mut self, label: IdentKey, pos: usize) -> usize { self.parent().find_label(label, pos) }
-	fn label_exists(&mut self, label: IdentKey) -> bool { self.parent().label_exists(label) }
-	fn new_slot(&mut self) -> u8 { self.parent().new_slot() }
-	fn drop_slot(&mut self, slot: u8) { self.parent().drop_slot(slot) }
-	fn emit_break(&mut self) -> Result<(), Error<'s>> { self.parent().emit_break() }
-	fn emit_continue(&mut self) -> Result<(), Error<'s>> { self.parent().emit_continue() }
-
-	fn parent(&'_ mut self) -> &'_ mut dyn ParseState<'s>;
-}
-
-#[derive(Debug)]
-pub struct Parsed<'s> {
-	operations: Vec<Op>,
-	numbers: Vec<f64>,
-	strings: Vec<&'s str>,
-}
-
 pub fn parse(src: &str) -> Result<Parsed<'_>, Error<'_>> {
-	#[derive(Default, Clone)]
-	struct RootState<'s> {
-		operations: Vec<Op>,
-
-		locals: SparseSecondaryMap<IdentKey, u8>,
-		numbers: Vec<f64>,
-		string_indexes: HashMap<&'s str, usize>,
-		strings: Vec<&'s str>,
-		labels: SparseSecondaryMap<IdentKey, usize>,
-		missing_labels: Vec<(IdentKey, usize)>,
-	}
-
-	impl<'s> ParseState<'s> for RootState<'s> {
-		fn parent(&mut self) -> &mut dyn ParseState<'s> { unreachable!() }
-
-		fn emit(&mut self, op: Op) {
-			self.operations.push(op);
-		}
-		fn get_ops(&self) -> &[Op] {
-			&self.operations
-		}
-		fn get_ops_mut(&mut self) -> &mut [Op] {
-			&mut self.operations
-		}
-
-		fn number_idx(&mut self, n: f64) -> u16 {
-			if let Some(idx) = self.numbers.iter().position(|&num| num == n) {
-				idx
-			} else {
-				let idx = self.numbers.len();
-				self.numbers.push(n);
-				idx
-			}.try_into().expect("Too many numbers consts :(")
-		}
-		fn string_idx(&mut self, s: &'s str) -> u16 {
-			if let Some(&idx) = self.string_indexes.get(s) {
-				idx
-			} else {
-				let idx = self.strings.len();
-				self.strings.push(s);
-				self.string_indexes.insert(s, idx);
-				idx
-			}.try_into().expect("Too many string consts :(")
-		}
-		fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, pos: usize) -> Result<(), Error<'s> > {
-			if self.label_exists(label) {
-				return Err(format!("Label '{}' already defined", lexer.resolve_ident(label)).into());
-			}
-			self.labels.insert(label, pos);
-			Ok(())
-		}
-		fn find_label(&mut self, label: IdentKey, pos: usize) -> usize {
-			if let Some(&pos) = self.labels.get(label) {
-				return pos;
-			}
-
-			// Add to the list to fill in at a later date.
-			self.missing_labels.push((label, pos));
-			0
-		}
-		fn label_exists(&mut self, label: IdentKey) -> bool {
-			self.labels.contains_key(label)
-		}
-
-		fn new_slot(&mut self) -> u8 {
-			9
-		}
-		fn drop_slot(&mut self,slot:u8) {
-			assert_eq!(slot, 9);
-		}
-
-		fn emit_break(&mut self) -> Result<(), Error<'s>> {
-			Err("Break statement not within a loop".into())
-		}
-		fn emit_continue(&mut self) -> Result<(), Error<'s>> {
-			Err("Continue statement not within a loop".into())
-		}
-	}
-
 	let mut lexer = luant_lexer::lexer(src);
 	let mut state = RootState::default();
 
@@ -151,11 +48,7 @@ pub fn parse(src: &str) -> Result<Parsed<'_>, Error<'_>> {
 		parse_stmt(tok, &mut lexer, &mut state)?;
 	}
 
-	Ok(Parsed {
-		operations: state.operations,
-		numbers: state.numbers,
-		strings: state.strings,
-	})
+	state.finalize(&lexer)
 }
 
 fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl ParseState<'s>) -> Result<(), Error<'s>> {
@@ -168,7 +61,33 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl Parse
 			expect_tok!(lexer, Token::Label)?;
 		},
 		Token::Function => todo!(),
-		Token::Local => todo!(),
+		Token::Local => {
+			fn parse_next<'s>(lexer: &mut Lexer<'s>, state: &mut impl ParseState<'s>, ident: IdentKey) -> Result<Expr<'s>, Error<'s>> {
+				let next_tok = lexer.next_if(|tok| matches!(tok, Token::Comma | Token::Equals))?;
+				match next_tok {
+					Some(Token::Comma) => {
+						let next_ident = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
+						let value = parse_next(lexer, state, ident)?;
+						Ok(Expr::Constant(Const::Null))
+					},
+					Some(Token::Equals) => {
+						let temp = state.new_temporary(lexer);
+						let slot = state.local(lexer, temp)?;
+
+						let expr = try_parse_expr(lexer.next_must()?, lexer, state)?;
+						expr.set_to_slot(lexer, state, slot)?;
+
+						Ok(expr)
+					},
+					None => Ok(Expr::Constant(Const::Null)),
+					_ => unreachable!(),
+				}
+			}
+
+			// fn parse_next_expr<'s>(lexer: &mut Lexer<'s>, state: &mut impl ParseState<'s>) -> Result<(), Error<'s>> {
+
+			// }
+		},
 		Token::Return => todo!(),
 		Token::Do => parse_do_block(head, lexer, state)?,
 		Token::If => todo!(),
@@ -178,50 +97,33 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl Parse
 		Token::Break => state.emit_break()?,
 		Token::Goto => {
 			let label = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
-			let goto_pos = state.get_ops().len();
-			let pos = state.find_label(label, goto_pos);
-			let (p32, p8) = ((pos >> 8) as u32, (pos & 0xFF) as u8);
+			let goto_op_pos = state.get_ops().len();
+			let goto_target = state.find_label(label, goto_op_pos);
+			let (p32, p8) = ((goto_target >> 8) as u32, (goto_target & 0xFF) as u8);
 			state.emit(Op::GoTo(p32, p8));
 		},
-		Token::Identifier(_) => todo!(),
+		Token::Identifier(ident) => {
+			//TODO: Temp obviously.
+			assert_eq!(lexer.resolve_ident(ident), "print");
+			expect_tok!(lexer, Token::ParenOpen)?;
+			let arg_expr = try_parse_expr(lexer.next_must()?, lexer, state)?;
+			expect_tok!(lexer, Token::ParenClose)?;
+			
+			let temp = state.new_temporary(lexer);
+			let slot = state.local(lexer, temp)?;
+			arg_expr.set_to_slot(lexer, state, slot)?;
+			state.emit(Op::Put(slot));
+		},
 		tok => return Err(format!("Expected statement, found {tok:?}").into()),
 	}
 
 	Ok(())
 }
 
-fn parse_do_block<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl ParseState<'s>) -> Result<(), Error<'s>> {
-	struct ScopeState<'a, 's> {
-		parent: &'a mut dyn ParseState<'s>,
-		labels: SparseSecondaryMap<IdentKey, usize>,
-	}
-
-	impl<'s> ParseState<'s> for ScopeState<'_, 's> {
-		fn parent(&mut self) -> &mut dyn ParseState<'s> { self.parent }
-		fn get_ops(&self) -> &[Op] { self.parent.get_ops() }
-		fn get_ops_mut(&mut self) -> &mut [Op] { self.parent.get_ops_mut() }
-
-		fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, pos: usize) -> Result<(), Error<'s> > {
-			if self.label_exists(label) {
-				return Err(format!("Label '{}' already defined", lexer.resolve_ident(label)).into());
-			}
-			self.labels.insert(label, pos);
-			Ok(())
-		}
-		fn find_label(&mut self, label: IdentKey, pos: usize) -> usize {
-			self.labels.get(label).copied().unwrap_or_else(|| self.parent().find_label(label, pos))
-		}
-		fn label_exists(&mut self, label: IdentKey) -> bool {
-			self.labels.contains_key(label) || self.parent().label_exists(label)
-		}
-	}
-
+fn parse_do_block<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut dyn ParseState<'s>) -> Result<(), Error<'s>> {
 	assert_eq!(head, Token::Do);
 
-	let mut state = ScopeState {
-		parent: state,
-		labels: SparseSecondaryMap::new(),
-	};
+	let mut state = VariableScope::new(state);
 
 	loop {
 		let tok = lexer.next_must()?;

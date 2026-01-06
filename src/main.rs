@@ -81,14 +81,14 @@ struct Frame {
 }
 
 fn main() {
-	parsing::parse("owo").unwrap();
+	// let (operations, locals, strings, numbers) = parsing::parse_asm(include_str!("../src/test.asm"));
+	let parsing::Parsed { operations, numbers, strings, locals } = parsing::parse(include_str!("../src/test.lua")).unwrap();
 
-	let (byte_code, locals, strings, nums) = parsing::parse_asm(include_str!("../src/test.asm"));
 	let stack = run_vm(
-		&byte_code,
+		&operations,
 		locals,
 		ConstStrings::new(strings),
-		&nums,
+		&numbers,
 	);
 
 	for (reg, val) in stack.iter().enumerate() {

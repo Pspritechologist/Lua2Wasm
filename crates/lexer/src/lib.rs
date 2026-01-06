@@ -2,18 +2,18 @@ use logos::Logos;
 
 pub use logos;
 
-pub trait TokPat {
-	fn matches(self, tok: Token<'_>) -> bool;
+pub trait TokPat<'s> {
+	fn matches(self, tok: Token<'s>) -> bool;
 }
 
-impl TokPat for Token<'_> {
-	fn matches(self, tok: Token<'_>) -> bool {
+impl<'s> TokPat<'s> for Token<'_> {
+	fn matches(self, tok: Token<'s>) -> bool {
 		self == tok
 	}
 }
 
-impl<F: FnOnce(Token<'_>) -> bool> TokPat for F {
-	fn matches(self, tok: Token<'_>) -> bool {
+impl<'s, F: FnOnce(Token<'s>) -> bool> TokPat<'s> for F {
+	fn matches(self, tok: Token<'s>) -> bool {
 		self(tok)
 	}
 }
@@ -32,7 +32,7 @@ impl<'s> Lexer<'s> {
 		Ok(self.peeked)
 	}
 
-	pub fn next_if(&mut self, pat: impl TokPat) -> Result<Option<Token<'s>>, LexError<'s>> {
+	pub fn next_if(&mut self, pat: impl TokPat<'s>) -> Result<Option<Token<'s>>, LexError<'s>> {
 		if let Some(tok) = self.peek()? && pat.matches(tok) {
 			self.peeked = None;
 			return Ok(Some(tok));
@@ -41,8 +41,14 @@ impl<'s> Lexer<'s> {
 		Ok(None)
 	}
 
-	pub fn resolve_ident(&self, key: IdentKey) -> &'s str {
-		self.inner.extras.resolve_ident(key)
+	// Returns the identifier string associated with the given IdentKey.
+	pub fn resolve_ident(&self, key: impl Into<IdentKey>) -> &'s str {
+		self.inner.extras.resolve_ident(key.into())
+	}
+
+	/// Returns an new IdentKey not associated with any identifier.
+	pub fn new_key(&mut self) -> IdentKey {
+		self.inner.extras.idents.insert("")
 	}
 }
 
