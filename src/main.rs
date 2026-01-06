@@ -67,6 +67,22 @@ enum Operation {
 	SkpIfNot(u8),
 	Put(u8),
 }
+impl Operation {
+	pub fn goto(position: usize) -> Self {
+		let (p32, p8) = Self::encode_goto(position);
+		Self::GoTo(p32, p8)
+	}
+
+	pub fn encode_goto(position: usize) -> (u32, u8) {
+		let p32 = (position & 0xFFFF_FFFF) as u32;
+		let p8 = ((position >> 32) & 0xFF) as u8;
+		(p32, p8)
+	}
+
+	pub fn decode_goto(p32: u32, p8: u8) -> usize {
+		((p8 as usize) << 32) | (p32 as usize)
+	}
+}
 
 #[derive(Debug, Default)]
 pub struct State {
@@ -81,8 +97,13 @@ struct Frame {
 }
 
 fn main() {
-	// let (operations, locals, strings, numbers) = parsing::parse_asm(include_str!("../src/test.asm"));
-	let parsing::Parsed { operations, numbers, strings, locals } = parsing::parse(include_str!("../src/test.lua")).unwrap();
+	// let parsed = parsing::parse_asm(include_str!("../src/test.asm"));
+	let parsed = parsing::parse(include_str!("../src/test.lua")).unwrap();
+	let mut buf = String::new();
+	parsing::fmt_asm(&mut buf, &parsed).unwrap();
+	std::fs::write("out.asm", buf).unwrap();
+	
+	let parsing::Parsed { operations, numbers, strings, locals } = parsed;
 
 	let stack = run_vm(
 		&operations,
@@ -249,7 +270,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 				if !*condition {
 					if let Some(Operation::GoTo(p32, p8)) = byte_code.get(frame.pc + 1) {
-						let position = (( *p8 as usize) << 32) | (*p32 as usize);
+						let position = Operation::decode_goto(*p32, *p8);
 						frame.pc = position;
 						continue;
 					};
@@ -264,7 +285,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 				if *condition {
 					if let Some(Operation::GoTo(p32, p8)) = byte_code.get(frame.pc + 1) {
-						let position = (( *p8 as usize) << 32) | (*p32 as usize);
+						let position = Operation::decode_goto(*p32, *p8);
 						frame.pc = position;
 						continue;
 					};
@@ -273,14 +294,14 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				}
 			},
 			Operation::GoTo(p32, p8) => {
-				let position = ((p8 as usize) << 32) | (p32 as usize);
+				let position = Operation::decode_goto(p32, p8);
 				frame.pc = position;
 				continue;
 			},
 			Operation::Put(val) => {
 				match &registers[val as usize] {
 					Some(v) => println!("{v:#}"),
-					None => println!("null"),
+					None => println!("<null>"),
 				}
 			},
 		}

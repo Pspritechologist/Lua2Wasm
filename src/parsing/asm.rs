@@ -1,6 +1,6 @@
 use crate::Operation;
 
-pub fn parse_asm(src: &str) -> (Vec<Operation>, u8, Vec<&str>, Vec<f64>) {
+pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 	let mut ops = Vec::new();
 	let mut max_reg = 0;
 	let mut numbers = Vec::new();
@@ -95,8 +95,7 @@ pub fn parse_asm(src: &str) -> (Vec<Operation>, u8, Vec<&str>, Vec<f64>) {
 			"goto" => {
 				let offset = args!(isize);
 				let position = ops.len().strict_add_signed(offset);
-				let (p32, p8) = ((position & 0xFFFF_FFFF) as u32, (position >> 32) as u8);
-				Operation::GoTo(p32, p8)
+				Operation::goto(position)
 			},
 			"put" => simple_op!(Put u8),
 			op => panic!("Unknown operation: {op}"),
@@ -104,10 +103,72 @@ pub fn parse_asm(src: &str) -> (Vec<Operation>, u8, Vec<&str>, Vec<f64>) {
 	}
 
 	let mut strings = Vec::new();
-	strings.push("");
 	for line in lines {
 		strings.push(line);
 	}
 
-	(ops, max_reg + 1, strings, numbers)
+	super::Parsed {
+		operations: ops,
+		numbers,
+		strings,
+		locals: max_reg + 1,
+	}
+}
+
+pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Result<(), std::fmt::Error> {
+	let super::Parsed {
+		operations,
+		numbers,
+		strings,
+		locals: _,
+	} = bytecode;
+
+	// Print all operations
+	for (idx, op) in operations.iter().enumerate() {
+		match op {
+			Operation::LoadNull(dst) => writeln!(buf, "loadnull {dst}")?,
+			Operation::LoadBool(dst, val) => writeln!(buf, "loadbool {dst} {val}")?,
+			Operation::LoadNum(dst, num_idx) => {
+				let num = numbers.get(*num_idx as usize).unwrap_or(&0.0);
+				writeln!(buf, "loadnum {dst} {num}")?
+			},
+			Operation::LoadStr(dst, str_idx) => writeln!(buf, "loadstr {dst} {str_idx}")?,
+			Operation::LoadBuf(dst, size) => writeln!(buf, "loadbuf {dst} {size}")?,
+			Operation::LoadTab(dst) => writeln!(buf, "loadtab {dst}")?,
+			Operation::Set(tab, key, val) => writeln!(buf, "set {tab} {key} {val}")?,
+			Operation::Get(dst, tab) => writeln!(buf, "get {dst} {tab}")?,
+			Operation::Copy(dst, src) => writeln!(buf, "copy {dst} {src}")?,
+			Operation::Add(dst, a, b) => writeln!(buf, "add {dst} {a} {b}")?,
+			Operation::Sub(dst, a, b) => writeln!(buf, "sub {dst} {a} {b}")?,
+			Operation::Mul(dst, a, b) => writeln!(buf, "mul {dst} {a} {b}")?,
+			Operation::Div(dst, a, b) => writeln!(buf, "div {dst} {a} {b}")?,
+			Operation::Mod(dst, a, b) => writeln!(buf, "mod {dst} {a} {b}")?,
+			Operation::Pow(dst, a, b) => writeln!(buf, "pow {dst} {a} {b}")?,
+			Operation::Eq(dst, a, b) => writeln!(buf, "eq {dst} {a} {b}")?,
+			Operation::Neq(dst, a, b) => writeln!(buf, "neq {dst} {a} {b}")?,
+			Operation::Lt(dst, a, b) => writeln!(buf, "lt {dst} {a} {b}")?,
+			Operation::Lte(dst, a, b) => writeln!(buf, "lte {dst} {a} {b}")?,
+			Operation::Gt(dst, a, b) => writeln!(buf, "gt {dst} {a} {b}")?,
+			Operation::Gte(dst, a, b) => writeln!(buf, "gte {dst} {a} {b}")?,
+			Operation::SkpIf(cond) => writeln!(buf, "skpif {cond}")?,
+			Operation::SkpIfNot(cond) => writeln!(buf, "skpifnot {cond}")?,
+			Operation::GoTo(p32, p8) => {
+				// Convert absolute position back to relative offset
+				let position = Operation::decode_goto(*p32, *p8);
+				let offset = position as isize - idx as isize;
+				writeln!(buf, "goto {offset}")?
+			},
+			Operation::Put(dst) => writeln!(buf, "put {dst}")?,
+		}
+	}
+
+	// Print the data separator
+	writeln!(buf, "-DATA-")?;
+
+	// Print all strings (skip the first empty one since it's added automatically)
+	for s in strings.iter() {
+		writeln!(buf, "{s}")?;
+	}
+
+	Ok(())
 }

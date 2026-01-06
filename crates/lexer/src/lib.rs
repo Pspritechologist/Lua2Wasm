@@ -186,9 +186,12 @@ pub enum Token<'s> {
 	#[token("end")] End,
 
 	#[token("if")] If,
+	#[token("then")] Then,
 	#[token("else")] Else,
+	#[token("elseif")] ElseIf,
 	#[token("while")] While,
 	#[token("for")] For,
+	#[token("in")] In,
 	#[token("break")] Break,
 	#[token("goto")] Goto,
 

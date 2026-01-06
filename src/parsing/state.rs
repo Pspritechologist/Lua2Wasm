@@ -19,13 +19,9 @@ pub trait ParseState<'s> {
 	fn emit_break(&mut self) -> Result<(), Error<'s>> { self.parent().emit_break() }
 	fn emit_continue(&mut self) -> Result<(), Error<'s>> { self.parent().emit_continue() }
 
-	fn new_temporary(&mut self, lexer: &mut Lexer<'s>) -> IdentKey {
-		let ident = lexer.new_key();
-		self.new_local(lexer, ident).unwrap();
-		ident
-	}
 	fn new_register(&mut self) -> u8 { self.parent().new_register() }
-	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<(), Error<'s>> { self.parent().new_local(lexer, name) }
+	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().new_local(lexer, name) }
+	fn make_local(&mut self, lexer: &Lexer<'s>, name: IdentKey, slot: u8) -> Result<(), Error<'s>> { self.parent().make_local(lexer, name, slot) }
 	fn local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().local(lexer, name) }
 
 	fn parent(&'_ mut self) -> &'_ mut dyn ParseState<'s>;
@@ -145,12 +141,19 @@ impl<'s> ParseState<'s> for RootState<'s> {
 		self.registers += 1;
 		reg
 	}
-	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<(), Error<'s>> {
+	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> {
 		if self.locals.contains_key(name) {
 			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
 		}
 		let reg = self.new_register();
 		self.locals.insert(name, reg);
+		Ok(reg)
+	}
+	fn make_local(&mut self, lexer: &Lexer<'s>, name: IdentKey, slot: u8) -> Result<(), Error<'s>> {
+		if self.locals.contains_key(name) {
+			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
+		}
+		self.locals.insert(name, slot);
 		Ok(())
 	}
 	fn local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s> > {
@@ -160,8 +163,8 @@ impl<'s> ParseState<'s> for RootState<'s> {
 
 /// A collection of non-dyn-compatible helper methods for ParseState.
 pub trait ParseStateExt<'s>: ParseState<'s> {
-	fn temporaries<const COUNT: usize>(&mut self, lexer: &mut Lexer<'s>) -> [IdentKey; COUNT] {
-		[(); COUNT].map(|_| self.new_temporary(lexer))
+	fn new_registers<const COUNT: usize>(&mut self) -> [u8; COUNT] {
+		[(); COUNT].map(|_| self.new_register())
 	}
 }
 impl<'s, T: ParseState<'s> + ?Sized> ParseStateExt<'s> for T { }
@@ -192,13 +195,13 @@ impl<'s, P: ParseState<'s>> ParseState<'s> for VariableScope<P> {
 	fn get_ops(&self) -> &[Op] { self.parent.get_ops() }
 	fn get_ops_mut(&mut self) -> &mut [Op] { self.parent.get_ops_mut() }
 
-	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<(), Error<'s>> {
+	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> {
 		if self.locals.contains_key(name) {
 			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
 		}
 		let reg = self.parent().new_register();
 		self.locals.insert(name, reg);
-		Ok(())
+		Ok(reg)
 	}
 
 	fn local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> {
