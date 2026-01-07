@@ -2,60 +2,7 @@ use crate::parsing::LexerExt;
 use super::{Error, ParseState, ParseStateExt, Op, IdentKey, expect_tok};
 use luant_lexer::{Lexer, Token};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Assoc {
-	Left, Right,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InfixOp {
-	Add, Sub,
-	Mul, Div, DivInt,
-	Mod, Pow,
-	Concat,
-	Eq, Neq,
-	Lt, Lte,
-	Gt, Gte,
-	And, Or,
-	BitAnd, BitOr,
-	BitXor,
-	Shl, Shr,
-}
-impl InfixOp {
-	fn assoc(&self) -> Assoc {
-		match self {
-			InfixOp::Pow | InfixOp::Concat => Assoc::Right,
-			_ => Assoc::Left,
-		}
-	}
-
-	fn prec(&self) -> u8 {
-		match self {
-			InfixOp::Or => 1,
-			InfixOp::And => 2,
-			InfixOp::Eq | InfixOp::Neq | InfixOp::Lt | InfixOp::Lte | InfixOp::Gt | InfixOp::Gte => 3,
-			InfixOp::BitOr => 4,
-			InfixOp::BitXor => 5,
-			InfixOp::BitAnd => 6,
-			InfixOp::Shl | InfixOp::Shr => 7,
-			InfixOp::Concat => 8,
-			InfixOp::Add | InfixOp::Sub => 9,
-			InfixOp::Mul | InfixOp::Div | InfixOp::DivInt | InfixOp::Mod => 10,
-			// Unary => 11,
-			InfixOp::Pow => 12,
-		}
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PrefixOp {
-	Neg, BitNot, Len, Not,
-}
-impl PrefixOp {
-	fn prec(&self) -> u8 {
-		11
-	}
-}
+mod pratt;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Const<'s> {
@@ -136,31 +83,8 @@ impl<'s> Expr<'s> {
 	}
 }
 
-pub fn try_parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<Expr<'s>, Error<'s>> {
-	let expr = match head {
-		Token::BraceOpen => Expr::Temp(parse_table_init(head, lexer, state)?),
-		Token::ParenOpen => {
-			let expr = try_parse_expr(lexer.next_must()?, lexer, state)?;
-			expect_tok!(lexer, Token::ParenClose)?;
-			expr
-		},
-		Token::VarArgs => todo!(),
-		Token::Minus => todo!(),
-		Token::BitNot => todo!(),
-		Token::Len => todo!(),
-		Token::Function => todo!(),
-		Token::Not => todo!(),
-		Token::Number(n) => Expr::Constant(Const::Number(n)),
-		Token::Identifier(ident) => Expr::Local(ident),
-		Token::String(s) => Expr::Constant(Const::String(s)), //TODO: Escapes.
-		Token::RawString(s) => Expr::Constant(Const::String(s)),
-		Token::True => Expr::Constant(Const::Bool(true)),
-		Token::False => Expr::Constant(Const::Bool(false)),
-		Token::Nil => Expr::Constant(Const::Null),
-		tok => return Err(format!("Expected expression, found {tok:?}").into()),
-	};
-
-	Ok(expr)
+pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<Expr<'s>, Error<'s>> {
+	pratt::parse_expr(head, lexer, state, 0)
 }
 
 pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<u8, Error<'s>> {
@@ -186,21 +110,21 @@ pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut 
 		let first = match lexer.next_must()? {
 			Token::Identifier(field) => match lexer.next_if(Token::Assign)? {
 				Some(_) => KeyOrArray::Key(Expr::Constant(Const::String(lexer.resolve_ident(field)))),
-				None => KeyOrArray::Array(try_parse_expr(head, lexer, state)?),
+				None => KeyOrArray::Array(parse_expr(head, lexer, state)?),
 			},
 			Token::BracketOpen => {
-				let field = try_parse_expr(lexer.next_must()?, lexer, state)?;
+				let field = parse_expr(lexer.next_must()?, lexer, state)?;
 				expect_tok!(lexer, Token::BracketClose)?;
 				expect_tok!(lexer, Token::Assign)?;
 				KeyOrArray::Key(field)
 			},
-			_ => KeyOrArray::Array(try_parse_expr(head, lexer, state)?),
+			_ => KeyOrArray::Array(parse_expr(head, lexer, state)?),
 		};
 
 		match first {
 			KeyOrArray::Key(expr) => {
 				expr.set_to_slot(lexer, state, key_slot)?;
-				try_parse_expr(lexer.next_must()?, lexer, state)?.set_to_slot(lexer, state, val_slot)?;
+				parse_expr(lexer.next_must()?, lexer, state)?.set_to_slot(lexer, state, val_slot)?;
 				state.emit(Op::Set(tab_slot, key_slot, val_slot));
 			},
 			KeyOrArray::Array(entry) => {

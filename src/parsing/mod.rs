@@ -84,10 +84,10 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl Parse
 				return Ok(());
 			}
 
-			let first_expr = try_parse_expr(lexer.next_must()?, lexer, state)?;
+			let first_expr = parse_expr(lexer.next_must()?, lexer, state)?;
 			let mut rest_exprs = Vec::new();
 			while lexer.next_if(Token::Comma)?.is_some() {
-				rest_exprs.push(try_parse_expr(lexer.next_must()?, lexer, state)?);
+				rest_exprs.push(parse_expr(lexer.next_must()?, lexer, state)?);
 			}
 
 			first_expr.to_new_local(lexer, state, first_ident)?;
@@ -115,7 +115,7 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl Parse
 			//TODO: Temp obviously.
 			
 			if lexer.next_if(Token::Assign)?.is_some() {
-				let expr = try_parse_expr(lexer.next_must()?, lexer, state)?;
+				let expr = parse_expr(lexer.next_must()?, lexer, state)?;
 				let slot = state.local(lexer, ident)?;
 				expr.set_to_slot(lexer, state, slot)?;
 				return Ok(());
@@ -123,7 +123,7 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl Parse
 
 			assert_eq!(lexer.resolve_ident(ident), "print");
 			expect_tok!(lexer, Token::ParenOpen)?;
-			let arg_expr = try_parse_expr(lexer.next_must()?, lexer, state)?;
+			let arg_expr = parse_expr(lexer.next_must()?, lexer, state)?;
 			expect_tok!(lexer, Token::ParenClose)?;
 			
 			let slot = arg_expr.to_slot(lexer, state)?;
@@ -158,7 +158,7 @@ fn parse_if_statement<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut dy
 	let mut if_end_jump_positions = Vec::new();
 
 	'outer: loop {
-		let cond = try_parse_expr(lexer.next_must()?, lexer, state)?.to_slot(lexer, state)?;
+		let cond = parse_expr(lexer.next_must()?, lexer, state)?.to_slot(lexer, state)?;
 		state.emit(Op::SkpIf(cond));
 		let next_branch_jump_pos = state.get_ops().len();
 		state.emit(Op::GoTo(0, 0)); // Placeholder

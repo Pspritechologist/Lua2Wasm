@@ -41,6 +41,15 @@ impl<'s> Lexer<'s> {
 		Ok(None)
 	}
 
+	pub fn next_if_map<O>(&mut self, pat: impl FnOnce(Token<'s>) -> Option<O>) -> Result<Option<O>, LexError<'s>> {
+		if let Some(tok) = self.peek()? && let Some(out) = pat(tok) {
+			self.peeked = None;
+			return Ok(Some(out));
+		}
+
+		Ok(None)
+	}
+
 	// Returns the identifier string associated with the given IdentKey.
 	pub fn resolve_ident(&self, key: impl Into<IdentKey>) -> &'s str {
 		self.inner.extras.resolve_ident(key.into())

@@ -2,10 +2,12 @@ use crate::prelude::*;
 use gc::Gc;
 use std::cell::RefCell;
 
+mod num;
 mod table;
 mod string;
 mod hasher;
 
+pub use num::Num;
 pub use table::Table;
 pub use string::LString;
 pub use hasher::Hasher;
@@ -18,6 +20,12 @@ pub enum Value {
 	Buffer(Gc<[u8]>),
 	Table(Gc<RefCell<table::Table>>),
 	Func(fn(args: &[Option<Value>]) -> Vec<Option<Value>>),
+}
+
+impl Value {
+	pub fn is_truthy(&self) -> bool {
+		!matches!(self, Value::Bool(false))
+	}
 }
 
 unsafe impl<V: dumpster::Visitor> dumpster::TraceWith<V> for Value {
@@ -102,31 +110,13 @@ impl PartialOrd for Value {
 
 impl PartialEq<Option<Self>> for Value {
 	fn eq(&self, other: &Option<Self>) -> bool {
-		let Some(other) = other else { return false; };
-
-		match (self, other) {
-			(Value::Num(a), Value::Num(b)) => a == b,
-			(Value::Str(a), Value::Str(b)) => Gc::ptr_eq(a, b) || (a.get_hash() == b.get_hash() && a.len() == b.len() && a.as_str() == b.as_str()),
-			(Value::Bool(a), Value::Bool(b)) => a == b,
-			(Value::Buffer(a), Value::Buffer(b)) => Gc::ptr_eq(a, b),
-			(Value::Table(a), Value::Table(b)) => Gc::ptr_eq(a, b),
-			_ => false,
-		}
+		other.as_ref().map(|o| self == o).unwrap_or(false)
 	}
 }
 
 impl PartialOrd<Option<Self>> for Value {
 	fn partial_cmp(&self, other: &Option<Self>) -> Option<std::cmp::Ordering> {
-		let Some(other) = other else { return None; };
-
-		match (self, other) {
-			(Value::Num(a), Value::Num(b)) => Some(a.cmp(b)),
-			(Value::Str(a), Value::Str(b)) => Some(a.cmp(b)),
-			(Value::Bool(a), Value::Bool(b)) => Some(a.cmp(b)),
-			(Value::Buffer(a), Value::Buffer(b)) => Some(Gc::as_ptr(a).addr().cmp(&Gc::as_ptr(b).addr())),
-			(Value::Table(a), Value::Table(b)) => Some(Gc::as_ptr(a).addr().cmp(&Gc::as_ptr(b).addr())),
-			_ => None,
-		}
+		other.as_ref().map(|o| self.partial_cmp(o)).flatten()
 	}
 }
 

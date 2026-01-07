@@ -14,57 +14,51 @@ mod prelude {
 	}
 
 	pub(crate) use crate::types;
+	pub(crate) use types::Num;
 	pub(crate) use crate::State;
-
-	#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-	pub struct Num(real_float::Finite<f64>);
-	impl Num {
-		pub fn new(value: real_float::Finite<f64>) -> Self { Self(value) }
-	}
-	impl TryFrom<f64> for Num {
-		type Error = real_float::InfiniteError;
-		fn try_from(value: f64) -> Result<Self, Self::Error> {
-			real_float::Finite::try_new(value).map(Self)
-		}
-	}
-	impl std::ops::Deref for Num {
-		type Target = real_float::Finite<f64>;
-		fn deref(&self) -> &Self::Target { &self.0 }
-	}
-	impl std::ops::DerefMut for Num {
-		fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
-	}
-	unsafe impl<V: dumpster::Visitor> dumpster::TraceWith<V> for Num {
-		fn accept(&self, _visitor: &mut V) -> Result<(), ()> { Ok(()) }
-	}
 }
 
 #[derive(Debug, Clone, Copy)]
 enum Operation {
+	// Loads.
 	LoadNull(u8),
 	LoadBool(u8, bool),
 	LoadNum(u8, u16),
 	LoadStr(u8, u16),
 	LoadBuf(u8, u16),
 	LoadTab(u8),
+	// Tables.
 	Set(u8, u8, u8),
 	Get(u8, u8),
-	Copy(u8, u8),
+	// Arithmetic.
 	Add(u8, u8, u8),
 	Sub(u8, u8, u8),
 	Mul(u8, u8, u8),
 	Div(u8, u8, u8),
 	Mod(u8, u8, u8),
 	Pow(u8, u8, u8),
+	Neg(u8, u8),
+	// Logic.
 	Eq(u8, u8, u8),
 	Neq(u8, u8, u8),
 	Lt(u8, u8, u8),
 	Lte(u8, u8, u8),
 	Gt(u8, u8, u8),
 	Gte(u8, u8, u8),
+	Not(u8, u8),
+	// Bitwise.
+	BitAnd(u8, u8, u8),
+	BitOr(u8, u8, u8),
+	BitShL(u8, u8, u8),
+	BitShR(u8, u8, u8),
+	BitNot(u8, u8),
+	// Control.
 	GoTo(u32, u8),
 	SkpIf(u8),
 	SkpIfNot(u8),
+	// Meta.
+	Copy(u8, u8),
+	// Debug.
 	Put(u8),
 }
 impl Operation {
@@ -177,6 +171,16 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				_ => unimplemented!(),
 			}
 		} };
+		($dst:expr, $a:expr, $op:tt) => { {
+			let a = &registers[$a as usize];
+			match a {
+				Some(Value::Num(a)) => {
+					let result = a.$op().unwrap_or_default();
+					registers[$dst as usize] = Some(result.to_value(&mut state));
+				}
+				_ => unimplemented!(),
+			}
+		} };
 	}
 	
 	macro_rules! logical_op {
@@ -184,6 +188,36 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			let a = &registers[$a as usize];
 			let b = &registers[$b as usize];
 			registers[$dst as usize] = Some(Value::Bool(a $op b));
+		} };
+	}
+
+	macro_rules! bitwise_op {
+		($dst:expr, $a:expr, $b:expr, |$ai:ident, $bi:ident| $f:expr) => { {
+			let a = &registers[$a as usize];
+			let b = &registers[$b as usize];
+			match (a, b) {
+				(Some(Value::Num(a)), Some(Value::Num(b))) => {
+					let (Some($ai), Some($bi)) = (a.as_int(), b.as_int()) else {
+						unimplemented!();
+					};
+					let result = { $f };
+					registers[$dst as usize] = Some(result.to_value(&mut state));
+				}
+				_ => unimplemented!(),
+			}
+		} };
+		($dst:expr, $a:expr, |$ai:ident| $f:expr) => { {
+			let a = &registers[$a as usize];
+			match a {
+				Some(Value::Num(a)) => {
+					let Some($ai) = a.as_int() else {
+						unimplemented!();
+					};
+					let result = { $f };
+					registers[$dst as usize] = Some(result.to_value(&mut state));
+				}
+				_ => unimplemented!(),
+			}
 		} };
 	}
 
@@ -248,21 +282,26 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				let value = tab.borrow().get(&key);
 				registers[dst as usize] = value;
 			},
-			Operation::Copy(dst, src) => {
-				registers[dst as usize] = registers[src as usize].clone();
-			},
 			Operation::Add(dst, a, b) => math_op!(dst, a, b, try_add),
 			Operation::Sub(dst, a, b) => math_op!(dst, a, b, try_sub),
 			Operation::Mul(dst, a, b) => math_op!(dst, a, b, try_mul),
 			Operation::Div(dst, a, b) => math_op!(dst, a, b, try_div),
 			Operation::Mod(dst, a, b) => math_op!(dst, a, b, try_rem),
 			Operation::Pow(dst, a, b) => math_op!(dst, a, b, try_powf),
+			Operation::Neg(dst, a) => math_op!(dst, a, try_neg),
 			Operation::Eq(dst, a, b) => logical_op!(dst, a, b, ==),
 			Operation::Neq(dst, a, b) => logical_op!(dst, a, b, !=),
 			Operation::Lt(dst, a, b) => logical_op!(dst, a, b, <),
 			Operation::Lte(dst, a, b) => logical_op!(dst, a, b, <=),
 			Operation::Gt(dst, a, b) => logical_op!(dst, a, b, >),
 			Operation::Gte(dst, a, b) => logical_op!(dst, a, b, >=),
+			Operation::Not(dst, a) => 
+				registers[dst as usize] = Some(Value::Bool(!registers[a as usize].as_ref().is_some_and(|v| v.is_truthy()))),
+			Operation::BitAnd(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a & b),
+			Operation::BitOr(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a | b),
+			Operation::BitShL(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a << b),
+			Operation::BitShR(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a >> b),
+			Operation::BitNot(dst, a) => bitwise_op!(dst, a, |a| !a),
 			Operation::SkpIf(cond) => {
 				let Some(Value::Bool(condition)) = &registers[cond as usize] else {
 					unimplemented!()
@@ -297,6 +336,9 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				let position = Operation::decode_goto(p32, p8);
 				frame.pc = position;
 				continue;
+			},
+			Operation::Copy(dst, src) => {
+				registers[dst as usize] = registers[src as usize].clone();
 			},
 			Operation::Put(val) => {
 				match &registers[val as usize] {
