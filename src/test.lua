@@ -1,28 +1,8 @@
-local msg = "Hello, World!"
-print(msg)
-
-local a = 50
-local b = 25
-local c = true
-
-if c then
-	msg = "Hello, Mars!"
-else
-	msg = "Hello, Venus!"
-end
-
-print(msg)
-
-msg = false
-
-if msg then
-	msg = "First block"
-elseif msg then
-	msg = "Second block"
-elseif msg then
-	msg = "Third block"
-else
-	msg = "Fourth block"
-end
-
-print(msg)
+print(20 + 22 * 30)
+print(20 * 22 + 30)
+print(not true)
+print(not not true)
+print(not not true == false)
+print(-5 - 6)
+print(-(5 - 6))
+print(-5 - 6 * 20 % 5)

@@ -1,4 +1,5 @@
 use crate::parsing::LexerExt;
+use crate::types::Num;
 use super::{Error, ParseState, ParseStateExt, Op, IdentKey, expect_tok};
 use super::{Expr, Const, parse_table_init};
 use luant_lexer::{Lexer, Token};
@@ -17,7 +18,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl 
 			},
 			Token::VarArgs => todo!(),
 			Token::Function => todo!(),
-			Token::Number(n) => Expr::Constant(Const::Number(n)),
+			Token::Number(n) => Expr::Constant(Const::Number(Num::new(n))),
 			Token::Identifier(ident) => Expr::Local(ident),
 			Token::String(s) => Expr::Constant(Const::String(s)), //TODO: Escapes.
 			Token::RawString(s) => Expr::Constant(Const::String(s)),
@@ -59,6 +60,11 @@ enum InfixOp {
 impl InfixOp {
 	fn parse_infix<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), left: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
 		let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
+
+		if let (Expr::Constant(a), Expr::Constant(b)) = (left, right) &&
+			let Some(res) = self.fold_const(lexer, a, b) {
+			return Ok(Expr::Constant(res));
+		}
 
 		macro_rules! std_infix {
 			($op:ident) => { {
@@ -102,7 +108,7 @@ impl InfixOp {
 		Some(match tok {
 			Token::Plus => InfixOp::Add,
 			Token::Minus => InfixOp::Sub,
-			Token::Mult => InfixOp::Mul,
+			Token::Mul => InfixOp::Mul,
 			Token::Div => InfixOp::Div,
 			Token::DivFloor => InfixOp::DivInt,
 			Token::Mod => InfixOp::Mod,
@@ -124,14 +130,41 @@ impl InfixOp {
 		})
 	}
 
-	fn assoc(&self) -> Assoc {
+	fn fold_const<'s>(self, lexer: &mut Lexer<'s>, a: Const<'s>, b: Const<'s>) -> Option<Const<'s>> {
+		use Const::*;
+		Some(match (self, a, b) {
+			(InfixOp::Add, Number(a), Number(b)) => Number(Num::new(a.try_add(*b).ok()?)),
+			(InfixOp::Sub, Number(a), Number(b)) => Number(Num::new(a.try_sub(*b).ok()?)),
+			(InfixOp::Mul, Number(a), Number(b)) => Number(Num::new(a.try_mul(*b).ok()?)),
+			(InfixOp::Div, Number(a), Number(b)) => Number(Num::new(a.try_div(*b).ok()?)),
+			(InfixOp::DivInt, Number(a), Number(b)) => Number(Num::new(a.try_div(*b).ok()?)),
+			(InfixOp::Mod, Number(a), Number(b)) => Number(Num::new(a.try_rem(*b).ok()?)),
+			(InfixOp::Pow, Number(a), Number(b)) => Number(Num::new(a.try_powf(*b).ok()?)),
+			(InfixOp::Eq, a, b) => Bool(a == b),
+			(InfixOp::Neq, a, b) => Bool(a != b),
+			(InfixOp::Lt, Number(a), Number(b)) => Bool(a < b),
+			(InfixOp::Lte, Number(a), Number(b)) => Bool(a <= b),
+			(InfixOp::Gt, Number(a), Number(b)) => Bool(a > b),
+			(InfixOp::Gte, Number(a), Number(b)) => Bool(a >= b),
+			(InfixOp::Concat, String(_), String(_)) => return None, //TODO: Can't represent dynamic strings yet.
+			(InfixOp::And, a, b) => Bool(a.is_truthy() && b.is_truthy()),
+			(InfixOp::Or, a, b) => Bool(a.is_truthy() || b.is_truthy()),
+			(InfixOp::BitAnd, Number(a), Number(b)) => Number(Num::try_from((a.as_int()? & b.as_int()?) as f64).ok()?),
+			(InfixOp::BitOr, Number(a), Number(b)) => Number(Num::try_from((a.as_int()? | b.as_int()?) as f64).ok()?),
+			(InfixOp::Shl, Number(a), Number(b)) => Number(Num::try_from((a.as_int()? << b.as_int()?) as f64).ok()?),
+			(InfixOp::Shr, Number(a), Number(b)) => Number(Num::try_from((a.as_int()? >> b.as_int()?) as f64).ok()?),
+			_ => return None,
+		})
+	}
+
+	fn assoc(self) -> Assoc {
 		match self {
 			InfixOp::Pow | InfixOp::Concat => Assoc::Right,
 			_ => Assoc::Left,
 		}
 	}
 
-	fn prec(&self) -> u8 {
+	fn prec(self) -> u8 {
 		match self {
 			InfixOp::Or => 1,
 			InfixOp::And => 2,
@@ -155,6 +188,10 @@ enum PrefixOp {
 impl PrefixOp {
 	fn parse_prefix<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<Expr<'s>, Error<'s>> {
 		let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
+
+		if let Expr::Constant(a) = right && let Some(res) = self.fold_const(a) {
+			return Ok(Expr::Constant(res));
+		}
 
 		let dst = match right {
 			Expr::Temp(t) => t,
@@ -183,11 +220,21 @@ impl PrefixOp {
 		})
 	}
 
-	fn assoc(&self) -> Assoc {
+	fn fold_const<'s>(self, a: Const<'s>) -> Option<Const<'s>> {
+		use Const::*;
+		Some(match (self, a) {
+			(PrefixOp::Neg, Number(a)) => Number(Num::new(a.try_neg().ok()?)),
+			(PrefixOp::Not, a) => Bool(!a.is_truthy()),
+			(PrefixOp::BitNot, Number(a)) => Number(Num::try_from((!a.as_int()?) as f64).ok()?),
+			_ => return None,
+		})
+	}
+
+	fn assoc(self) -> Assoc {
 		Assoc::Right // All prefix operators are right associative
 	}
 
-	fn prec(&self) -> u8 {
+	fn prec(self) -> u8 {
 		10
 	}
 }

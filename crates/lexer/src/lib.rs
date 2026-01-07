@@ -157,7 +157,7 @@ pub enum Token<'s> {
 
 	#[token("+")] Plus,
 	#[token("-")] Minus,
-	#[token("*")] Mult,
+	#[token("*")] Mul,
 	#[token("/")] Div,
 	#[token("//")] DivFloor,
 	#[token("^")] Pow,
@@ -206,9 +206,9 @@ pub enum Token<'s> {
 
 	#[regex(
 		r"[-+]?\d+(\.\d*)?([eE][-+]?\d+)?",
-		|lex| lex.slice().parse()
+		|lex| lex.slice().parse::<f64>().map(real_float::Finite::new)
 	)]
-	Number(f64),
+	Number(real_float::Finite<f64>),
 
 	#[regex(
 		r"[\p{XID_Start}_][\p{XID_Continue}_]*",
@@ -230,7 +230,7 @@ pub enum Token<'s> {
 impl std::fmt::Display for Token<'_> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			Token::Number(val) => write!(f, "Number({val})"),
+			Token::Number(val) => write!(f, "Number({})", val.val()),
 			Token::Identifier(name) => write!(f, "Identifier({name:?})"),
 			Token::String(s) => write!(f, "String('{s}')"),
 			Token::RawString(s) => write!(f, "MlString([[{s}]])"),

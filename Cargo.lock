@@ -234,6 +234,7 @@ version = "0.1.0"
 dependencies = [
  "hashbrown",
  "logos",
+ "real_float",
  "slotmap",
  "strum",
 ]

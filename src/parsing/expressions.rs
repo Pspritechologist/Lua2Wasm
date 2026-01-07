@@ -6,10 +6,20 @@ mod pratt;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Const<'s> {
-	Number(f64),
+	Number(crate::types::Num),
 	String(&'s str),
 	Bool(bool),
 	Null,
+}
+
+impl<'s> Const<'s> {
+	pub fn is_truthy(self) -> bool {
+		!matches!(self, Const::Bool(false) | Const::Null)
+	}
+
+	pub fn is_null(self) -> bool {
+		matches!(self, Const::Null)
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -20,18 +30,6 @@ pub enum Expr<'s> {
 }
 
 impl<'s> Expr<'s> {
-	pub fn is_truthy(self) -> Option<bool> {
-		match self {
-			Expr::Constant(Const::Bool(b)) => Some(b),
-			Expr::Constant(Const::Null) => Some(false),
-			_ => None,
-		}
-	}
-
-	pub fn is_null(self) -> bool {
-		matches!(self, Expr::Constant(Const::Null))
-	}
-
 	#[inline]
 	pub fn to_new_local(self, lexer: &Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), name: IdentKey) -> Result<u8, Error<'s>> {
 		match self {
@@ -68,7 +66,7 @@ impl<'s> Expr<'s> {
 				state.emit(Op::Copy(slot, local_slot));
 			},
 			Expr::Constant(Const::Number(n)) => {
-				let num_idx = state.number_idx(n);
+				let num_idx = state.number_idx(n.val());
 				state.emit(Op::LoadNum(slot, num_idx));
 			},
 			Expr::Constant(Const::String(s)) => {
