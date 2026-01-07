@@ -89,6 +89,8 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 			"shl" => simple_op!(BitShL),
 			"shr" => simple_op!(BitShR),
 			"bnot" => simple_op!(BitNot u8, u8),
+			"concat" => simple_op!(Concat),
+			"len" => simple_op!(Len u8, u8),
 			"skpif" => {
 				let cond = args!(u8);
 				max_reg = max_reg.max(cond);
@@ -164,6 +166,8 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Resul
 			Operation::BitShL(dst, a, b) => writeln!(buf, "shl {dst} {a} {b}")?,
 			Operation::BitShR(dst, a, b) => writeln!(buf, "shr {dst} {a} {b}")?,
 			Operation::BitNot(dst, src) => writeln!(buf, "bnot {dst} {src}")?,
+			Operation::Concat(dst, a, b) => writeln!(buf, "concat {dst} {a} {b}")?,
+			Operation::Len(dst, src) => writeln!(buf, "len {dst} {src}")?,
 			Operation::SkpIf(cond) => writeln!(buf, "skpif {cond}")?,
 			Operation::SkpIfNot(cond) => writeln!(buf, "skpifnot {cond}")?,
 			Operation::GoTo(p32, p8) => {

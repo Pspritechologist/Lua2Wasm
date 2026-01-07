@@ -52,6 +52,9 @@ enum Operation {
 	BitShL(u8, u8, u8),
 	BitShR(u8, u8, u8),
 	BitNot(u8, u8),
+	// Misc operators.
+	Concat(u8, u8, u8),
+	Len(u8, u8),
 	// Control.
 	GoTo(u32, u8),
 	SkpIf(u8),
@@ -302,6 +305,36 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			Operation::BitShL(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a << b),
 			Operation::BitShR(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a >> b),
 			Operation::BitNot(dst, a) => bitwise_op!(dst, a, |a| !a),
+			Operation::Concat(dst, a, b) => {
+				let a = &registers[a as usize];
+				let b = &registers[b as usize];
+				match (a, b) {
+					(Some(Value::Str(a)), Some(Value::Str(b))) => {
+						let buf = &mut state.gc_buf;
+
+						let text_len = a.len() + b.len();
+
+						buf.clear();
+						buf.reserve_exact(8 + text_len);
+
+						buf.extend([0u8; 8]); // Placeholder for hash.
+
+						buf.extend(a.as_bytes());
+						buf.extend(b.as_bytes());
+
+						let hash = state.hasher.hash_bytes(&buf[8..]);
+						buf[..8].copy_from_slice(&hash.to_ne_bytes());
+
+						// SAFETY: We just constructed `buf` to have a valid hash and valid UTF-8 data.
+						let value = unsafe { types::LString::new_from_buf(buf.as_slice(), text_len) };
+
+						registers[dst as usize] = Some(Value::Str(value));
+					}
+					_ => unimplemented!(),
+				}
+			},
+			Operation::Len(dst, a) =>
+				registers[dst as usize] = registers[a as usize].as_ref().map(|v| v.len().unwrap().to_value(&mut state)),
 			Operation::SkpIf(cond) => {
 				let Some(Value::Bool(condition)) = &registers[cond as usize] else {
 					unimplemented!()

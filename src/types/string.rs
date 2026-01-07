@@ -20,14 +20,23 @@ impl LString {
 		buf.clear();
 		buf.extend(hash.to_ne_bytes());
 		buf.extend(data.as_bytes());
-
-		let ptr: *const _ = Gc::__private_into_ptr(Gc::<[u8]>::from(buf.as_slice()));
-		let gc: Gc<LString> = unsafe { Gc::__private_from_ptr(std::ptr::from_raw_parts(ptr as *const (), data.len())) };
+		
+		// SAFETY: We just constructed `buf` to have a valid hash and valid UTF-8 data.
+		let gc = unsafe { Self::new_from_buf(buf, data.len()) };
 
 		debug_assert_eq!(gc.hash, hash);
 		debug_assert_eq!(&gc.data, data);
 
 		gc
+	}
+
+	/// # Safety
+	/// Caller must ensure that the first eight bytes of `buf` represent a valid hash
+	/// of the remaining bytes, and that the remaining bytes are valid UTF-8 data of length `data_len`.
+	pub unsafe fn new_from_buf(buf: &[u8], data_len: usize) -> Gc<Self> {
+		let ptr: *const _ = Gc::__private_into_ptr(Gc::<[u8]>::from(buf));
+		// SAFETY: Caller must ensure safety.
+		unsafe { Gc::__private_from_ptr(std::ptr::from_raw_parts(ptr as *const (), data_len)) }
 	}
 
 	pub fn as_str(&self) -> &str {

@@ -26,6 +26,15 @@ impl Value {
 	pub fn is_truthy(&self) -> bool {
 		!matches!(self, Value::Bool(false))
 	}
+
+	pub fn len(&self) -> Option<usize> {
+		match self {
+			Value::Str(s) => Some(s.len()),
+			Value::Buffer(buf) => Some(buf.len()),
+			Value::Table(tab) => Some(tab.borrow().len()),
+			_ => None,
+		}
+	}
 }
 
 unsafe impl<V: dumpster::Visitor> dumpster::TraceWith<V> for Value {
@@ -126,6 +135,12 @@ pub trait ToValue {
 
 impl ToValue for Value {
 	fn to_value(self, _state: &mut State) -> Value { self }
+}
+
+impl ToValue for Gc<LString> {
+	fn to_value(self, _state: &mut State) -> Value {
+		Value::Str(self)
+	}
 }
 
 impl ToValue for &str {

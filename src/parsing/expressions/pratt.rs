@@ -4,27 +4,27 @@ use super::{Expr, Const, parse_table_init};
 use luant_lexer::{Lexer, Token};
 
 pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), prec: u8) -> Result<Expr<'s>, Error<'s>> {
-	if let Some(prefix) = PrefixOp::from_token(head) {
-		todo!()
-	}
-
-	let expr = match head {
-		// Atoms.
-		Token::BraceOpen => Expr::Temp(parse_table_init(head, lexer, state)?),
-		Token::ParenOpen => {
-			let expr = parse_expr(lexer.next_must()?, lexer, state, 0)?;
-			expect_tok!(lexer, Token::ParenClose)?;
-			expr
+	let expr = match PrefixOp::from_token(head) {
+		// Handle prefix operators.
+		Some(prefix_op) => prefix_op.parse_prefix(lexer, state)?,
+		// Otherwise handle an atom.
+		None => match head {
+			Token::BraceOpen => Expr::Temp(parse_table_init(head, lexer, state)?),
+			Token::ParenOpen => {
+				let expr = parse_expr(lexer.next_must()?, lexer, state, 0)?;
+				expect_tok!(lexer, Token::ParenClose)?;
+				expr
+			},
+			Token::VarArgs => todo!(),
+			Token::Function => todo!(),
+			Token::Number(n) => Expr::Constant(Const::Number(n)),
+			Token::Identifier(ident) => Expr::Local(ident),
+			Token::String(s) => Expr::Constant(Const::String(s)), //TODO: Escapes.
+			Token::RawString(s) => Expr::Constant(Const::String(s)),
+			Token::True => Expr::Constant(Const::Bool(true)),
+			Token::False => Expr::Constant(Const::Bool(false)),
+			tok => return Err(format!("Expected expression, found {tok:?}").into()),
 		},
-		Token::VarArgs => todo!(),
-		Token::Function => todo!(),
-		Token::Number(n) => Expr::Constant(Const::Number(n)),
-		Token::Identifier(ident) => Expr::Local(ident),
-		Token::String(s) => Expr::Constant(Const::String(s)), //TODO: Escapes.
-		Token::RawString(s) => Expr::Constant(Const::String(s)),
-		Token::True => Expr::Constant(Const::Bool(true)),
-		Token::False => Expr::Constant(Const::Bool(false)),
-		tok => return Err(format!("Expected expression, found {tok:?}").into()),
 	};
 
 	let mut expr = expr;
@@ -153,6 +153,26 @@ enum PrefixOp {
 	Neg, BitNot, Len, Not,
 }
 impl PrefixOp {
+	fn parse_prefix<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<Expr<'s>, Error<'s>> {
+		let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
+
+		let dst = match right {
+			Expr::Temp(t) => t,
+			_ => state.new_register(),
+		};
+
+		let right = right.to_slot(lexer, state)?;
+
+		match self {
+			PrefixOp::Neg => state.emit(Op::Neg(dst, right)),
+			PrefixOp::BitNot => state.emit(Op::BitNot(dst, right)),
+			PrefixOp::Len => state.emit(Op::Len(dst, right)),
+			PrefixOp::Not => state.emit(Op::Not(dst, right)),
+		}
+		
+		Ok(Expr::Temp(dst))
+	}
+
 	fn from_token(tok: Token) -> Option<Self> {
 		Some(match tok {
 			Token::Minus => PrefixOp::Neg,
