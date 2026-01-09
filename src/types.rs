@@ -1,6 +1,4 @@
 use crate::prelude::*;
-use gc::Gc;
-use std::cell::RefCell;
 
 mod num;
 mod table;
@@ -15,10 +13,9 @@ pub use hasher::Hasher;
 #[derive(Debug, Clone)]
 pub enum Value {
 	Num(Num),
-	Str(Gc<LString>),
+	Str(LString),
 	Bool(bool),
-	Buffer(Gc<[u8]>),
-	Table(Gc<RefCell<table::Table>>),
+	Table(Table),
 	Func(fn(args: &[Option<Value>]) -> Vec<Option<Value>>),
 }
 
@@ -30,8 +27,14 @@ impl Value {
 	pub fn len(&self) -> Option<usize> {
 		match self {
 			Value::Str(s) => Some(s.len()),
-			Value::Buffer(buf) => Some(buf.len()),
-			Value::Table(tab) => Some(tab.borrow().len()),
+			Value::Table(tab) => Some(tab.len()),
+			_ => None,
+		}
+	}
+
+	pub fn as_num(&self) -> Option<Num> {
+		match self {
+			Value::Num(n) => Some(*n),
 			_ => None,
 		}
 	}
@@ -43,7 +46,6 @@ unsafe impl<V: dumpster::Visitor> dumpster::TraceWith<V> for Value {
             Value::Num(num) => num.accept(visitor),
             Value::Str(s) => s.accept(visitor),
             Value::Bool(b) => b.accept(visitor),
-            Value::Buffer(buf) => buf.accept(visitor),
             Value::Table(tab) => tab.accept(visitor),
             Value::Func(_) => Ok(()),
         }
@@ -57,8 +59,7 @@ impl std::fmt::Display for Value {
 				Value::Num(num) => write!(f, "{}", num.val()),
 				Value::Str(s) => write!(f, "'{}'", s.as_str()),
 				Value::Bool(b) => write!(f, "{b}"),
-				Value::Buffer(buf) => write!(f, "Buffer({:p}, len={})", Gc::as_ptr(buf), buf.len()),
-				Value::Table(tab) => write!(f, "Table({:p})", Gc::as_ptr(tab)),
+				Value::Table(tab) => write!(f, "Table({:p})", tab.get_ptr()),
 				Value::Func(func) => write!(f, "Func({:p})", *func as *const ()),
 			};
 		}
@@ -67,22 +68,22 @@ impl std::fmt::Display for Value {
 			Value::Num(num) => write!(f, "{:#}", num.val()),
 			Value::Str(s) => write!(f, "{}", s.as_str()),
 			Value::Bool(b) => write!(f, "{b}"),
-			Value::Buffer(buf) => f.debug_list().entries(&**buf).finish(),
 			Value::Table(tab) => {
-				write!(f, "Table({:p}) {{", Gc::as_ptr(tab))?;
+				write!(f, "Table({:p}) {{", tab.get_ptr())?;
 
-				let entries = tab.borrow();
-				let mut entries = (&*entries).into_iter();
+				// let entries = tab.borrow();
+				// let mut entries = (&*entries).into_iter();
 
-				for (k, v) in entries.by_ref().take(7) {
-					write!(f, "[{k}] = {v}, ")?;
-				}
+				// for (k, v) in entries.by_ref().take(7) {
+				// 	write!(f, "[{k}] = {v}, ")?;
+				// }
 
-				if entries.next().is_none() {
+				// if entries.next().is_none() {
+				// 	write!(f, "}}")
+				// } else {
+				// 	write!(f, "... }}")
+				// }
 					write!(f, "}}")
-				} else {
-					write!(f, "... }}")
-				}
 			},
 			Value::Func(func) => write!(f, "Func({:p})", *func as *const ()),
 		}
@@ -94,10 +95,9 @@ impl PartialEq for Value {
 	fn eq(&self, other: &Self) -> bool {
 		match (self, other) {
 			(Value::Num(a), Value::Num(b)) => a == b,
-			(Value::Str(a), Value::Str(b)) => Gc::ptr_eq(a, b) || (a.get_hash() == b.get_hash() && a.len() == b.len() && a.as_str() == b.as_str()),
+			(Value::Str(a), Value::Str(b)) => a.eq_impl(b),
 			(Value::Bool(a), Value::Bool(b)) => a == b,
-			(Value::Buffer(a), Value::Buffer(b)) => Gc::ptr_eq(a, b),
-			(Value::Table(a), Value::Table(b)) => Gc::ptr_eq(a, b),
+			(Value::Table(a), Value::Table(b)) => a.eq_ref(b),
 			(Value::Func(a), Value::Func(b)) => std::ptr::addr_eq(*a as *const (), *b as *const ()),
 			_ => false,
 		}
@@ -110,8 +110,7 @@ impl PartialOrd for Value {
 			(Value::Num(a), Value::Num(b)) => Some(a.cmp(b)),
 			(Value::Str(a), Value::Str(b)) => Some(a.cmp(b)),
 			(Value::Bool(a), Value::Bool(b)) => Some(a.cmp(b)),
-			(Value::Buffer(a), Value::Buffer(b)) => Some(Gc::as_ptr(a).addr().cmp(&Gc::as_ptr(b).addr())),
-			(Value::Table(a), Value::Table(b)) => Some(Gc::as_ptr(a).addr().cmp(&Gc::as_ptr(b).addr())),
+			(Value::Table(a), Value::Table(b)) => Some(a.cmp_ref(b)),
 			_ => None,
 		}
 	}
@@ -137,7 +136,7 @@ impl ToValue for Value {
 	fn to_value(self, _state: &mut State) -> Value { self }
 }
 
-impl ToValue for Gc<LString> {
+impl ToValue for LString {
 	fn to_value(self, _state: &mut State) -> Value {
 		Value::Str(self)
 	}

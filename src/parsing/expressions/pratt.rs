@@ -188,11 +188,11 @@ impl<'s> InfixOp<'s> {
 			(InfixOp::Concat, String(_), String(_)) => return None, //TODO: Can't represent dynamic strings yet.
 			(InfixOp::And, a, b) => Bool(a.is_truthy() && b.is_truthy()),
 			(InfixOp::Or, a, b) => Bool(a.is_truthy() || b.is_truthy()),
-			(InfixOp::BitAnd, Number(a), Number(b)) => Number(Num::try_from((a.as_int()? & b.as_int()?) as f64).ok()?),
-			(InfixOp::BitOr, Number(a), Number(b)) => Number(Num::try_from((a.as_int()? | b.as_int()?) as f64).ok()?),
-			(InfixOp::BitXor, Number(a), Number(b)) => Number(Num::try_from((a.as_int()? ^ b.as_int()?) as f64).ok()?),
-			(InfixOp::Shl, Number(a), Number(b)) => Number(Num::try_from((a.as_int()? << b.as_int()?) as f64).ok()?),
-			(InfixOp::Shr, Number(a), Number(b)) => Number(Num::try_from((a.as_int()? >> b.as_int()?) as f64).ok()?),
+			(InfixOp::BitAnd, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? & b.as_i64()?) as f64).ok()?),
+			(InfixOp::BitOr, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? | b.as_i64()?) as f64).ok()?),
+			(InfixOp::BitXor, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? ^ b.as_i64()?) as f64).ok()?),
+			(InfixOp::Shl, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? << b.as_i64()?) as f64).ok()?),
+			(InfixOp::Shr, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? >> b.as_i64()?) as f64).ok()?),
 			_ => return None,
 		})
 	}
@@ -262,7 +262,7 @@ impl PrefixOp {
 		Some(match (self, a) {
 			(PrefixOp::Neg, Number(a)) => Number(Num::new(a.try_neg().ok()?)),
 			(PrefixOp::Not, a) => Bool(!a.is_truthy()),
-			(PrefixOp::BitNot, Number(a)) => Number(Num::try_from((!a.as_int()?) as f64).ok()?),
+			(PrefixOp::BitNot, Number(a)) => Number(Num::try_from((!a.as_i64()?) as f64).ok()?),
 			_ => return None,
 		})
 	}

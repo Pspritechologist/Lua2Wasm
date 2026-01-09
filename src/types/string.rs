@@ -2,15 +2,20 @@ use crate::prelude::*;
 use gc::{Trace, Gc};
 use std::ops::Deref;
 
-#[repr(C)]
-#[derive(Debug, Trace)]
+#[derive(Debug, Clone, PartialEq, Eq, Trace)]
 pub struct LString {
+	inner: Gc<LStringInner>,
+}
+
+#[repr(C)]
+#[derive(Debug, PartialEq, Eq, Trace)]
+struct LStringInner {
 	hash: u64,
 	data: [u8],
 }
 
 impl LString {
-	pub fn new(state: &mut State, data: impl AsRef<[u8]>) -> Gc<Self> {
+	pub fn new(state: &mut State, data: impl AsRef<[u8]>) -> Self {
 		let data = data.as_ref();
 
 		let hash = state.hasher.hash_bytes(data);
@@ -23,8 +28,8 @@ impl LString {
 		// SAFETY: We just constructed `buf` to have a valid hash and valid UTF-8 data.
 		let gc = unsafe { Self::new_from_buf(buf, data.len()) };
 
-		debug_assert_eq!(gc.hash, hash);
-		debug_assert_eq!(&gc.data, data);
+		debug_assert_eq!(gc.inner.hash, hash);
+		debug_assert_eq!(&gc.inner.data, data);
 
 		gc
 	}
@@ -32,10 +37,11 @@ impl LString {
 	/// # Safety
 	/// Caller must ensure that the first eight bytes of `buf` represent a valid hash
 	/// of the remaining bytes, and that the remaining bytes are valid UTF-8 data of length `data_len`.
-	pub unsafe fn new_from_buf(buf: &[u8], data_len: usize) -> Gc<Self> {
+	pub unsafe fn new_from_buf(buf: &[u8], data_len: usize) -> Self {
 		let ptr: *const _ = Gc::__private_into_ptr(Gc::<[u8]>::from(buf));
 		// SAFETY: Caller must ensure safety.
-		unsafe { Gc::__private_from_ptr(std::ptr::from_raw_parts(ptr as *const (), data_len)) }
+		let inner = unsafe { Gc::__private_from_ptr(std::ptr::from_raw_parts(ptr as *const (), data_len)) };
+		Self { inner }
 	}
 
 	pub fn as_str(&self) -> &BStr {
@@ -43,7 +49,13 @@ impl LString {
 	}
 
 	pub fn get_hash(&self) -> u64 {
-		self.hash
+		self.inner.hash
+	}
+
+	/// First compares by ref, falling back to hashing, len, and finally content comparison.
+	pub fn eq_impl(&self, other: &LString) -> bool {
+		let (a, b) = (self, other);
+		Gc::ptr_eq(&a.inner, &b.inner) || (a.get_hash() == b.get_hash() && a.len() == b.len() && a.as_str() == b.as_str())
 	}
 }
 

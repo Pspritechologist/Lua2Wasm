@@ -1,8 +1,8 @@
+use crate::prelude::BStr;
 use super::{Error, Op};
 use luant_lexer::{IdentKey, Lexer};
 use slotmap::SparseSecondaryMap;
 use hashbrown::HashMap;
-use bstr::BStr;
 
 /// Encapsulates the state during parsing.\
 /// This trait may be implemented separately to represent

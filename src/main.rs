@@ -29,7 +29,6 @@ enum Operation {
 	LoadBool(u8, bool),
 	LoadNum(u8, u16),
 	LoadStr(u8, u16),
-	LoadBuf(u8, u16),
 	LoadTab(u8),
 	// Tables.
 	Set(u8, u8, u8),
@@ -158,7 +157,7 @@ impl ConstStrings {
 
 fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, const_nums: &[f64]) -> Vec<Option<types::Value>> {
 	use crate::types::{Value, ToValue};
-	use crate::prelude::{Num, gc::{self, Gc}};
+	use crate::prelude::Num;
 
 	let mut state = State::default();
 	let mut frames: Vec<Frame> = Vec::from([Frame { pc: 0, stack_base: 0 }]);
@@ -205,7 +204,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			let b = &registers[$b as usize];
 			match (a, b) {
 				(Some(Value::Num(a)), Some(Value::Num(b))) => {
-					let (Some($ai), Some($bi)) = (a.as_int(), b.as_int()) else {
+					let (Some($ai), Some($bi)) = (a.as_i64(), b.as_i64()) else {
 						unimplemented!();
 					};
 					let result = { $f };
@@ -218,7 +217,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			let a = &registers[$a as usize];
 			match a {
 				Some(Value::Num(a)) => {
-					let Some($ai) = a.as_int() else {
+					let Some($ai) = a.as_i64() else {
 						unimplemented!();
 					};
 					let result = { $f };
@@ -247,21 +246,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				let value = s.to_value(&mut state);
 				registers[dst as usize] = Some(value);
 			},
-			Operation::LoadBuf(dst, size) => {
-				let size = if let Some(v) = &registers[size as usize] {
-					let Value::Num(n) = v else {
-						unimplemented!()
-					};
-
-					n.val() as usize
-				} else { 0 };
-
-				state.gc_buf.clear();
-				state.gc_buf.resize(size, 0);
-
-				registers[dst as usize] = Some(Value::Buffer(Gc::from(state.gc_buf.as_slice())));
-			},
-			Operation::LoadTab(dst) => registers[dst as usize] = Some(Value::Table(Gc::default())),
+			Operation::LoadTab(dst) => registers[dst as usize] = Some(Value::Table(Default::default())),
 			Operation::Set(tab, key, val) => {
 				let Some(key) = registers[key as usize].clone() else {
 					unimplemented!()
@@ -274,8 +259,8 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				};
 
 				match value {
-					Some(value) => tab.borrow_mut().set(key, value),
-					None => { tab.borrow_mut().remove(&key); },
+					Some(value) => tab.set(key, value),
+					None => { tab.remove(&key); },
 				}
 			},
 			Operation::Get(dst, tab, key) => {
@@ -287,7 +272,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 					unimplemented!()
 				};
 
-				let value = tab.borrow().get(&key);
+				let value = tab.get(&key);
 				registers[dst as usize] = value;
 			},
 			Operation::Add(dst, a, b) => math_op!(dst, a, b, try_add),

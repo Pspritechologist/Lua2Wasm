@@ -4,12 +4,26 @@ type Inner = real_float::Finite<f64>;
 pub struct Num(Inner);
 
 impl Num {
-	pub fn new(value: Inner) -> Self { Self(value) }
-	pub fn as_int(self) -> Option<i64> {
-		let int = self.val() as i64;
-		(self.val() == int as f64).then_some(int)
+	pub fn new(value: Inner) -> Self {
+		Self(value)
 	}
 }
+
+macro_rules! int_impl {
+	($($t:ty),*) => {
+		impl Num {
+			pastey::paste! { $(
+				pub fn [<to_ $t>](self) -> $t { self.val() as $t }
+				pub fn [<as_ $t>](self) -> Option<$t> {
+					let int = self.val() as $t;
+					(self.val() == int as f64).then_some(int)
+				}
+			)* }
+		}
+	};
+}
+
+int_impl!(u8, u16, u32, u64, i8, i16, i32, i64, usize, isize);
 
 impl TryFrom<f64> for Num {
 	type Error = real_float::InfiniteError;

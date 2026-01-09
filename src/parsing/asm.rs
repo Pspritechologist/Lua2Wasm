@@ -65,7 +65,6 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 				Operation::LoadNum(reg, index as u16)
 			},
 			"loadstr" => simple_op!(LoadStr u8, u16),
-			"loadbuf" => simple_op!(LoadBuf u8, u16),
 			"loadtab" => simple_op!(LoadTab u8),
 			"set" => simple_op!(Set u8, u8, u8),
 			"get" => simple_op!(Get u8, u8, u8),
@@ -143,7 +142,6 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Resul
 				writeln!(buf, "loadnum {dst} {num}")?
 			},
 			Operation::LoadStr(dst, str_idx) => writeln!(buf, "loadstr {dst} {str_idx}")?,
-			Operation::LoadBuf(dst, size) => writeln!(buf, "loadbuf {dst} {size}")?,
 			Operation::LoadTab(dst) => writeln!(buf, "loadtab {dst}")?,
 			Operation::Set(tab, key, val) => writeln!(buf, "set {tab} {key} {val}")?,
 			Operation::Get(dst, tab, key) => writeln!(buf, "get {dst} {tab} {key}")?,
