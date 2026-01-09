@@ -29,7 +29,7 @@ enum Operation {
 	LoadTab(u8),
 	// Tables.
 	Set(u8, u8, u8),
-	Get(u8, u8),
+	Get(u8, u8, u8),
 	// Arithmetic.
 	Add(u8, u8, u8),
 	Sub(u8, u8, u8),
@@ -49,6 +49,7 @@ enum Operation {
 	// Bitwise.
 	BitAnd(u8, u8, u8),
 	BitOr(u8, u8, u8),
+	BitXor(u8, u8, u8),
 	BitShL(u8, u8, u8),
 	BitShR(u8, u8, u8),
 	BitNot(u8, u8),
@@ -273,12 +274,12 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 					None => { tab.borrow_mut().remove(&key); },
 				}
 			},
-			Operation::Get(dst, tab) => {
+			Operation::Get(dst, tab, key) => {
 				let Some(Value::Table(tab)) = registers[tab as usize].as_ref() else {
 					unimplemented!()
 				};
 
-				let Some(key) = registers[dst as usize].clone() else {
+				let Some(key) = registers[key as usize].clone() else {
 					unimplemented!()
 				};
 
@@ -302,6 +303,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				registers[dst as usize] = Some(Value::Bool(!registers[a as usize].as_ref().is_some_and(|v| v.is_truthy()))),
 			Operation::BitAnd(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a & b),
 			Operation::BitOr(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a | b),
+			Operation::BitXor(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a ^ b),
 			Operation::BitShL(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a << b),
 			Operation::BitShR(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a >> b),
 			Operation::BitNot(dst, a) => bitwise_op!(dst, a, |a| !a),
@@ -336,11 +338,9 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			Operation::Len(dst, a) =>
 				registers[dst as usize] = registers[a as usize].as_ref().map(|v| v.len().unwrap().to_value(&mut state)),
 			Operation::SkpIf(cond) => {
-				let Some(Value::Bool(condition)) = &registers[cond as usize] else {
-					unimplemented!()
-				};
+				let condition = registers[cond as usize].as_ref().is_some_and(|v| v.is_truthy());
 
-				if !*condition {
+				if !condition {
 					if let Some(Operation::GoTo(p32, p8)) = byte_code.get(frame.pc + 1) {
 						let position = Operation::decode_goto(*p32, *p8);
 						frame.pc = position;
@@ -351,11 +351,9 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				}
 			},
 			Operation::SkpIfNot(cond) => {
-				let Some(Value::Bool(condition)) = &registers[cond as usize] else {
-					unimplemented!()
-				};
+				let condition = registers[cond as usize].as_ref().is_some_and(|v| v.is_truthy());
 
-				if *condition {
+				if condition {
 					if let Some(Operation::GoTo(p32, p8)) = byte_code.get(frame.pc + 1) {
 						let position = Operation::decode_goto(*p32, *p8);
 						frame.pc = position;

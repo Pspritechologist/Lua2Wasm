@@ -31,6 +31,26 @@ pub enum Expr<'s> {
 
 impl<'s> Expr<'s> {
 	#[inline]
+	pub fn to_temp(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<u8, Error<'s>> {
+		match self.as_temp() {
+			Some(t) => Ok(t),
+			None => {
+				let temp = state.new_register();
+				self.set_to_slot(lexer, state, temp)?;
+				Ok(temp)
+			},
+		}
+	}
+
+	#[inline]
+	pub fn as_temp(self) -> Option<u8> {
+		match self {
+			Expr::Temp(t) => Some(t),
+			Expr::Local(_) | Expr::Constant(_) => None,
+		}
+	}
+
+	#[inline]
 	pub fn to_new_local(self, lexer: &Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), name: IdentKey) -> Result<u8, Error<'s>> {
 		match self {
 			Expr::Temp(temp) => {

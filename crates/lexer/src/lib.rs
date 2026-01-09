@@ -216,11 +216,11 @@ pub enum Token<'s> {
 	)]
 	Identifier(IdentKey),
 
+	//TODO: Handle escaping and interning of strings.
 	#[regex(r#""([^"]|\.)*""#, |lex| &lex.slice()[1..lex.slice().len() - 1])]
 	#[regex(r"'([^']|\.)*'", |lex| &lex.slice()[1..lex.slice().len() - 1])]
-	String(&'s str),
 	#[regex(r"\[=*\[", handle_block_string)]
-	RawString(&'s str),
+	String(&'s str),
 
 	#[token("true")] True,
 	#[token("false")] False,
@@ -233,7 +233,6 @@ impl std::fmt::Display for Token<'_> {
 			Token::Number(val) => write!(f, "Number({})", val.val()),
 			Token::Identifier(name) => write!(f, "Identifier({name:?})"),
 			Token::String(s) => write!(f, "String('{s}')"),
-			Token::RawString(s) => write!(f, "MlString([[{s}]])"),
 			_ => write!(f, "{}", self.tok_type()),
 		}
 	}
