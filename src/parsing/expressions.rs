@@ -137,7 +137,7 @@ pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut 
 				expect_tok!(lexer, Token::Assign)?;
 				KeyOrArray::Key(field)
 			},
-			_ => KeyOrArray::Array(parse_expr(head, lexer, state)?),
+			head => KeyOrArray::Array(parse_expr(head, lexer, state)?),
 		};
 
 		match first {
