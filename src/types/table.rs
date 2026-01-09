@@ -21,7 +21,7 @@ fn hash_impl(value: &Value) -> u64 {
 }
 
 impl Table {
-	fn inner_mut(&self) -> <TableInner as TableInnerImpl>::Mut<'_> {
+	fn inner_mut(&mut self) -> <TableInner as TableInnerImpl>::Mut<'_> {
 		self.inner.inner_mut()
 	}
 	fn inner(&self) -> <TableInner as TableInnerImpl>::Ref<'_> {
@@ -78,11 +78,11 @@ struct TableData {
 }
 
 fn as_index(value: &Value) -> Option<usize> {
-	value.as_num().and_then(|n| n.as_usize())
+	value.as_num().and_then(|n| n.as_usize()).and_then(|i| i.checked_sub(1))
 }
 
 impl Table {
-	pub fn set(&self, key: Value, value: Value) {
+	pub fn set(&mut self, key: Value, value: Value) {
 		if let Some(index) = as_index(&key) {
 			if self.inner().array_contents.len() == index {
 				self.inner_mut().array_contents.push(Some(value));
@@ -95,9 +95,11 @@ impl Table {
 
 		let hash = hash_impl(&key);
 
-		match self.inner_mut().hash_contents.find_mut(hash, |(k, _)| k == &key) {
-			Some((_, v)) => *v = value,
-			None => { self.inner_mut().hash_contents.insert_unique(hash, (key, value), |(k, _)| hash_impl(k)); },
+		#[allow(unused_mut)]
+		let mut inner = self.inner_mut();
+		match inner.hash_contents.find_mut(hash, |(k, _)| k == &key) {
+			Some(entry) => *entry = (key, value),
+			None => { inner.hash_contents.insert_unique(hash, (key, value), |(k, _)| hash_impl(k)); },
 		}
 	}
 
@@ -119,7 +121,7 @@ impl Table {
 		self.inner().hash_contents.find(hash, |(k, _)| k == key).is_some()
 	}
 
-	pub fn remove(&self, key: &Value) -> Option<Value> {
+	pub fn remove(&mut self, key: &Value) -> Option<Value> {
 		if let Some(index) = as_index(key) {
 			return self.inner_mut().array_contents.get_mut(index).and_then(|v| v.take());
 		}

@@ -254,7 +254,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 				let value = registers[val as usize].clone();
 
-				let Some(Value::Table(tab)) = registers[tab as usize].as_ref() else {
+				let Some(Value::Table(tab)) = registers[tab as usize].as_mut() else {
 					unimplemented!()
 				};
 
