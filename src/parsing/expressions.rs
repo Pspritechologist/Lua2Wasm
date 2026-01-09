@@ -1,4 +1,5 @@
 use crate::parsing::LexerExt;
+use crate::prelude::BStr;
 use super::{Error, ParseState, ParseStateExt, Op, IdentKey, expect_tok};
 use luant_lexer::{Lexer, Token};
 
@@ -7,7 +8,7 @@ mod pratt;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Const<'s> {
 	Number(crate::types::Num),
-	String(&'s str),
+	String(&'s BStr),
 	Bool(bool),
 	Nil,
 }

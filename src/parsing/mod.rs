@@ -1,5 +1,5 @@
 use crate::Operation as Op;
-use luant_lexer::{IdentKey, LexExtras, Lexer, Token};
+use luant_lexer::{IdentKey, Lexer, Token};
 
 use state::{ParseState, ParseStateExt, RootState, VariableScope};
 use expressions::*;
@@ -40,8 +40,18 @@ use expect_tok;
 
 type Error<'s> = Box<dyn std::error::Error + 's>;
 
-pub fn parse(src: &str) -> Result<Parsed<'_>, Error<'_>> {
-	let mut lexer = luant_lexer::lexer(src);
+pub trait ParseSrc {
+	fn bytes(&self) -> &[u8];
+}
+impl ParseSrc for [u8] {
+	fn bytes(&self) -> &[u8] { self }
+}
+impl ParseSrc for str {
+	fn bytes(&self) -> &[u8] { self.as_bytes() }
+}
+
+pub fn parse<S: ParseSrc + ?Sized>(src: &S) -> Result<Parsed<'_>, Error<'_>> {
+	let mut lexer = luant_lexer::lexer(src.bytes());
 	let mut state = RootState::default();
 
 	while let Some(tok) = lexer.next().transpose()? {

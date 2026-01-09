@@ -274,7 +274,7 @@ impl PrefixOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CallType<'s> {
-	Args, Table, String(&'s str),
+	Args, Table, String(&'s bstr::BStr),
 }
 impl<'s> CallType<'s> {
 	fn parse_call_args(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), left: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {

@@ -114,7 +114,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 
 	let mut strings = Vec::new();
 	for line in lines {
-		strings.push(line);
+		strings.push(bstr::BStr::new(line));
 	}
 
 	super::Parsed {

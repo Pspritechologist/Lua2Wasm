@@ -2,6 +2,7 @@ use super::{Error, Op};
 use luant_lexer::{IdentKey, Lexer};
 use slotmap::SparseSecondaryMap;
 use hashbrown::HashMap;
+use bstr::BStr;
 
 /// Encapsulates the state during parsing.\
 /// This trait may be implemented separately to represent
@@ -12,7 +13,7 @@ pub trait ParseState<'s> {
 	fn get_ops(&self) -> &[Op];
 	fn get_ops_mut(&mut self) -> &mut [Op];
 	fn number_idx(&mut self, n: f64) -> u16 { self.parent().number_idx(n) }
-	fn string_idx(&mut self, s: &'s str) -> u16 { self.parent().string_idx(s) }
+	fn string_idx(&mut self, s: &'s BStr) -> u16 { self.parent().string_idx(s) }
 	fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, pos: usize) -> Result<(), Error<'s>> { self.parent().label(lexer, label, pos) }
 	fn find_label(&mut self, label: IdentKey, pos: usize) -> usize { self.parent().find_label(label, pos) }
 	fn label_exists(&mut self, label: IdentKey) -> bool { self.parent().label_exists(label) }
@@ -38,8 +39,8 @@ pub struct RootState<'s> {
 	locals: SparseSecondaryMap<IdentKey, u8>,
 	registers: u8,
 	numbers: Vec<f64>,
-	string_indexes: HashMap<&'s str, usize>,
-	strings: Vec<&'s str>,
+	string_indexes: HashMap<&'s BStr, usize>,
+	strings: Vec<&'s BStr>,
 	labels: SparseSecondaryMap<IdentKey, usize>,
 	missing_labels: Vec<(IdentKey, usize)>,
 }
@@ -48,7 +49,7 @@ pub struct RootState<'s> {
 pub struct Parsed<'s> {
 	pub operations: Vec<Op>,
 	pub numbers: Vec<f64>,
-	pub strings: Vec<&'s str>,
+	pub strings: Vec<&'s BStr>,
 
 	pub locals: u8,
 }
@@ -94,7 +95,7 @@ impl<'s> ParseState<'s> for RootState<'s> {
 			idx
 		}.try_into().expect("Too many numbers consts :(")
 	}
-	fn string_idx(&mut self, s: &'s str) -> u16 {
+	fn string_idx(&mut self, s: &'s BStr) -> u16 {
 		if let Some(&idx) = self.string_indexes.get(s) {
 			idx
 		} else {

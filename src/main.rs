@@ -4,10 +4,14 @@
 	macro_metavar_expr,
 )]
 
+use prelude::BStr;
+
 mod types;
 mod parsing;
 
 mod prelude {
+	pub use bstr::BStr;
+
 	pub mod gc {
 		pub use dumpster::unsync::*;
 		pub use dumpster::Trace;
@@ -124,26 +128,26 @@ struct ConstStrings {
 	map: Vec<(usize, usize)>,
 }
 impl ConstStrings {
-	pub fn get(&self, index: usize) -> &str {
+	pub fn get(&self, index: usize) -> &BStr {
 		let (start, end) = self.map[index];
-		std::str::from_utf8(&self.data[start..end]).unwrap()
+		BStr::new(&self.data[start..end])
 	}
 
-	pub fn push(&mut self, s: &str) -> usize {
+	pub fn push(&mut self, s: &BStr) -> usize {
 		let start = self.data.len();
-		self.data.extend_from_slice(s.as_bytes());
+		self.data.extend_from_slice(s);
 		let end = self.data.len();
 		self.map.push((start, end));
 		self.map.len() - 1
 	}
 
-	pub fn new<'a>(strings: impl IntoIterator<Item=&'a str>) -> Self {
+	pub fn new<'a>(strings: impl IntoIterator<Item=&'a BStr>) -> Self {
 		let mut data = Vec::new();
 		let mut map = Vec::new();
 
 		for s in strings {
 			let start = data.len();
-			data.extend_from_slice(s.as_bytes());
+			data.extend_from_slice(s);
 			let end = data.len();
 			map.push((start, end));
 		}
@@ -321,8 +325,8 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 						buf.extend([0u8; 8]); // Placeholder for hash.
 
-						buf.extend(a.as_bytes());
-						buf.extend(b.as_bytes());
+						buf.extend_from_slice(a);
+						buf.extend_from_slice(b);
 
 						let hash = state.hasher.hash_bytes(&buf[8..]);
 						buf[..8].copy_from_slice(&hash.to_ne_bytes());

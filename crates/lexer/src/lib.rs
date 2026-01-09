@@ -1,6 +1,12 @@
 use logos::Logos;
+use bstr::{ByteSlice, BStr};
+use lexical_parse_float::FromLexicalWithOptions;
 
 pub use logos;
+
+const FLOAT_PARSE_FORMAT: u128 = lexical_parse_float::NumberFormatBuilder::new()
+	.no_special(true)
+	.build_strict();
 
 pub trait TokPat<'s> {
 	fn matches(self, tok: Token<'s>) -> bool;
@@ -51,13 +57,8 @@ impl<'s> Lexer<'s> {
 	}
 
 	// Returns the identifier string associated with the given IdentKey.
-	pub fn resolve_ident(&self, key: impl Into<IdentKey>) -> &'s str {
+	pub fn resolve_ident(&self, key: impl Into<IdentKey>) -> &'s BStr {
 		self.inner.extras.resolve_ident(key.into())
-	}
-
-	/// Returns an new IdentKey not associated with any identifier.
-	pub fn new_key(&mut self) -> IdentKey {
-		self.inner.extras.idents.insert("")
 	}
 }
 
@@ -70,7 +71,7 @@ impl<'s> Iterator for Lexer<'s> {
 	}
 }
 
-pub fn lexer(src: &str) -> Lexer<'_> {
+pub fn lexer(src: &[u8]) -> Lexer<'_> {
 	Lexer {
 		inner: Token::lexer(src),
 		peeked: None,
@@ -82,16 +83,18 @@ slotmap::new_key_type! {
 }
 
 #[derive(Default)]
-pub struct LexExtras<'s> {
-	idents: slotmap::SlotMap<IdentKey, &'s str>,
-	ident_table: hashbrown::HashMap<&'s str, IdentKey>,
+pub struct LexState<'s> {
+	idents: slotmap::SlotMap<IdentKey, &'s BStr>,
+	ident_table: hashbrown::HashMap<&'s BStr, IdentKey>,
 }
-impl<'s> LexExtras<'s> {
-	pub fn resolve_ident(&self, key: IdentKey) -> &'s str {
+impl<'s> LexState<'s> {
+	pub fn resolve_ident(&self, key: IdentKey) -> &'s BStr {
 		self.idents.get(key).expect("Invalid Label key")
 	}
 
-	fn handle_ident(&mut self, ident: &'s str) -> IdentKey {
+	fn handle_ident(&mut self, ident: &'s [u8]) -> IdentKey {
+		let ident = BStr::new(ident);
+
 		if let Some(&key) = self.ident_table.get(ident) {
 			return key;
 		}
@@ -103,44 +106,56 @@ impl<'s> LexExtras<'s> {
 }
 
 fn handle_comment<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<logos::Skip, LexError<'s>> {
-	if !lex.slice().starts_with("--[") {
+	if !lex.slice().starts_with(b"--[") {
 		// Single-line comment
-		let end = lex.remainder().find('\n').unwrap_or(lex.remainder().len());
+		let end = lex.remainder().find(b"\n").unwrap_or(lex.remainder().len());
 		lex.bump(end);
 		return Ok(logos::Skip);
 	}
 
 	// let equals = lex.slice().matches('=').count();
 	let equals = lex.slice().len() - 4; // "--[==[".len() == 6
-	let end_pat = format!("]{}]", "=".repeat(equals));
+	let end_pat = format!("]{}]", "=".repeat(equals)); //TODO: Highly inefficient.
 	let end = lex.remainder().find(&end_pat).ok_or(LexError::UnmatchedBlockComment)?;
 	lex.bump(end + end_pat.len());
 
 	Ok(logos::Skip)
 }
 
-fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<&'s str, LexError<'s>> {
+fn handle_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> &'s BStr {
+	let slice = lex.slice();
+	let s = &slice[1..slice.len() - 1]; // Remove quotes
+	BStr::new(s)
+}
+
+fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<&'s BStr, LexError<'s>> {
 	// let equals = lex.slice().matches('=').count();
 	let equals = lex.slice().len() - 2; // "[==[".len() == 4
-	let end_pat = format!("]{}]", "=".repeat(equals));
+	let end_pat = format!("]{}]", "=".repeat(equals)); //TODO: Highly inefficient.
 	let end = lex.remainder().find(&end_pat).ok_or(LexError::UnmatchedMultiLineString)?;
 
 	let str_end = end - end_pat.len();
 	let s = &lex.remainder()[..str_end];
 	// Multiline-strings ignore the first newline.
-	let s = s.strip_prefix('\n').unwrap_or(s);
+	let s = s.strip_prefix(b"\r\n")
+		.or_else(|| s.strip_prefix(b"\n"))
+		.or_else(|| s.strip_prefix(b"\r"))
+		.unwrap_or(s);
 
 	lex.bump(end + end_pat.len());
-	Ok(s)
+	
+	Ok(BStr::new(s))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Logos, strum::IntoStaticStr)]
-#[logos(extras = LexExtras<'s>)]
+#[logos(extras = LexState<'s>)]
+// #[logos(skip(r"--[^\n]*"))]
 #[logos(skip(r"\s+"))]
 #[logos(skip(r"--(\[(=*)\[)?", handle_comment))]
 // #[logos(skip(r"--\[=*\[", handle_block_comment))]
 // #[logos(skip(r"--[^\n]*"))]
-#[logos(error(LexError<'s>, |lex| LexError::InvalidToken(lex.slice())))]
+#[logos(error(LexError<'s>, |lex| LexError::InvalidToken(BStr::new(lex.slice()))))]
+#[logos(utf8 = false)]
 pub enum Token<'s> {
 	#[token(";")] LineTerm,
 	#[token("[")] BracketOpen,
@@ -206,21 +221,21 @@ pub enum Token<'s> {
 
 	#[regex(
 		r"[-+]?\d+(\.\d*)?([eE][-+]?\d+)?",
-		|lex| lex.slice().parse::<f64>().map(real_float::Finite::new)
-	)]
+		|lex| f64::from_lexical_with_options::<FLOAT_PARSE_FORMAT>(lex.slice(), &Default::default()).map(real_float::Finite::new), 
+	)]//|lex| lex.slice().parse::<f64>().map(real_float::Finite::new)
 	Number(real_float::Finite<f64>),
 
 	#[regex(
 		r"[\p{XID_Start}_][\p{XID_Continue}_]*",
-		|lex| lex.extras.handle_ident(lex.slice())
+		|lex| lex.extras.handle_ident(lex.slice()),
 	)]
 	Identifier(IdentKey),
 
 	//TODO: Handle escaping and interning of strings.
-	#[regex(r#""([^"]|\.)*""#, |lex| &lex.slice()[1..lex.slice().len() - 1])]
-	#[regex(r"'([^']|\.)*'", |lex| &lex.slice()[1..lex.slice().len() - 1])]
+	#[regex(br#""([^"]|\.)*""#, handle_string)]
+	#[regex(br"'([^']|\.)*'", handle_string)]
 	#[regex(r"\[=*\[", handle_block_string)]
-	String(&'s str),
+	String(&'s BStr),
 
 	#[token("true")] True,
 	#[token("false")] False,
@@ -246,30 +261,140 @@ impl Token<'_> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum LexError<'src> {
-	NumberInvalid,
+	NumberParsing(lexical_parse_float::Error),
 	UnmatchedBlockComment,
 	UnmatchedMultiLineString,
-	InvalidToken(&'src str),
+	InvalidToken(&'src BStr),
 	#[default]
 	Unknown,
 }
 
 impl std::error::Error for LexError<'_> { }
 
-impl From<std::num::ParseFloatError> for LexError<'_> {
-	fn from(_: std::num::ParseFloatError) -> Self {
-		LexError::NumberInvalid
+impl From<lexical_parse_float::Error> for LexError<'_> {
+	fn from(e: lexical_parse_float::Error) -> Self {
+		LexError::NumberParsing(e)
 	}
 }
 
 impl std::fmt::Display for LexError<'_> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			LexError::NumberInvalid => write!(f, "Invalid float literal"),
+			LexError::NumberParsing(e) => write!(f, "Error parsing num literal: {e}"),
 			LexError::UnmatchedBlockComment => write!(f, "Unmatched block comment"),
 			LexError::UnmatchedMultiLineString => write!(f, "Unmatched multi-line string"),
 			LexError::InvalidToken(tok) => write!(f, "Invalid token: {tok}"),
 			LexError::Unknown => write!(f, "Unknown lexing error"),
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_lexer_basic() {
+		let src = b"
+			-- This is a comment
+			local x = 42;
+			local str = \"Hello, World!\";
+			::my_label::
+			if x >= 10 then
+				x = x + 1;
+			end
+		";
+
+		let mut lexer = lexer(src);
+
+		let expected_tokens = vec![
+			Token::Local,
+			Token::Identifier(lexer.inner.extras.handle_ident(b"x")),
+			Token::Assign,
+			Token::Number(real_float::Finite::new(42.0)),
+			Token::LineTerm,
+			Token::Local,
+			Token::Identifier(lexer.inner.extras.handle_ident(b"str")),
+			Token::Assign,
+			Token::String(BStr::new(b"Hello, World!")),
+			Token::LineTerm,
+			Token::Label,
+			Token::Identifier(lexer.inner.extras.handle_ident(b"my_label")),
+			Token::Label,
+			Token::If,
+			Token::Identifier(lexer.inner.extras.handle_ident(b"x")),
+			Token::GreaterThanEquals,
+			Token::Number(real_float::Finite::new(10.0)),
+			Token::Then,
+			Token::Identifier(lexer.inner.extras.handle_ident(b"x")),
+			Token::Assign,
+			Token::Identifier(lexer.inner.extras.handle_ident(b"x")),
+			Token::Plus,
+			Token::Number(real_float::Finite::new(1.0)),
+			Token::LineTerm,
+			Token::End,
+		];
+
+		for (i, expected) in expected_tokens.into_iter().enumerate() {
+			let token = lexer.next().unwrap().unwrap();
+			assert_eq!(token, expected, "Expected {expected:?}, got {token:?} at {i}");
+		}
+
+		assert!(lexer.next().is_none());
+	}
+
+	#[test]
+	fn test_lexer_non_utf8() {
+		let src = b"
+			local s = \"Hello, \xFF World!\";
+		";
+
+		let mut lexer = lexer(src);
+
+		let expected_tokens = vec![
+			Token::Local,
+			Token::Identifier(lexer.inner.extras.handle_ident(b"s")),
+			Token::Assign,
+			Token::String(BStr::new(b"Hello, \xFF World!")),
+			Token::LineTerm,
+		];
+
+		for expected in expected_tokens {
+			let token = lexer.next().unwrap().unwrap();
+			assert_eq!(token, expected);
+		}
+
+		assert!(lexer.next().is_none());
+	}
+
+	#[test]
+	fn test_lexer_non_utf8_identifier() {
+		let src = b"
+			local var_\xFF_ = 100;
+		";
+
+		let mut lexer = lexer(src);
+
+		let expected_tokens = vec![
+			Token::Local,
+			Token::Identifier(lexer.inner.extras.handle_ident(b"var_")),
+			// This is where the rest of the above identifier is, but it's invalid UTF-8.
+			// The broken ident will leave some rubbish tokens following.
+			Token::Identifier(lexer.inner.extras.handle_ident(b"_")),
+			//FIXME: I've no idea why this is happening, but it doesn't matter for now.
+			Token::Identifier(lexer.inner.extras.handle_ident(b"_")),
+			Token::Assign,
+			Token::Number(real_float::Finite::new(100.0)),
+			Token::LineTerm,
+		];
+
+		for expected in expected_tokens {
+			match lexer.next().unwrap() {
+				Ok(tok) => assert_eq!(tok, expected),
+				Err(e) => assert_eq!(e, LexError::InvalidToken(BStr::new(b"\xFF"))),
+			}
+		}
+
+		assert!(lexer.next().is_none());
 	}
 }

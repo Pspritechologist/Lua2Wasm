@@ -1,17 +1,16 @@
-use std::ops::Deref;
-
 use crate::prelude::*;
 use gc::{Trace, Gc};
+use std::ops::Deref;
 
 #[repr(C)]
 #[derive(Debug, Trace)]
 pub struct LString {
 	hash: u64,
-	data: str,
+	data: [u8],
 }
 
 impl LString {
-	pub fn new(state: &mut State, data: impl AsRef<str>) -> Gc<Self> {
+	pub fn new(state: &mut State, data: impl AsRef<[u8]>) -> Gc<Self> {
 		let data = data.as_ref();
 
 		let hash = state.hasher.hash_bytes(data);
@@ -19,7 +18,7 @@ impl LString {
 		let buf = &mut state.gc_buf;
 		buf.clear();
 		buf.extend(hash.to_ne_bytes());
-		buf.extend(data.as_bytes());
+		buf.extend(data);
 		
 		// SAFETY: We just constructed `buf` to have a valid hash and valid UTF-8 data.
 		let gc = unsafe { Self::new_from_buf(buf, data.len()) };
@@ -39,8 +38,8 @@ impl LString {
 		unsafe { Gc::__private_from_ptr(std::ptr::from_raw_parts(ptr as *const (), data_len)) }
 	}
 
-	pub fn as_str(&self) -> &str {
-		&self.data
+	pub fn as_str(&self) -> &BStr {
+		BStr::new(&self.inner.data)
 	}
 
 	pub fn get_hash(&self) -> u64 {
@@ -48,13 +47,13 @@ impl LString {
 	}
 }
 
-impl AsRef<str> for LString {
-	fn as_ref(&self) -> &str { self }
+impl AsRef<BStr> for LString {
+	fn as_ref(&self) -> &BStr { self }
 }
 
 impl Deref for LString {
-	type Target = str;
+	type Target = BStr;
 	fn deref(&self) -> &Self::Target {
-		&self.data
+		self.as_str()
 	}
 }

@@ -148,6 +148,16 @@ impl ToValue for &str {
 		Value::Str(LString::new(state, self))
 	}
 }
+impl ToValue for &bstr::BStr {
+	fn to_value(self, state: &mut State) -> Value {
+		Value::Str(LString::new(state, self))
+	}
+}
+impl ToValue for &[u8] {
+	fn to_value(self, state: &mut State) -> Value {
+		Value::Str(LString::new(state, self))
+	}
+}
 
 macro_rules! impl_num {
 	($($t:ty),*) => {
