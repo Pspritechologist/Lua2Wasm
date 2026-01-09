@@ -55,7 +55,7 @@ impl std::fmt::Display for Value {
 		if !f.alternate() {
 			return match self {
 				Value::Num(num) => write!(f, "{}", num.val()),
-				Value::Str(s) => write!(f, "{}", s.as_str()),
+				Value::Str(s) => write!(f, "'{}'", s.as_str()),
 				Value::Bool(b) => write!(f, "{b}"),
 				Value::Buffer(buf) => write!(f, "Buffer({:p}, len={})", Gc::as_ptr(buf), buf.len()),
 				Value::Table(tab) => write!(f, "Table({:p})", Gc::as_ptr(tab)),

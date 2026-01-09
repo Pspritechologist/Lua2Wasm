@@ -24,6 +24,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl 
 			Token::RawString(s) => Expr::Constant(Const::String(s)),
 			Token::True => Expr::Constant(Const::Bool(true)),
 			Token::False => Expr::Constant(Const::Bool(false)),
+			Token::Nil => Expr::Constant(Const::Nil),
 			tok => return Err(format!("Expected expression, found {tok:?}").into()),
 		},
 	};
@@ -59,6 +60,48 @@ enum InfixOp {
 }
 impl InfixOp {
 	fn parse_infix<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), left: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
+		match self {
+			InfixOp::And => {
+				let dst = match left {
+					Expr::Temp(t) => t,
+					_ => state.new_register(),
+				};
+
+				left.set_to_slot(lexer, state, dst)?;
+				state.emit(Op::SkpIfNot(dst));
+				let goto_pos = state.get_ops().len();
+				state.emit(Op::GoTo(0, 0)); // Placeholder
+				
+				let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
+				right.set_to_slot(lexer, state, dst)?;
+
+				let end_pos = state.get_ops().len();
+				state.get_ops_mut()[goto_pos] = Op::goto(end_pos);
+
+				return Ok(Expr::Temp(dst));
+			},
+			InfixOp::Or => {
+				let dst = match left {
+					Expr::Temp(t) => t,
+					_ => state.new_register(),
+				};
+
+				left.set_to_slot(lexer, state, dst)?;
+				state.emit(Op::SkpIf(dst));
+				let goto_pos = state.get_ops().len();
+				state.emit(Op::GoTo(0, 0)); // Placeholder
+				
+				let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
+				right.set_to_slot(lexer, state, dst)?;
+
+				let end_pos = state.get_ops().len();
+				state.get_ops_mut()[goto_pos] = Op::goto(end_pos);
+
+				return Ok(Expr::Temp(dst));
+			},
+			_ => {},
+		}
+
 		let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
 
 		if let (Expr::Constant(a), Expr::Constant(b)) = (left, right) &&
@@ -88,7 +131,7 @@ impl InfixOp {
 			InfixOp::DivInt => todo!(),
 			InfixOp::Mod => std_infix!(Mod),
 			InfixOp::Pow => std_infix!(Pow),
-			InfixOp::Concat => todo!(),
+			InfixOp::Concat => std_infix!(Concat),
 			InfixOp::Eq => std_infix!(Eq),
 			InfixOp::Neq => std_infix!(Neq),
 			InfixOp::Lt => std_infix!(Lt),
@@ -99,8 +142,7 @@ impl InfixOp {
 			InfixOp::BitOr => std_infix!(BitOr),
 			InfixOp::Shl => std_infix!(BitShL),
 			InfixOp::Shr => std_infix!(BitShR),
-			InfixOp::And => todo!(),
-			InfixOp::Or => todo!(),
+			InfixOp::And | InfixOp::Or => unreachable!(),
 		})
 	}
 

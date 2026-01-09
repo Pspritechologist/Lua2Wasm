@@ -9,16 +9,16 @@ pub enum Const<'s> {
 	Number(crate::types::Num),
 	String(&'s str),
 	Bool(bool),
-	Null,
+	Nil,
 }
 
 impl<'s> Const<'s> {
 	pub fn is_truthy(self) -> bool {
-		!matches!(self, Const::Bool(false) | Const::Null)
+		!matches!(self, Const::Bool(false) | Const::Nil)
 	}
 
 	pub fn is_null(self) -> bool {
-		matches!(self, Const::Null)
+		matches!(self, Const::Nil)
 	}
 }
 
@@ -74,7 +74,7 @@ impl<'s> Expr<'s> {
 				state.emit(Op::LoadStr(slot, str_idx));
 			},
 			Expr::Constant(Const::Bool(b)) => state.emit(Op::LoadBool(slot, b)),
-			Expr::Constant(Const::Null) => state.emit(Op::LoadNull(slot)),
+			Expr::Constant(Const::Nil) => state.emit(Op::LoadNull(slot)),
 		}
 
 		Ok(())

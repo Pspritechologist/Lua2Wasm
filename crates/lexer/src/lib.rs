@@ -216,8 +216,8 @@ pub enum Token<'s> {
 	)]
 	Identifier(IdentKey),
 
-	#[regex(r#""([^"]|\.)*""#)]
-	#[regex(r"'([^']|\.)*'")]
+	#[regex(r#""([^"]|\.)*""#, |lex| &lex.slice()[1..lex.slice().len() - 1])]
+	#[regex(r"'([^']|\.)*'", |lex| &lex.slice()[1..lex.slice().len() - 1])]
 	String(&'s str),
 	#[regex(r"\[=*\[", handle_block_string)]
 	RawString(&'s str),

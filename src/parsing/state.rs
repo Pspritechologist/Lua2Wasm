@@ -16,6 +16,7 @@ pub trait ParseState<'s> {
 	fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, pos: usize) -> Result<(), Error<'s>> { self.parent().label(lexer, label, pos) }
 	fn find_label(&mut self, label: IdentKey, pos: usize) -> usize { self.parent().find_label(label, pos) }
 	fn label_exists(&mut self, label: IdentKey) -> bool { self.parent().label_exists(label) }
+	fn merge_missing_labels(&mut self, other: &mut Vec<(IdentKey, usize)>) { self.parent().merge_missing_labels(other) }
 	fn emit_break(&mut self) -> Result<(), Error<'s>> { self.parent().emit_break() }
 	fn emit_continue(&mut self) -> Result<(), Error<'s>> { self.parent().emit_continue() }
 
@@ -54,17 +55,11 @@ pub struct Parsed<'s> {
 
 impl<'s> RootState<'s> {
 	/// Checks that no labels were left unresolved and returns the completed bytecode.
-	pub fn finalize(self, lexer: &Lexer<'s>) -> Result<Parsed<'s>, Error<'s>> {
-		if !self.missing_labels.is_empty() {
-			if self.missing_labels.len() == 1 {
-				let (label, _) = &self.missing_labels[0];
-				return Err(format!("Unresolved label: {}", lexer.resolve_ident(*label)).into());
-			}
-			let mut err = String::from("Unresolved labels:\n");
-			for (label, _) in &self.missing_labels {
-				err.push_str(&format!("- {}\n", lexer.resolve_ident(*label)));
-			}
-			return Err(err.into());
+	pub fn finalize(mut self, lexer: &Lexer<'s>) -> Result<Parsed<'s>, Error<'s>> {
+		let missing_labels = std::mem::take(&mut self.missing_labels);
+		// Attempt to resolve all missing labels.
+		if let Some((label, _)) = missing_labels.first() {
+			return Err(format!("Undefined label '{}'", lexer.resolve_ident(*label)).into());
 		}
 
 		Ok(Parsed {
@@ -109,11 +104,21 @@ impl<'s> ParseState<'s> for RootState<'s> {
 			idx
 		}.try_into().expect("Too many string consts :(")
 	}
-	fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, pos: usize) -> Result<(), Error<'s>> {
+	fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, label_pos: usize) -> Result<(), Error<'s>> {
 		if self.label_exists(label) {
 			return Err(format!("Label '{}' already defined", lexer.resolve_ident(label)).into());
 		}
-		self.labels.insert(label, pos);
+		self.labels.insert(label, label_pos);
+
+		let mut missing_labels = std::mem::take(&mut self.missing_labels);
+		missing_labels.retain(|(missing, op_pos)| {
+			if *missing == label {
+				self.get_ops_mut()[label_pos] = Op::goto(*op_pos);
+				false
+			} else { true }
+		});
+		self.missing_labels = missing_labels;
+
 		Ok(())
 	}
 	fn find_label(&mut self, label: IdentKey, pos: usize) -> usize {
@@ -127,6 +132,9 @@ impl<'s> ParseState<'s> for RootState<'s> {
 	}
 	fn label_exists(&mut self, label: IdentKey) -> bool {
 		self.labels.contains_key(label)
+	}
+	fn merge_missing_labels(&mut self,other: &mut Vec<(IdentKey,usize)>) {
+		self.missing_labels.append(other);
 	}
 
 	fn emit_break(&mut self) -> Result<(), Error<'s>> {
@@ -172,25 +180,40 @@ impl<'s, T: ParseState<'s> + ?Sized> ParseStateExt<'s> for T { }
 /// A basic state-extension that layers locals and labels on top
 /// of an existing state. Used for blocks such as `do` or `if`.
 #[derive(Debug, Default)]
-pub struct VariableScope<P> {
+pub struct VariableScope<'s, P: ParseState<'s>> {
 	parent: P,
 	locals: SparseSecondaryMap<IdentKey, u8>,
 	labels: SparseSecondaryMap<IdentKey, usize>,
+	missing_labels: Vec<(IdentKey, usize)>,
+	pd: std::marker::PhantomData<&'s ()>,
 }
-impl<P> VariableScope<P> {
+impl<'s, P: ParseState<'s>> VariableScope<'s, P> {
 	pub fn new(parent: P) -> Self {
 		Self {
 			parent,
 			labels: Default::default(),
 			locals: Default::default(),
+			missing_labels: Default::default(),
+			pd: std::marker::PhantomData,
 		}
 	}
 
-	pub fn into_inner(self) -> P {
-		self.parent
+	pub fn into_inner(mut self) -> P {
+		let mut missing_labels = std::mem::take(&mut self.missing_labels);
+		let mut parent = unsafe { std::ptr::read(&self.parent) };
+		// Prevent Drop from running since we've moved out the important fields
+		std::mem::forget(self);
+		// We need to manually call merge_missing_labels since Drop won't run
+		parent.merge_missing_labels(&mut missing_labels);
+		parent
 	}
 }
-impl<'s, P: ParseState<'s>> ParseState<'s> for VariableScope<P> {
+impl<'s, P: ParseState<'s>> Drop for VariableScope<'s, P> {
+	fn drop(&mut self) {
+		self.parent.merge_missing_labels(&mut self.missing_labels);
+	}
+}
+impl<'s, P: ParseState<'s>> ParseState<'s> for VariableScope<'s, P> {
 	fn parent(&mut self) -> &mut dyn ParseState<'s> { &mut self.parent }
 	fn get_ops(&self) -> &[Op] { self.parent.get_ops() }
 	fn get_ops_mut(&mut self) -> &mut [Op] { self.parent.get_ops_mut() }
@@ -208,19 +231,40 @@ impl<'s, P: ParseState<'s>> ParseState<'s> for VariableScope<P> {
 		self.locals.get(name).copied().map_or_else(|| self.parent().local(lexer, name), Ok)
 	}
 
-	fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, pos: usize) -> Result<(), Error<'s> > {
+	fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, label_pos: usize) -> Result<(), Error<'s>> {
 		if self.label_exists(label) {
 			return Err(format!("Label '{}' already defined", lexer.resolve_ident(label)).into());
 		}
-		self.labels.insert(label, pos);
+		self.labels.insert(label, label_pos);
+
+		let mut missing_labels = std::mem::take(&mut self.missing_labels);
+		missing_labels.retain(|(missing, op_pos)| {
+			if *missing == label {
+				self.get_ops_mut()[*op_pos] = Op::goto(label_pos);
+				false
+			} else { true }
+		});
+		self.missing_labels = missing_labels;
+
 		Ok(())
 	}
 
 	fn find_label(&mut self, label: IdentKey, pos: usize) -> usize {
-		self.labels.get(label).copied().unwrap_or_else(|| self.parent().find_label(label, pos))
+		self.labels.get(label)
+			.copied()
+			.or_else(|| self.parent().label_exists(label).then(|| self.parent.find_label(label, pos)))
+			.unwrap_or_else(|| {
+				// Add to the list to fill in at a later date.
+				self.missing_labels.push((label, pos));
+				0
+			})
 	}
 
 	fn label_exists(&mut self, label: IdentKey) -> bool {
 		self.labels.contains_key(label) || self.parent().label_exists(label)
+	}
+
+	fn merge_missing_labels(&mut self,other: &mut Vec<(IdentKey,usize)>) {
+		self.missing_labels.append(other);
 	}
 }
