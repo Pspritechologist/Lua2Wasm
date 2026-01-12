@@ -18,6 +18,18 @@ impl<'s> TokPat<'s> for Token<'_> {
 	}
 }
 
+impl<'s, const LEN: usize> TokPat<'s> for [Token<'s>; LEN] {
+	fn matches(self, tok: Token<'s>) -> bool {
+		self.contains(&tok)
+	}
+}
+
+impl<'s> TokPat<'s> for &[Token<'s>] {
+	fn matches(self, tok: Token<'s>) -> bool {
+		self.contains(&tok)
+	}
+}
+
 impl<'s, F: FnOnce(Token<'s>) -> bool> TokPat<'s> for F {
 	fn matches(self, tok: Token<'s>) -> bool {
 		self(tok)
@@ -56,9 +68,23 @@ impl<'s> Lexer<'s> {
 		Ok(None)
 	}
 
-	// Returns the identifier string associated with the given IdentKey.
+	/// Returns the identifier string associated with the given IdentKey.
 	pub fn resolve_ident(&self, key: impl Into<IdentKey>) -> &'s BStr {
 		self.inner.extras.resolve_ident(key.into())
+	}
+
+	pub fn current_span(&self) -> std::ops::Range<usize> {
+		self.inner.span()
+	}
+
+	pub fn current_pos(&self) -> (usize, usize) {
+		let span = self.current_span();
+		let src = self.inner.source();
+
+		let line = src[..span.start].chars().filter(|&c| c == '\n').count() + 1;
+		let col = src[..span.start].rfind(b"\n").map(|pos| span.start - pos).unwrap_or(span.start + 1);
+
+		(line, col)
 	}
 }
 
@@ -208,7 +234,6 @@ pub enum Token<'s> {
 
 	#[token("do")] Do,
 	#[token("end")] End,
-
 	#[token("if")] If,
 	#[token("then")] Then,
 	#[token("else")] Else,
@@ -216,6 +241,8 @@ pub enum Token<'s> {
 	#[token("while")] While,
 	#[token("for")] For,
 	#[token("in")] In,
+	#[token("repeat")] Repeat,
+	#[token("until")] Until,
 	#[token("break")] Break,
 	#[token("goto")] Goto,
 

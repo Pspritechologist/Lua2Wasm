@@ -49,7 +49,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 		}
 
 		ops.push(match op {
-			"loadnull" => simple_op!(LoadNull u8),
+			"loadnil" => simple_op!(LoadNil u8, u8),
 			"loadbool" => simple_op!(LoadBool u8, bool),
 			"loadnum" => {
 				let (reg, num) = args!(u8, f64);
@@ -106,7 +106,6 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 				let position = ops.len().strict_add_signed(offset);
 				Operation::goto(position)
 			},
-			"put" => simple_op!(Put u8),
 			op => panic!("Unknown operation: {op}"),
 		});
 	}
@@ -135,7 +134,7 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Resul
 	// Print all operations
 	for (idx, op) in operations.iter().enumerate() {
 		match op {
-			Operation::LoadNull(dst) => writeln!(buf, "loadnull {dst}")?,
+			Operation::LoadNil(dst, cnt) => writeln!(buf, "loadnull {dst} {cnt}")?,
 			Operation::LoadBool(dst, val) => writeln!(buf, "loadbool {dst} {val}")?,
 			Operation::LoadNum(dst, num_idx) => {
 				let num = numbers.get(*num_idx as usize).unwrap_or(&0.0);
@@ -176,7 +175,6 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Resul
 				let offset = position as isize - idx as isize;
 				writeln!(buf, "goto {offset}")?
 			},
-			Operation::Put(dst) => writeln!(buf, "put {dst}")?,
 		}
 	}
 

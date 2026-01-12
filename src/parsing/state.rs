@@ -21,9 +21,9 @@ pub trait ParseState<'s> {
 	fn emit_break(&mut self) -> Result<(), Error<'s>> { self.parent().emit_break() }
 	fn emit_continue(&mut self) -> Result<(), Error<'s>> { self.parent().emit_continue() }
 
-	fn new_register(&mut self) -> u8 { self.parent().new_register() }
+	fn new_temp(&mut self) -> u8 { self.parent().new_temp() }
+	fn free_temps(&mut self) { self.parent().free_temps() }
 	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().new_local(lexer, name) }
-	fn make_local(&mut self, lexer: &Lexer<'s>, name: IdentKey, slot: u8) -> Result<(), Error<'s>> { self.parent().make_local(lexer, name, slot) }
 	fn local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().local(lexer, name) }
 
 	fn parent(&'_ mut self) -> &'_ mut dyn ParseState<'s>;
@@ -37,7 +37,8 @@ pub struct RootState<'s> {
 	operations: Vec<Op>,
 
 	locals: SparseSecondaryMap<IdentKey, u8>,
-	registers: u8,
+	local_count: u8,
+	temp_count: u8,
 	numbers: Vec<f64>,
 	string_indexes: HashMap<&'s BStr, usize>,
 	strings: Vec<&'s BStr>,
@@ -68,7 +69,7 @@ impl<'s> RootState<'s> {
 			numbers: self.numbers,
 			strings: self.strings,
 
-			locals: self.registers,
+			locals: self.local_count,
 		})
 	}
 }
@@ -145,38 +146,27 @@ impl<'s> ParseState<'s> for RootState<'s> {
 		Err("Continue statement not within a loop".into())
 	}
 
-	fn new_register(&mut self) -> u8 {
-		let reg = self.registers;
-		self.registers += 1;
+	fn new_temp(&mut self) -> u8 {
+		let reg = self.temp_count + self.local_count;
+		self.temp_count += 1;
 		reg
+	}
+	fn free_temps(&mut self) {
+		self.temp_count = 0;
 	}
 	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> {
 		if self.locals.contains_key(name) {
 			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
 		}
-		let reg = self.new_register();
+		let reg = self.local_count;
 		self.locals.insert(name, reg);
+		self.local_count += 1;
 		Ok(reg)
-	}
-	fn make_local(&mut self, lexer: &Lexer<'s>, name: IdentKey, slot: u8) -> Result<(), Error<'s>> {
-		if self.locals.contains_key(name) {
-			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
-		}
-		self.locals.insert(name, slot);
-		Ok(())
 	}
 	fn local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s> > {
 		self.locals.get(name).copied().ok_or_else(|| format!("Local variable `{}` not found", lexer.resolve_ident(name)).into())
 	}
 }
-
-/// A collection of non-dyn-compatible helper methods for ParseState.
-pub trait ParseStateExt<'s>: ParseState<'s> {
-	fn new_registers<const COUNT: usize>(&mut self) -> [u8; COUNT] {
-		[(); COUNT].map(|_| self.new_register())
-	}
-}
-impl<'s, T: ParseState<'s> + ?Sized> ParseStateExt<'s> for T { }
 
 /// A basic state-extension that layers locals and labels on top
 /// of an existing state. Used for blocks such as `do` or `if`.
@@ -223,7 +213,7 @@ impl<'s, P: ParseState<'s>> ParseState<'s> for VariableScope<'s, P> {
 		if self.locals.contains_key(name) {
 			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
 		}
-		let reg = self.parent().new_register();
+		let reg = self.parent().new_temp();
 		self.locals.insert(name, reg);
 		Ok(reg)
 	}

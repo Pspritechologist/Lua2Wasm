@@ -1,7 +1,8 @@
 use crate::parsing::LexerExt;
 use crate::types::Num;
-use super::{Error, ParseState, ParseStateExt, Op, IdentKey, expect_tok};
+use super::{Error, ParseState, Op, IdentKey, expect_tok};
 use super::{Expr, Const, parse_table_init};
+use super::postfix_ops::{CallType, IndexType};
 use luant_lexer::{Lexer, Token};
 
 pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), prec: u8) -> Result<Expr<'s>, Error<'s>> {
@@ -40,11 +41,6 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Assoc {
-	Left, Right,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InfixOp<'s> {
 	Add, Sub,
 	Mul, Div, DivInt,
@@ -71,7 +67,7 @@ impl<'s> InfixOp<'s> {
 			
 			let dst = left.as_temp()
 				.or_else(|| right.as_temp())
-				.unwrap_or_else(|| state.new_register());
+				.unwrap_or_else(|| state.new_temp());
 
 			let lhs = left.to_slot(lexer, state)?;
 			let rhs = right.to_slot(lexer, state)?;
@@ -159,13 +155,8 @@ impl<'s> InfixOp<'s> {
 			Token::BitNot => InfixOp::BitXor,
 			Token::BitShiftL => InfixOp::Shl,
 			Token::BitShiftR => InfixOp::Shr,
-			Token::ParenOpen => InfixOp::Call(CallType::Args),
-			Token::BraceOpen => InfixOp::Call(CallType::Table),
-			Token::String(s) => InfixOp::Call(CallType::String(s)),
-			Token::BracketOpen => InfixOp::Index(IndexType::Index),
-			Token::Dot => InfixOp::Index(IndexType::Field),
-			Token::Colon => InfixOp::Index(IndexType::Method),
-			_ => return None,
+			tok => CallType::from_token(tok).map(InfixOp::Call)
+				.or_else(|| IndexType::from_token(tok).map(InfixOp::Index))?,
 		})
 	}
 
@@ -195,13 +186,6 @@ impl<'s> InfixOp<'s> {
 			(InfixOp::Shr, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? >> b.as_i64()?) as f64).ok()?),
 			_ => return None,
 		})
-	}
-
-	fn assoc(self) -> Assoc {
-		match self {
-			InfixOp::Pow | InfixOp::Concat => Assoc::Right,
-			_ => Assoc::Left,
-		}
 	}
 
 	fn prec(self) -> u8 {
@@ -269,52 +253,5 @@ impl PrefixOp {
 
 	fn prec(self) -> u8 {
 		11
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CallType<'s> {
-	Args, Table, String(&'s bstr::BStr),
-}
-impl<'s> CallType<'s> {
-	fn parse_call_args(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), left: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
-		match self {
-			CallType::Args => todo!(),
-			CallType::Table => todo!(),
-			CallType::String(_) => todo!(),
-		}
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IndexType {
-	Index, Field, Method,
-}
-impl IndexType {
-	fn parse_index<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), target: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
-		let index_expr = match self {
-			IndexType::Index => {
-				let index_expr = parse_expr(lexer.next_must()?, lexer, state, 0)?;
-				expect_tok!(lexer, Token::BracketClose)?;
-				index_expr
-			},
-			IndexType::Field => {
-				let Token::Identifier(ident) = lexer.next_must()? else {
-					return Err("Expected identifier after '.'".into());
-				};
-				let ident_name = lexer.resolve_ident(ident);
-				Expr::Constant(Const::String(ident_name))
-			},
-			IndexType::Method => todo!(),
-		};
-
-		let dst = index_expr.to_temp(lexer, state)?;
-
-		let table_slot = target.to_slot(lexer, state)?;
-		let index_slot = index_expr.to_slot(lexer, state)?;
-
-		state.emit(Op::Get(dst, table_slot, index_slot));
-
-		Ok(Expr::Temp(dst))
 	}
 }

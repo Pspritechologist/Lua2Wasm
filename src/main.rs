@@ -25,11 +25,12 @@ mod prelude {
 #[derive(Debug, Clone, Copy)]
 enum Operation {
 	// Loads.
-	LoadNull(u8),
+	LoadNil(u8, u8),
 	LoadBool(u8, bool),
 	LoadNum(u8, u16),
 	LoadStr(u8, u16),
 	LoadTab(u8),
+	// LoadClosure(u8, u16),
 	// Tables.
 	Set(u8, u8, u8),
 	Get(u8, u8, u8),
@@ -59,14 +60,15 @@ enum Operation {
 	// Misc operators.
 	Concat(u8, u8, u8),
 	Len(u8, u8),
+	// Calling.
+	// Call(u8, u8, u8),
+	// Ret(u8, u8),
 	// Control.
 	GoTo(u32, u8),
 	SkpIf(u8),
 	SkpIfNot(u8),
 	// Meta.
 	Copy(u8, u8),
-	// Debug.
-	Put(u8),
 }
 impl Operation {
 	pub fn goto(position: usize) -> Self {
@@ -234,7 +236,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 		};
 
 		match op {
-			Operation::LoadNull(dst) => registers[dst as usize] = None,
+			Operation::LoadNil(dst, cnt) => (dst..dst + cnt).for_each(|dst| registers[dst as usize] = None),
 			Operation::LoadBool(dst, val) => registers[dst as usize] = Some(Value::Bool(val)),
 			Operation::LoadNum(dst, idx) => {
 				let num = const_nums[idx as usize];
@@ -359,12 +361,6 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			},
 			Operation::Copy(dst, src) => {
 				registers[dst as usize] = registers[src as usize].clone();
-			},
-			Operation::Put(val) => {
-				match &registers[val as usize] {
-					Some(v) => println!("{v:#}"),
-					None => println!("<null>"),
-				}
 			},
 		}
 		

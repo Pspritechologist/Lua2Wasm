@@ -1,9 +1,13 @@
 use crate::parsing::LexerExt;
 use crate::prelude::BStr;
-use super::{Error, ParseState, ParseStateExt, Op, IdentKey, expect_tok};
+use super::{Error, ParseState, Op, IdentKey, expect_tok};
 use luant_lexer::{Lexer, Token};
 
+mod postfix_ops;
+mod prefix;
 mod pratt;
+
+pub use prefix::{PlaceExpr, IdentExpr};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Const<'s> {
@@ -36,7 +40,7 @@ impl<'s> Expr<'s> {
 		match self.as_temp() {
 			Some(t) => Ok(t),
 			None => {
-				let temp = state.new_register();
+				let temp = state.new_temp();
 				self.set_to_slot(lexer, state, temp)?;
 				Ok(temp)
 			},
@@ -53,23 +57,16 @@ impl<'s> Expr<'s> {
 
 	#[inline]
 	pub fn to_new_local(self, lexer: &Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), name: IdentKey) -> Result<u8, Error<'s>> {
-		match self {
-			Expr::Temp(temp) => {
-				state.make_local(lexer, name, temp).map(|()| temp)
-			},
-			Expr::Local(_) | Expr::Constant(_) => {
-				let slot = state.new_local(lexer, name)?;
-				self.set_to_slot(lexer, state, slot)?;
-				Ok(slot)
-			},
-		}
+		let local = state.new_local(lexer, name)?;
+		self.set_to_slot(lexer, state, local)?;
+		Ok(local)
 	}
 
 	#[inline]
 	pub fn to_slot(self, lexer: &Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<u8, Error<'s>> {
 		match self {
 			Expr::Constant(_) => {
-				let temp = state.new_register();
+				let temp = state.new_temp();
 				self.set_to_slot(lexer, state, temp)?;
 				Ok(temp)
 			},
@@ -95,7 +92,7 @@ impl<'s> Expr<'s> {
 				state.emit(Op::LoadStr(slot, str_idx));
 			},
 			Expr::Constant(Const::Bool(b)) => state.emit(Op::LoadBool(slot, b)),
-			Expr::Constant(Const::Nil) => state.emit(Op::LoadNull(slot)),
+			Expr::Constant(Const::Nil) => state.emit(Op::LoadNil(slot, 1)),
 		}
 
 		Ok(())
@@ -109,14 +106,14 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl 
 pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<u8, Error<'s>> {
 	assert_eq!(head, Token::BraceOpen);
 
-	let tab_slot = state.new_register();
+	let tab_slot = state.new_temp();
 	state.emit(Op::LoadTab(tab_slot));
 
 	if lexer.next_if(Token::BraceClose)?.is_some() {
 		return Ok(tab_slot);
 	}
 
-	let [key_slot, val_slot] = state.new_registers();
+	let [key_slot, val_slot] = [state.new_temp(), state.new_temp()];
 
 	let mut array_index = 0;
 	loop {
