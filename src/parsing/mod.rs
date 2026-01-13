@@ -54,6 +54,12 @@ pub fn parse<S: ParseSrc + ?Sized>(src: &S) -> Result<Parsed<'_>, Error<'_>> {
 	let mut lexer = luant_lexer::lexer(src.bytes());
 	let mut state = RootState::default();
 
+	//TODO: Temp printing.
+	let print = lexer.get_ident("print");
+	assert_eq!(state.new_local(&lexer, print)?, 0);
+	let libs = lexer.get_ident("lib");
+	assert_eq!(state.new_local(&lexer, libs)?, 1);
+
 	let mut parse = || {
 		while let Some(tok) = lexer.next().transpose()? {
 			parse_stmt(tok, &mut lexer, &mut state)?;
@@ -138,37 +144,38 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl Parse
 			use expressions::IdentExpr;
 			
 			// Check if this is an assignment (single or multi)
-			let first_place = match IdentExpr::parse(head, lexer, state)? {
-				IdentExpr::Place(place_expr) => place_expr,
-				IdentExpr::Call(expr) => todo!(),
-			};
+			match IdentExpr::parse(head, lexer, state)? {
+				IdentExpr::Place(first_place) => {
+					let mut rest_places = Vec::new();
 
-			let mut rest_places = Vec::new();
+					while lexer.next_if(Token::Comma)?.is_some() {
+						let IdentExpr::Place(place_expr) = IdentExpr::parse(lexer.next_must()?, lexer, state)? else {
+							Err("Expected place expression")?
+						};
+						rest_places.push(place_expr);
+					}
 
-			while lexer.next_if(Token::Comma)?.is_some() {
-				let IdentExpr::Place(place_expr) = IdentExpr::parse(lexer.next_must()?, lexer, state)? else {
-					Err("Expected place expression")?
-				};
-				rest_places.push(place_expr);
+					expect_tok!(lexer, Token::Assign)?;
+
+					let first_expr = parse_expr(lexer.next_must()?, lexer, state)?;
+					let mut rest_exprs = Vec::new();
+
+					while lexer.next_if(Token::Comma)?.is_some() {
+						rest_exprs.push(parse_expr(lexer.next_must()?, lexer, state)?);
+					}
+
+					first_place.set_expr(lexer, state, first_expr)?;
+
+					let mut place_iter = rest_places.into_iter();
+					rest_exprs.into_iter()
+						.zip(place_iter.by_ref())
+						.try_for_each(|(expr, place)| place.set_expr(lexer, state, expr))?;
+					
+					place_iter.try_for_each(|place| place.set_expr(lexer, state, Expr::Constant(Const::Nil)))?;
+				},
+				IdentExpr::Call(_) => (),
 			}
 
-			expect_tok!(lexer, Token::Assign)?;
-
-			let first_expr = parse_expr(lexer.next_must()?, lexer, state)?;
-			let mut rest_exprs = Vec::new();
-
-			while lexer.next_if(Token::Comma)?.is_some() {
-				rest_exprs.push(parse_expr(lexer.next_must()?, lexer, state)?);
-			}
-
-			first_place.set_expr(lexer, state, first_expr)?;
-
-			let mut place_iter = rest_places.into_iter();
-			rest_exprs.into_iter()
-				.zip(place_iter.by_ref())
-				.try_for_each(|(expr, place)| place.set_expr(lexer, state, expr))?;
-			
-			place_iter.try_for_each(|place| place.set_expr(lexer, state, Expr::Constant(Const::Nil)))?;
 		},
 		tok => return Err(format!("Expected statement, found {tok:?}").into()),
 	}

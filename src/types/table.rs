@@ -82,6 +82,23 @@ fn as_index(value: &Value) -> Option<usize> {
 }
 
 impl Table {
+	pub fn new() -> Self {
+		Default::default()
+	}
+
+	pub fn from_iter<I, K, V>(state: &mut crate::State, iter: I) -> Self
+	where
+		I: IntoIterator<Item = (K, V)>,
+		K: super::ToValue,
+		V: super::ToValue,
+	{
+		let mut table = Table::new();
+		for (k, v) in iter {
+			table.set(k.to_value(state), v.to_value(state));
+		}
+		table
+	}
+
 	pub fn set(&mut self, key: Value, value: Value) {
 		if let Some(index) = as_index(&key) {
 			if self.inner().array_contents.len() == index {

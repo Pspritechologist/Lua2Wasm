@@ -57,7 +57,7 @@ impl std::fmt::Display for Value {
 		if !f.alternate() {
 			return match self {
 				Value::Num(num) => write!(f, "{}", num.val()),
-				Value::Str(s) => write!(f, "'{}'", s.as_str()),
+				Value::Str(s) => write!(f, "{}", s.as_str()),
 				Value::Bool(b) => write!(f, "{b}"),
 				Value::Table(tab) => write!(f, "Table({:p})", tab.get_ptr()),
 				Value::Func(func) => write!(f, "Func({:p})", *func as *const ()),
@@ -66,8 +66,8 @@ impl std::fmt::Display for Value {
 
 		match self {
 			Value::Num(num) => write!(f, "{:#}", num.val()),
-			Value::Str(s) => write!(f, "{}", s.as_str()),
-			Value::Bool(b) => write!(f, "{b}"),
+			Value::Str(s) => write!(f, "{:#}", s.as_str()),
+			Value::Bool(b) => write!(f, "{b:#}"),
 			Value::Table(tab) => {
 				write!(f, "Table({:p}) {{", tab.get_ptr())?;
 

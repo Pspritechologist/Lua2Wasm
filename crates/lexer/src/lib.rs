@@ -68,6 +68,9 @@ impl<'s> Lexer<'s> {
 		Ok(None)
 	}
 
+	pub fn get_ident<'a: 's>(&mut self, ident: &'a (impl AsRef<[u8]> + ?Sized)) -> IdentKey {
+		self.inner.extras.handle_ident(ident.as_ref())
+	}
 	/// Returns the identifier string associated with the given IdentKey.
 	pub fn resolve_ident(&self, key: impl Into<IdentKey>) -> &'s BStr {
 		self.inner.extras.resolve_ident(key.into())

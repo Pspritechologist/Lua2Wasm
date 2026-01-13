@@ -61,7 +61,7 @@ enum Operation {
 	Concat(u8, u8, u8),
 	Len(u8, u8),
 	// Calling.
-	// Call(u8, u8, u8),
+	Call(u8, u8, u8),
 	// Ret(u8, u8),
 	// Control.
 	GoTo(u32, u8),
@@ -106,11 +106,11 @@ fn main() {
 	parsing::fmt_asm(&mut buf, &parsed).unwrap();
 	std::fs::write("out.asm", buf).unwrap();
 	
-	let parsing::Parsed { operations, numbers, strings, locals } = parsed;
+	let parsing::Parsed { operations, numbers, strings, used_regs } = parsed;
 
 	let stack = run_vm(
 		&operations,
-		locals,
+		used_regs,
 		ConstStrings::new(strings),
 		&numbers,
 	);
@@ -167,6 +167,60 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 	let mut frame = frames.last_mut().unwrap();
 	let mut registers = &mut stack[frame.stack_base..];
+
+	//TODO: Temp printing.
+	registers[0] = Some(Value::Func(|args| {
+		let mut values = args.iter();
+
+		if let Some(v) = values.next() {
+			match v {
+				Some(v) => print!("{v}"),
+				None => print!("<nil>"),
+			}
+		}
+
+		for val in values {
+			match val {
+				Some(v) => print!("\t{v}"),
+				None => print!("\t<nil>"),
+			}
+		}
+
+		println!();
+
+		vec![]
+	}));
+	registers[1] = Some(Value::Table(types::Table::from_iter(&mut state, [
+		("assert", Value::Func(|args| {
+			let condition = &args[0];
+			let msg = args.get(1);
+
+			if !condition.as_ref().is_some_and(|v| v.is_truthy()) {
+				if let Some(Some(Value::Str(s))) = msg {
+					panic!("Assertion failed: {}", s.as_str());
+				} else {
+					panic!("Assertion failed");
+				}
+			}
+
+			vec![]
+		})),
+		("assert_eq", Value::Func(|args| {
+			let a = &args[0];
+			let b = &args[1];
+			let msg = args.get(2);
+
+			if a != b {
+				if let Some(Some(Value::Str(s))) = msg {
+					panic!("Assertion failed: {a:?} != {b:?}: {}", s.as_str());
+				} else {
+					panic!("Assertion failed: {a:#?} != {b:#?}");
+				}
+			}
+
+			vec![]
+		})),
+	])));
 	
 	macro_rules! math_op {
 		($dst:expr, $a:expr, $b:expr, $op:tt) => { {
@@ -328,6 +382,21 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			},
 			Operation::Len(dst, a) =>
 				registers[dst as usize] = registers[a as usize].as_ref().map(|v| v.len().unwrap().to_value(&mut state)),
+			Operation::Call(func_reg, arg_count, ret_count) => {
+				let func = registers[func_reg as usize].clone();
+				let args_start = func_reg as usize + 1;
+				let args_end = args_start + arg_count as usize;
+				let args = &registers[args_start..args_end];
+
+				let rets = match func {
+					Some(Value::Func(f)) => f(args),
+					_ => unimplemented!(),
+				};
+
+				for (i, ret) in rets.into_iter().enumerate().take(ret_count as usize) {
+					registers[func_reg as usize + i] = ret;
+				}
+			},
 			Operation::SkpIf(cond) => {
 				let condition = registers[cond as usize].as_ref().is_some_and(|v| v.is_truthy());
 

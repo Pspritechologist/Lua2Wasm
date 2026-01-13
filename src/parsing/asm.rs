@@ -91,6 +91,8 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 			"bnot" => simple_op!(BitNot u8, u8),
 			"concat" => simple_op!(Concat),
 			"len" => simple_op!(Len u8, u8),
+			"call" => simple_op!(Call u8, u8, u8),
+			// "ret" => simple_op!(Ret u8, u8),
 			"skpif" => {
 				let cond = args!(u8);
 				max_reg = max_reg.max(cond);
@@ -119,7 +121,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 		operations: ops,
 		numbers,
 		strings,
-		locals: max_reg + 1,
+		used_regs: max_reg + 1,
 	}
 }
 
@@ -128,7 +130,7 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Resul
 		operations,
 		numbers,
 		strings,
-		locals: _,
+		used_regs: _,
 	} = bytecode;
 
 	// Print all operations
@@ -167,6 +169,8 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Resul
 			Operation::BitNot(dst, src) => writeln!(buf, "bnot {dst} {src}")?,
 			Operation::Concat(dst, a, b) => writeln!(buf, "concat {dst} {a} {b}")?,
 			Operation::Len(dst, src) => writeln!(buf, "len {dst} {src}")?,
+			Operation::Call(dst, func, arg_cnt) => writeln!(buf, "call {dst} {func} {arg_cnt}")?,
+			// Operation::Ret(dst, ret_cnt) => writeln!(buf, "ret {dst} {ret_cnt}")?,
 			Operation::SkpIf(cond) => writeln!(buf, "skpif {cond}")?,
 			Operation::SkpIfNot(cond) => writeln!(buf, "skpifnot {cond}")?,
 			Operation::GoTo(p32, p8) => {

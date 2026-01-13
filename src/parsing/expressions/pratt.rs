@@ -97,8 +97,8 @@ impl<'s> InfixOp<'s> {
 			InfixOp::BitXor => std_infix(Op::BitXor),
 			InfixOp::Shl => std_infix(Op::BitShL),
 			InfixOp::Shr => std_infix(Op::BitShR),
-			InfixOp::Call(call) => call.parse_call_args(lexer, state, left),
-			InfixOp::Index(index) => index.parse_index(lexer, state, left),
+			InfixOp::Call(call) => call.parse_call_args(lexer, state, left)?.handle_call(lexer, state, 1),
+			InfixOp::Index(index) => index.parse_index(lexer, state)?.handle_index(lexer, state, left),
 			InfixOp::And => {
 				let dst = left.to_temp(lexer, state)?;
 

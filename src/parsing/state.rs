@@ -39,6 +39,7 @@ pub struct RootState<'s> {
 	locals: SparseSecondaryMap<IdentKey, u8>,
 	local_count: u8,
 	temp_count: u8,
+	highest_temp_count: u8,
 	numbers: Vec<f64>,
 	string_indexes: HashMap<&'s BStr, usize>,
 	strings: Vec<&'s BStr>,
@@ -52,7 +53,7 @@ pub struct Parsed<'s> {
 	pub numbers: Vec<f64>,
 	pub strings: Vec<&'s BStr>,
 
-	pub locals: u8,
+	pub used_regs: u8,
 }
 
 impl<'s> RootState<'s> {
@@ -69,7 +70,7 @@ impl<'s> RootState<'s> {
 			numbers: self.numbers,
 			strings: self.strings,
 
-			locals: self.local_count,
+			used_regs: self.highest_temp_count + self.local_count,
 		})
 	}
 }
@@ -149,6 +150,9 @@ impl<'s> ParseState<'s> for RootState<'s> {
 	fn new_temp(&mut self) -> u8 {
 		let reg = self.temp_count + self.local_count;
 		self.temp_count += 1;
+
+		self.highest_temp_count = self.highest_temp_count.max(self.temp_count);
+
 		reg
 	}
 	fn free_temps(&mut self) {

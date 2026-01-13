@@ -63,19 +63,22 @@ impl<'s> IdentExpr<'s> {
 		loop {
 			match next_op {
 				TrailingOp::Call(call_type) => {
-					expr = call_type.parse_call_args(lexer, state, expr)?;
+					expr = call_type.parse_call_args(lexer, state, expr)?.handle_call(lexer, state, 1)?;
 					next_op = match lexer.next_if_map(TrailingOp::from_token)? {
 						Some(next_op) => next_op,
 						None => return Ok(IdentExpr::Call(expr)),
 					}
 				},
 				TrailingOp::Index(index_type) => {
-					let index = index_type.parse_index(lexer, state, expr)?;
+					let index = index_type.parse_index(lexer, state)?;
 					next_op = match lexer.next_if_map(TrailingOp::from_token)? {
-						Some(next_op) => next_op,
+						Some(next_op) => {
+							expr = index.handle_index(lexer, state, expr)?;
+							next_op
+						},
 						None => return Ok(IdentExpr::Place(PlaceExpr::Index {
 							target: expr,
-							index,
+							index: index.to_key()?,
 						})),
 					}
 				},
