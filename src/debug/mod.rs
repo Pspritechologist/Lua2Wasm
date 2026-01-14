@@ -1,22 +1,25 @@
 #[derive(Debug, Clone)]
 pub struct DebugInfo {
 	func_name: Option<Box<str>>,
+	func_span: usize,
 	is_top_level: bool,
 	src_map: SrcMap,
 }
 
 impl DebugInfo {
-	pub fn new_file(src_map: SrcMap, path: Option<impl Into<Box<str>>>) -> Self {
+	pub fn new_file(src_map: SrcMap, name: Option<impl Into<Box<str>>>) -> Self {
 		Self {
-			func_name: path.map(Into::into),
+			func_name: name.map(Into::into),
+			func_span: 0,
 			is_top_level: true,
 			src_map,
 		}
 	}
 
-	pub fn new_closure(func_name: Option<impl Into<Box<str>>>, src_map: SrcMap) -> Self {
+	pub fn new_closure(src_map: SrcMap, func_name: Option<impl Into<Box<str>>>, span: usize) -> Self {
 		Self {
 			func_name: func_name.map(Into::into),
+			func_span: span,
 			is_top_level: false,
 			src_map,
 		}

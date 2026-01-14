@@ -1,117 +1,54 @@
-use crate::prelude::BStr;
-use super::{Error, Op};
+use super::{Error, Op, functions::FuncState};
 use luant_lexer::{IdentKey, Lexer};
 use slotmap::SparseSecondaryMap;
-use hashbrown::HashMap;
 
 /// Encapsulates the state during parsing.\
 /// This trait may be implemented separately to represent
 /// scopes, functions, etc.
 #[auto_impl::auto_impl(&mut)]
 pub trait ParseState<'s> {
-	fn emit(&mut self, op: Op, src_index: usize) { self.parent().emit(op, src_index) }
-	fn get_ops(&self) -> &[Op];
-	fn get_ops_mut(&mut self) -> &mut [Op];
-	fn number_idx(&mut self, n: f64) -> u16 { self.parent().number_idx(n) }
-	fn string_idx(&mut self, s: &'s BStr) -> u16 { self.parent().string_idx(s) }
-	fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, pos: usize) -> Result<(), Error<'s>> { self.parent().label(lexer, label, pos) }
+	fn new_label(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, label: IdentKey, pos: usize) -> Result<(), Error<'s>> { self.parent().new_label(lexer, state, label, pos) }
 	fn find_label(&mut self, label: IdentKey, pos: usize) -> usize { self.parent().find_label(label, pos) }
 	fn label_exists(&mut self, label: IdentKey) -> bool { self.parent().label_exists(label) }
 	fn merge_missing_labels(&mut self, other: &mut Vec<(IdentKey, usize)>) { self.parent().merge_missing_labels(other) }
 	fn emit_break(&mut self) -> Result<(), Error<'s>> { self.parent().emit_break() }
 	fn emit_continue(&mut self) -> Result<(), Error<'s>> { self.parent().emit_continue() }
 
-	fn new_temp(&mut self) -> u8 { self.parent().new_temp() }
-	fn free_temps(&mut self) { self.parent().free_temps() }
-	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().new_local(lexer, name) }
-	fn local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().local(lexer, name) }
+	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().new_local(lexer, state, name) }
+	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().get_local(lexer, name) }
+	fn local_count(&mut self) -> u8 { self.parent().local_count() }
 
 	fn parent(&'_ mut self) -> &'_ mut dyn ParseState<'s>;
 }
 
-/// The root parsing state.\
+/// The root parsing scope.\
 /// All methods on [`ParseState`] must be implemented here as
 /// attempting to call `parent()` will panic.
-#[derive(Default, Clone)]
-pub struct RootState<'s> {
-	operations: Vec<Op>,
-
+#[derive(Debug, Default, Clone)]
+pub struct RootScope {
 	locals: SparseSecondaryMap<IdentKey, u8>,
 	local_count: u8,
-	temp_count: u8,
-	highest_temp_count: u8,
-	numbers: Vec<f64>,
-	string_indexes: HashMap<&'s BStr, usize>,
-	strings: Vec<&'s BStr>,
 	labels: SparseSecondaryMap<IdentKey, usize>,
 	missing_labels: Vec<(IdentKey, usize)>,
-	debug_info: super::debug::InfoCollector,
 }
 
-#[derive(Debug)]
-pub struct Parsed<'s> {
-	pub operations: Vec<Op>,
-	pub numbers: Vec<f64>,
-	pub strings: Vec<&'s BStr>,
-	pub debug: Option<crate::debug::DebugInfo>,
-
-	pub used_regs: u8,
-}
-
-impl<'s> RootState<'s> {
+impl<'s> RootScope {
 	/// Checks that no labels were left unresolved and returns the completed bytecode.
-	pub fn finalize(mut self, lexer: &Lexer<'s>) -> Result<Parsed<'s>, Error<'s>> {
+	pub fn finalize(mut self, lexer: &Lexer<'s>) -> Result<(), Error<'s>> {
 		let missing_labels = std::mem::take(&mut self.missing_labels);
 		// Attempt to resolve all missing labels.
 		if let Some((label, _)) = missing_labels.first() {
 			return Err(format!("Undefined label '{}'", lexer.resolve_ident(*label)).into());
 		}
 
-		Ok(Parsed {
-			operations: self.operations,
-			numbers: self.numbers,
-			strings: self.strings,
-			debug: Some(crate::debug::DebugInfo::new_file(self.debug_info.into_map(), None::<&str>)),
-
-			used_regs: self.highest_temp_count + self.local_count,
-		})
+		Ok(())
 	}
 }
 
-impl<'s> ParseState<'s> for RootState<'s> {
+impl<'s> ParseState<'s> for RootScope {
 	fn parent(&mut self) -> &mut dyn ParseState<'s> { unreachable!() }
 
-	fn emit(&mut self, op: Op, src_index: usize) {
-		self.operations.push(op);
-		self.debug_info.emit(src_index);
-	}
-	fn get_ops(&self) -> &[Op] {
-		&self.operations
-	}
-	fn get_ops_mut(&mut self) -> &mut [Op] {
-		&mut self.operations
-	}
-
-	fn number_idx(&mut self, n: f64) -> u16 {
-		if let Some(idx) = self.numbers.iter().position(|&num| num == n) {
-			idx
-		} else {
-			let idx = self.numbers.len();
-			self.numbers.push(n);
-			idx
-		}.try_into().expect("Too many numbers consts :(")
-	}
-	fn string_idx(&mut self, s: &'s BStr) -> u16 {
-		if let Some(&idx) = self.string_indexes.get(s) {
-			idx
-		} else {
-			let idx = self.strings.len();
-			self.strings.push(s);
-			self.string_indexes.insert(s, idx);
-			idx
-		}.try_into().expect("Too many string consts :(")
-	}
-	fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, label_pos: usize) -> Result<(), Error<'s>> {
+	fn new_label(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, label: IdentKey, label_pos: usize) -> Result<(), Error<'s>> {
 		if self.label_exists(label) {
 			return Err(format!("Label '{}' already defined", lexer.resolve_ident(label)).into());
 		}
@@ -120,7 +57,7 @@ impl<'s> ParseState<'s> for RootState<'s> {
 		let mut missing_labels = std::mem::take(&mut self.missing_labels);
 		missing_labels.retain(|(missing, op_pos)| {
 			if *missing == label {
-				self.get_ops_mut()[label_pos] = Op::goto(*op_pos);
+				state.ops_mut()[label_pos] = Op::goto(*op_pos);
 				false
 			} else { true }
 		});
@@ -151,28 +88,25 @@ impl<'s> ParseState<'s> for RootState<'s> {
 		Err("Continue statement not within a loop".into())
 	}
 
-	fn new_temp(&mut self) -> u8 {
-		let reg = self.temp_count + self.local_count;
-		self.temp_count += 1;
-
-		self.highest_temp_count = self.highest_temp_count.max(self.temp_count);
-
-		reg
-	}
-	fn free_temps(&mut self) {
-		self.temp_count = 0;
-	}
-	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> {
+	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
 		if self.locals.contains_key(name) {
 			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
 		}
-		let reg = self.local_count;
+		let reg = self.local_count();
 		self.locals.insert(name, reg);
 		self.local_count += 1;
+
+		if state.slots_used() <= reg {
+			state.reserve_slot();
+		}
+
 		Ok(reg)
 	}
-	fn local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s> > {
+	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s> > {
 		self.locals.get(name).copied().ok_or_else(|| format!("Local variable `{}` not found", lexer.resolve_ident(name)).into())
+	}
+	fn local_count(&mut self) -> u8 {
+		self.local_count
 	}
 }
 
@@ -182,6 +116,7 @@ impl<'s> ParseState<'s> for RootState<'s> {
 pub struct VariableScope<'s, P: ParseState<'s>> {
 	parent: P,
 	locals: SparseSecondaryMap<IdentKey, u8>,
+	local_count: u8,
 	labels: SparseSecondaryMap<IdentKey, usize>,
 	missing_labels: Vec<(IdentKey, usize)>,
 	pd: std::marker::PhantomData<&'s ()>,
@@ -192,6 +127,7 @@ impl<'s, P: ParseState<'s>> VariableScope<'s, P> {
 			parent,
 			labels: Default::default(),
 			locals: Default::default(),
+			local_count: 0,
 			missing_labels: Default::default(),
 			pd: std::marker::PhantomData,
 		}
@@ -214,23 +150,30 @@ impl<'s, P: ParseState<'s>> Drop for VariableScope<'s, P> {
 }
 impl<'s, P: ParseState<'s>> ParseState<'s> for VariableScope<'s, P> {
 	fn parent(&mut self) -> &mut dyn ParseState<'s> { &mut self.parent }
-	fn get_ops(&self) -> &[Op] { self.parent.get_ops() }
-	fn get_ops_mut(&mut self) -> &mut [Op] { self.parent.get_ops_mut() }
-
-	fn new_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> {
+	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
 		if self.locals.contains_key(name) {
 			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
 		}
-		let reg = self.parent().new_temp();
+		let reg = self.local_count();
 		self.locals.insert(name, reg);
+		self.local_count += 1;
+
+		if state.slots_used() <= reg {
+			state.reserve_slot();
+		}
+
 		Ok(reg)
 	}
 
-	fn local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> {
-		self.locals.get(name).copied().map_or_else(|| self.parent().local(lexer, name), Ok)
+	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> {
+		self.locals.get(name).copied().map_or_else(|| self.parent.get_local(lexer, name), Ok)
 	}
 
-	fn label(&mut self, lexer: &Lexer<'s>, label: IdentKey, label_pos: usize) -> Result<(), Error<'s>> {
+	fn local_count(&mut self) -> u8 {
+		self.local_count + self.parent.local_count()
+	}
+
+	fn new_label(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, label: IdentKey, label_pos: usize) -> Result<(), Error<'s>> {
 		if self.label_exists(label) {
 			return Err(format!("Label '{}' already defined", lexer.resolve_ident(label)).into());
 		}
@@ -239,7 +182,7 @@ impl<'s, P: ParseState<'s>> ParseState<'s> for VariableScope<'s, P> {
 		let mut missing_labels = std::mem::take(&mut self.missing_labels);
 		missing_labels.retain(|(missing, op_pos)| {
 			if *missing == label {
-				self.get_ops_mut()[*op_pos] = Op::goto(label_pos);
+				state.ops_mut()[*op_pos] = Op::goto(label_pos);
 				false
 			} else { true }
 		});
@@ -251,7 +194,7 @@ impl<'s, P: ParseState<'s>> ParseState<'s> for VariableScope<'s, P> {
 	fn find_label(&mut self, label: IdentKey, pos: usize) -> usize {
 		self.labels.get(label)
 			.copied()
-			.or_else(|| self.parent().label_exists(label).then(|| self.parent.find_label(label, pos)))
+			.or_else(|| self.parent.label_exists(label).then(|| self.parent.find_label(label, pos)))
 			.unwrap_or_else(|| {
 				// Add to the list to fill in at a later date.
 				self.missing_labels.push((label, pos));
@@ -260,7 +203,7 @@ impl<'s, P: ParseState<'s>> ParseState<'s> for VariableScope<'s, P> {
 	}
 
 	fn label_exists(&mut self, label: IdentKey) -> bool {
-		self.labels.contains_key(label) || self.parent().label_exists(label)
+		self.labels.contains_key(label) || self.parent.label_exists(label)
 	}
 
 	fn merge_missing_labels(&mut self,other: &mut Vec<(IdentKey,usize)>) {

@@ -118,9 +118,9 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 	}
 
 	super::Parsed {
-		operations: ops,
-		numbers,
-		strings,
+		operations: ops.into_boxed_slice(),
+		numbers: numbers.into_boxed_slice(),
+		strings: strings.into_boxed_slice(),
 		debug: None,
 		used_regs: max_reg + 1,
 	}

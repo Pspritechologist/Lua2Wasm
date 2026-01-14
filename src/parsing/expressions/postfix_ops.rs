@@ -1,6 +1,6 @@
 use crate::parsing::LexerExt;
 use super::{Error, ParseState, Op, expect_tok};
-use super::{Expr, Const};
+use super::{Expr, Const, FuncState};
 use luant_lexer::{Lexer, Token};
 
 #[derive(Debug, Clone, Copy)]
@@ -10,7 +10,7 @@ pub struct ParsedCall {
 	pub arg_count: u8,
 }
 impl ParsedCall {
-	pub fn handle_call<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), ret_count: u8) -> Result<Expr<'s>, Error<'s>> {
+	pub fn handle_call<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: u8) -> Result<Expr<'s>, Error<'s>> {
 		state.emit(Op::Call(self.func_reg, self.arg_count, ret_count), self.span);
 		Ok(Expr::Temp(self.func_reg))
 	}
@@ -21,26 +21,38 @@ pub enum CallType<'s> {
 	Args, Method, Table, String(&'s bstr::BStr),
 }
 impl<'s> CallType<'s> {
-	pub fn parse_call_args(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), left: Expr<'s>) -> Result<ParsedCall, Error<'s>> {
-		let func_reg = state.new_temp();
-		left.set_to_slot(lexer, state, func_reg)?;
-
+	pub fn parse_call_args(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, left: Expr<'s>) -> Result<ParsedCall, Error<'s>> {
 		let span = lexer.src_index();
 
 		Ok(match self {
 			CallType::Args => {
+				let mut head = lexer.next_must()?;
+
+				// Special case zero arg calls.
+				if head == Token::ParenClose {
+					return Ok(ParsedCall {
+						func_reg: left.to_slot(lexer, scope, state)?,
+						arg_count: 0,
+						span,
+					});
+				}
+
+				let func_reg = state.reserve_slot();
+				left.set_to_slot(lexer, scope, state, func_reg)?;
+
 				let mut arg_count = 0;
+				let initial_slots_used = state.slots_used();
 
 				// Parse arguments until we hit the closing parenthesis.
 				loop {
 					arg_count += 1;
+					state.set_slots_used(initial_slots_used + arg_count);
 
-					_ = state.new_temp(); // Reserve a temp for the argument.
-					let arg_expr = super::parse_expr(lexer.next_must()?, lexer, state)?;
-					arg_expr.set_to_slot(lexer, state, func_reg + arg_count)?;
+					let arg_expr = super::parse_expr(head, lexer, scope, state)?;
+					arg_expr.set_to_slot(lexer, scope, state, func_reg + arg_count)?;
 					
 					match lexer.next_must()? {
-						Token::Comma => continue,
+						Token::Comma => head = lexer.next_must()?,
 						Token::ParenClose => break,
 						tok => Err(format!("Expected ',' or ')', found {tok:?}"))?,
 					}
@@ -72,10 +84,10 @@ pub struct ParsedIndex<'s> {
 }
 impl<'s> ParsedIndex<'s> {
 	/// Emits the `get` operation for this index operation.
-	pub fn handle_index(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), target: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
-		let target_slot = target.to_slot(lexer, state)?;
-		let index_slot = self.index_expr.to_slot(lexer, state)?;
-		let result_reg = state.new_temp();
+	pub fn handle_index(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, target: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
+		let target_slot = target.to_slot(lexer, scope, state)?;
+		let index_slot = self.index_expr.to_slot(lexer, scope, state)?;
+		let result_reg = state.reserve_slot();
 		state.emit(Op::Get(result_reg, target_slot, index_slot), self.span);
 		Ok(Expr::Temp(result_reg))
 	}
@@ -93,12 +105,12 @@ impl IndexType {
 	/// Parses the key expression for the index operation and returns it.
 	/// Use 'handle_index' to emit the `get` operation if desired.\
 	/// Note that this function expects the leading open bracket or dot to have already been consumed.
-	pub fn parse_index<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<ParsedIndex<'s>, Error<'s>> {
+	pub fn parse_index<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<ParsedIndex<'s>, Error<'s>> {
 		let span = lexer.src_index();
 
 		let index_expr = match self {
 			IndexType::Index => {
-				let index_expr = super::parse_expr(lexer.next_must()?, lexer, state)?;
+				let index_expr = super::parse_expr(lexer.next_must()?, lexer, scope, state)?;
 				expect_tok!(lexer, Token::BracketClose)?;
 				index_expr
 			},
@@ -107,7 +119,7 @@ impl IndexType {
 					return Err("Expected identifier after '.'".into());
 				};
 				let ident_name = lexer.resolve_ident(ident);
-				Expr::Constant(Const::String(ident_name))
+				Expr::Constant(Const::string(ident_name))
 			},
 		};
 		

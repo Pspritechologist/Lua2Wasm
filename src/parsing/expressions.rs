@@ -1,6 +1,6 @@
-use crate::parsing::LexerExt;
 use crate::prelude::BStr;
-use super::{Error, ParseState, Op, IdentKey, expect_tok};
+use super::{Error, ParseState, LexerExt, Op, IdentKey, expect_tok};
+use super::functions::FuncState;
 use luant_lexer::{Lexer, Token};
 
 mod postfix_ops;
@@ -18,6 +18,10 @@ pub enum Const<'s> {
 }
 
 impl<'s> Const<'s> {
+	pub fn string(bytes: &'s (impl AsRef<[u8]> + ?Sized)) -> Self {
+		Const::String(BStr::new(bytes.as_ref()))
+	}
+
 	pub fn is_truthy(self) -> bool {
 		!matches!(self, Const::Bool(false) | Const::Nil)
 	}
@@ -36,12 +40,12 @@ pub enum Expr<'s> {
 
 impl<'s> Expr<'s> {
 	#[inline]
-	pub fn to_temp(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<u8, Error<'s>> {
+	pub fn to_temp(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
 		match self.as_temp() {
 			Some(t) => Ok(t),
 			None => {
-				let temp = state.new_temp();
-				self.set_to_slot(lexer, state, temp)?;
+				let temp = state.reserve_slot();
+				self.set_to_slot(lexer, scope, state, temp)?;
 				Ok(temp)
 			},
 		}
@@ -56,32 +60,36 @@ impl<'s> Expr<'s> {
 	}
 
 	#[inline]
-	pub fn to_new_local(self, lexer: &Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), name: IdentKey) -> Result<u8, Error<'s>> {
-		let local = state.new_local(lexer, name)?;
-		self.set_to_slot(lexer, state, local)?;
+	pub fn to_new_local(self, lexer: &Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
+		let local = scope.new_local(lexer, state, name)?;
+		self.set_to_slot(lexer, scope, state, local)?;
 		Ok(local)
 	}
 
 	#[inline]
-	pub fn to_slot(self, lexer: &Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<u8, Error<'s>> {
+	pub fn to_slot(self, lexer: &Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
 		match self {
 			Expr::Constant(_) => {
-				let temp = state.new_temp();
-				self.set_to_slot(lexer, state, temp)?;
+				let temp = state.reserve_slot();
+				self.set_to_slot(lexer, scope, state, temp)?;
 				Ok(temp)
 			},
-			Expr::Local(ident_key) => state.local(lexer, ident_key),
+			Expr::Local(ident_key) => scope.get_local(lexer, ident_key),
 			Expr::Temp(temp) => Ok(temp),
 		}
 	}
 
 	#[inline]
-	pub fn set_to_slot(self, lexer: &Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), slot: u8) -> Result<(), Error<'s>> {
+	pub fn set_to_slot(self, lexer: &Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, slot: u8) -> Result<(), Error<'s>> {
 		match self {
-			Expr::Temp(temp) => state.emit(Op::Copy(slot, temp), lexer.src_index()),
+			Expr::Temp(temp) => if temp != slot {
+				state.emit(Op::Copy(slot, temp), lexer.src_index())
+			},
 			Expr::Local(ident) => {
-				let local_slot = state.local(lexer, ident)?;
-				state.emit(Op::Copy(slot, local_slot), lexer.src_index());
+				let local_slot = scope.get_local(lexer, ident)?;
+				if local_slot != slot {
+					state.emit(Op::Copy(slot, local_slot), lexer.src_index());
+				}
 			},
 			Expr::Constant(Const::Number(n)) => {
 				let num_idx = state.number_idx(n.val());
@@ -99,21 +107,24 @@ impl<'s> Expr<'s> {
 	}
 }
 
-pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<Expr<'s>, Error<'s>> {
-	pratt::parse_expr(head, lexer, state, 0)
+pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr<'s>, Error<'s>> {
+	// let slots_used = state.slots_used();
+	let expr = pratt::parse_expr(head, lexer, scope, state, 0)?;
+	// state.set_slot_use(slots_used);
+	Ok(expr)
 }
 
-pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<u8, Error<'s>> {
+pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
 	assert_eq!(head, Token::BraceOpen);
 
-	let tab_slot = state.new_temp();
+	let tab_slot = state.reserve_slot();
 	state.emit(Op::LoadTab(tab_slot), lexer.src_index());
 
 	if lexer.next_if(Token::BraceClose)?.is_some() {
 		return Ok(tab_slot);
 	}
 
-	let [key_slot, val_slot] = [state.new_temp(), state.new_temp()];
+	let [key_slot, val_slot] = [state.reserve_slot(), state.reserve_slot()];
 
 	let mut array_index = 0;
 	loop {
@@ -127,31 +138,32 @@ pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut 
 		// parse field or array value.
 		let first = match lexer.next_must()? {
 			Token::Identifier(field) => match lexer.next_if(Token::Assign)? {
-				Some(_) => KeyOrArray::Key(Expr::Constant(Const::String(lexer.resolve_ident(field)))),
-				None => KeyOrArray::Array(parse_expr(head, lexer, state)?),
+				Some(_) => KeyOrArray::Key(Expr::Constant(Const::string(lexer.resolve_ident(field)))),
+				None => KeyOrArray::Array(parse_expr(head, lexer, scope, state)?),
 			},
 			Token::BracketOpen => {
-				let field = parse_expr(lexer.next_must()?, lexer, state)?;
+				let field = parse_expr(lexer.next_must()?, lexer, scope, state)?;
 				expect_tok!(lexer, Token::BracketClose)?;
 				expect_tok!(lexer, Token::Assign)?;
 				KeyOrArray::Key(field)
 			},
-			head => KeyOrArray::Array(parse_expr(head, lexer, state)?),
+			head => KeyOrArray::Array(parse_expr(head, lexer, scope, state)?),
 		};
 
 		match first {
 			KeyOrArray::Key(expr) => {
-				expr.set_to_slot(lexer, state, key_slot)?;
-				parse_expr(lexer.next_must()?, lexer, state)?.set_to_slot(lexer, state, val_slot)?;
+				expr.set_to_slot(lexer, scope, state, key_slot)?;
+				parse_expr(lexer.next_must()?, lexer, scope, state)?.set_to_slot(lexer, scope, state, val_slot)?;
 				state.emit(Op::Set(tab_slot, key_slot, val_slot), span);
 			},
 			KeyOrArray::Array(entry) => {
 				array_index += 1; // Lua is 1-indexed.
 
-				entry.set_to_slot(lexer, state, val_slot)?;
+				entry.set_to_slot(lexer, scope, state, val_slot)?;
 
 				let num_idx = state.number_idx(array_index as f64);
 				state.emit(Op::LoadNum(key_slot, num_idx), span);
+
 				state.emit(Op::Set(tab_slot, key_slot, val_slot), span);
 			},
 		}

@@ -1,19 +1,19 @@
 use crate::parsing::LexerExt;
 use crate::types::Num;
 use super::{Error, ParseState, Op, IdentKey, expect_tok};
-use super::{Expr, Const, parse_table_init};
+use super::{Expr, Const, FuncState, parse_table_init};
 use super::postfix_ops::{CallType, IndexType};
 use luant_lexer::{Lexer, Token};
 
-pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), prec: u8) -> Result<Expr<'s>, Error<'s>> {
+pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, prec: u8) -> Result<Expr<'s>, Error<'s>> {
 	let expr = match PrefixOp::from_token(head) {
 		// Handle prefix operators.
-		Some(prefix_op) => prefix_op.parse_prefix(lexer, state)?,
+		Some(prefix_op) => prefix_op.parse_prefix(lexer, scope, state)?,
 		// Otherwise handle an atom.
 		None => match head {
-			Token::BraceOpen => Expr::Temp(parse_table_init(head, lexer, state)?),
+			Token::BraceOpen => Expr::Temp(parse_table_init(head, lexer, scope, state)?),
 			Token::ParenOpen => {
-				let expr = parse_expr(lexer.next_must()?, lexer, state, 0)?;
+				let expr = parse_expr(lexer.next_must()?, lexer, scope, state, 0)?;
 				expect_tok!(lexer, Token::ParenClose)?;
 				expr
 			},
@@ -36,7 +36,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut (impl 
 			return Ok(expr);
 		};
 
-		expr = next_op.parse_infix(lexer, state, expr)?;
+		expr = next_op.parse_infix(lexer, scope, state, expr)?;
 	}
 }
 
@@ -56,23 +56,28 @@ enum InfixOp<'s> {
 	Index(IndexType),
 }
 impl<'s> InfixOp<'s> {
-	fn parse_infix(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), left: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
+	fn parse_infix(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, left: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
 		let mut std_infix = |make_op: fn(u8, u8, u8) -> Op| {
 			let span = lexer.src_index();
 
-			let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
+			let initial_slots_used = state.slots_used();
+
+			let lhs = left.to_slot(lexer, scope, state)?;
+
+			let pre_rhs_slots_used = state.slots_used();
+			let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
+			state.set_slots_used(pre_rhs_slots_used);
 
 			if let (Expr::Constant(a), Expr::Constant(b)) = (left, right) &&
 				let Some(res) = self.fold_const(lexer, a, b) {
 				return Ok(Expr::Constant(res));
 			}
-			
-			let dst = left.as_temp()
-				.or_else(|| right.as_temp())
-				.unwrap_or_else(|| state.new_temp());
 
-			let lhs = left.to_slot(lexer, state)?;
-			let rhs = right.to_slot(lexer, state)?;
+			let rhs = right.to_slot(lexer, scope, state)?;
+
+			state.set_slots_used(initial_slots_used);
+
+			let dst = state.reserve_slot();
 			
 			state.emit(make_op(dst, lhs, rhs), span);
 
@@ -99,35 +104,35 @@ impl<'s> InfixOp<'s> {
 			InfixOp::BitXor => std_infix(Op::BitXor),
 			InfixOp::Shl => std_infix(Op::BitShL),
 			InfixOp::Shr => std_infix(Op::BitShR),
-			InfixOp::Call(call) => call.parse_call_args(lexer, state, left)?.handle_call(lexer, state, 1),
-			InfixOp::Index(index) => index.parse_index(lexer, state)?.handle_index(lexer, state, left),
+			InfixOp::Call(call) => call.parse_call_args(lexer, scope, state, left)?.handle_call(lexer, scope, state, 1),
+			InfixOp::Index(index) => index.parse_index(lexer, scope, state)?.handle_index(lexer, scope, state, left),
 			InfixOp::And => {
-				let dst = left.to_temp(lexer, state)?;
+				let dst = left.to_temp(lexer, scope, state)?;
 
 				state.emit(Op::SkpIf(dst), lexer.src_index());
-				let goto_pos = state.get_ops().len();
+				let goto_pos = state.ops().len();
 				state.emit(Op::GoTo(0, 0), lexer.src_index()); // Placeholder
 				
-				let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
-				right.set_to_slot(lexer, state, dst)?;
+				let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
+				right.set_to_slot(lexer, scope, state, dst)?;
 
-				let end_pos = state.get_ops().len();
-				state.get_ops_mut()[goto_pos] = Op::goto(end_pos);
+				let end_pos = state.ops().len();
+				state.ops_mut()[goto_pos] = Op::goto(end_pos);
 
 				Ok(Expr::Temp(dst))
 			},
 			InfixOp::Or => {
-				let dst = left.to_temp(lexer, state)?;
+				let dst = left.to_temp(lexer, scope, state)?;
 
 				state.emit(Op::SkpIfNot(dst), lexer.src_index());
-				let goto_pos = state.get_ops().len();
+				let goto_pos = state.ops().len();
 				state.emit(Op::GoTo(0, 0), lexer.src_index()); // Placeholder
 				
-				let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
-				right.set_to_slot(lexer, state, dst)?;
+				let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
+				right.set_to_slot(lexer, scope, state, dst)?;
 
-				let end_pos = state.get_ops().len();
-				state.get_ops_mut()[goto_pos] = Op::goto(end_pos);
+				let end_pos = state.ops().len();
+				state.ops_mut()[goto_pos] = Op::goto(end_pos);
 
 				Ok(Expr::Temp(dst))
 			},
@@ -214,16 +219,16 @@ enum PrefixOp {
 	Neg, BitNot, Len, Not,
 }
 impl PrefixOp {
-	fn parse_prefix<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<Expr<'s>, Error<'s>> {
+	fn parse_prefix<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr<'s>, Error<'s>> {
 		let span = lexer.src_index();
 
-		let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
+		let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
 
 		if let Expr::Constant(a) = right && let Some(res) = self.fold_const(a) {
 			return Ok(Expr::Constant(res));
 		}
 
-		let dst = right.to_temp(lexer, state)?;
+		let dst = right.to_temp(lexer, scope, state)?;
 
 		match self {
 			PrefixOp::Neg => state.emit(Op::Neg(dst, dst), span),

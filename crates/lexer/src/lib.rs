@@ -72,11 +72,11 @@ impl<'s> Lexer<'s> {
 		Ok(None)
 	}
 
-	pub fn get_ident<'a: 's>(&mut self, ident: &'a (impl AsRef<[u8]> + ?Sized)) -> IdentKey {
-		self.inner.extras.handle_ident(ident.as_ref())
+	pub fn get_ident<'a: 's>(&mut self, ident: &'a (impl AsRef<str> + ?Sized)) -> IdentKey {
+		self.inner.extras.intern_ident(ident.as_ref())
 	}
 	/// Returns the identifier string associated with the given IdentKey.
-	pub fn resolve_ident(&self, key: impl Into<IdentKey>) -> &'s BStr {
+	pub fn resolve_ident(&self, key: impl Into<IdentKey>) -> &'s str {
 		self.inner.extras.resolve_ident(key.into())
 	}
 
@@ -122,17 +122,15 @@ slotmap::new_key_type! {
 #[doc(hidden)] //? Has to be public for logos extras.
 #[derive(Default)]
 pub struct LexState<'s> {
-	idents: slotmap::SlotMap<IdentKey, &'s BStr>,
-	ident_table: hashbrown::HashMap<&'s BStr, IdentKey>,
+	idents: slotmap::SlotMap<IdentKey, &'s str>,
+	ident_table: hashbrown::HashMap<&'s str, IdentKey>,
 }
 impl<'s> LexState<'s> {
-	fn resolve_ident(&self, key: IdentKey) -> &'s BStr {
+	fn resolve_ident(&self, key: IdentKey) -> &'s str {
 		self.idents.get(key).expect("Invalid Label key")
 	}
 
-	fn handle_ident(&mut self, ident: &'s [u8]) -> IdentKey {
-		let ident = BStr::new(ident);
-
+	fn intern_ident(&mut self, ident: &'s str) -> IdentKey {
 		if let Some(&key) = self.ident_table.get(ident) {
 			return key;
 		}
@@ -140,6 +138,13 @@ impl<'s> LexState<'s> {
 		let key = self.idents.insert(ident);
 		self.ident_table.insert(ident, key);
 		key
+	}
+
+	unsafe fn handle_ident(&mut self, ident: &'s [u8]) -> IdentKey {
+		debug_assert!(ident.is_utf8(), "Identifiers must be valid UTF-8");
+
+		let ident = unsafe { str::from_utf8_unchecked(ident) };
+		self.intern_ident(ident)
 	}
 }
 
@@ -268,12 +273,13 @@ pub enum Token<'s> {
 	#[regex(
 		r"[-+]?\d+(\.\d*)?([eE][-+]?\d+)?",
 		|lex| parse_num(lex.slice()), 
-	)]//|lex| lex.slice().parse::<f64>().map(real_float::Finite::new)
+	)]
 	Number(real_float::Finite<f64>),
 
 	#[regex(
 		r"[\p{XID_Start}_][\p{XID_Continue}_]*",
-		|lex| lex.extras.handle_ident(lex.slice()),
+		// SAFETY: Lexing will only pick up valid UTF-8 sequences for identifiers.
+		|lex| unsafe { lex.extras.handle_ident(lex.slice()) },
 	)]
 	Identifier(IdentKey),
 
@@ -355,26 +361,26 @@ mod tests {
 
 		let expected_tokens = vec![
 			Token::Local,
-			Token::Identifier(lexer.inner.extras.handle_ident(b"x")),
+			Token::Identifier(lexer.get_ident("x")),
 			Token::Assign,
 			Token::Number(real_float::Finite::new(42.0)),
 			Token::LineTerm,
 			Token::Local,
-			Token::Identifier(lexer.inner.extras.handle_ident(b"str")),
+			Token::Identifier(lexer.get_ident("str")),
 			Token::Assign,
 			Token::String(BStr::new(b"Hello, World!")),
 			Token::LineTerm,
 			Token::Label,
-			Token::Identifier(lexer.inner.extras.handle_ident(b"my_label")),
+			Token::Identifier(lexer.get_ident("my_label")),
 			Token::Label,
 			Token::If,
-			Token::Identifier(lexer.inner.extras.handle_ident(b"x")),
+			Token::Identifier(lexer.get_ident("x")),
 			Token::GreaterThanEquals,
 			Token::Number(real_float::Finite::new(10.0)),
 			Token::Then,
-			Token::Identifier(lexer.inner.extras.handle_ident(b"x")),
+			Token::Identifier(lexer.get_ident("x")),
 			Token::Assign,
-			Token::Identifier(lexer.inner.extras.handle_ident(b"x")),
+			Token::Identifier(lexer.get_ident("x")),
 			Token::Plus,
 			Token::Number(real_float::Finite::new(1.0)),
 			Token::LineTerm,
@@ -399,7 +405,7 @@ mod tests {
 
 		let expected_tokens = vec![
 			Token::Local,
-			Token::Identifier(lexer.inner.extras.handle_ident(b"s")),
+			Token::Identifier(lexer.get_ident("s")),
 			Token::Assign,
 			Token::String(BStr::new(b"Hello, \xFF World!")),
 			Token::LineTerm,
@@ -423,12 +429,12 @@ mod tests {
 
 		let expected_tokens = vec![
 			Token::Local,
-			Token::Identifier(lexer.inner.extras.handle_ident(b"var_")),
+			Token::Identifier(lexer.get_ident("var_")),
 			// This is where the rest of the above identifier is, but it's invalid UTF-8.
 			// The broken ident will leave some rubbish tokens following.
-			Token::Identifier(lexer.inner.extras.handle_ident(b"_")),
+			Token::Identifier(lexer.get_ident("_")),
 			//FIXME: I've no idea why this is happening, but it doesn't matter for now.
-			Token::Identifier(lexer.inner.extras.handle_ident(b"_")),
+			Token::Identifier(lexer.get_ident("_")),
 			Token::Assign,
 			Token::Number(real_float::Finite::new(100.0)),
 			Token::LineTerm,

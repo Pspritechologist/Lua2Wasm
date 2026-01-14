@@ -107,14 +107,23 @@ struct Frame {
 	stack_base: usize,
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
+	if let Err(e) = try_main() {
+		eprintln!("{e}");
+		return std::process::ExitCode::FAILURE;
+	}
+
+	std::process::ExitCode::SUCCESS
+}
+
+fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 	let src = include_str!("../src/test.lua");
 
 	// let parsed = parsing::parse_asm(src);
-	let parsed = parsing::parse(src).unwrap();
+	let parsed = parsing::parse(src)?;
 	let mut buf = String::new();
-	parsing::fmt_asm(&mut buf, &parsed).unwrap();
-	std::fs::write("out.asm", buf).unwrap();
+	parsing::fmt_asm(&mut buf, &parsed)?;
+	std::fs::write("out.asm", buf)?;
 	
 	let parsing::Parsed { operations, numbers, strings, used_regs, debug } = parsed;
 
@@ -132,8 +141,8 @@ fn main() {
 
 			let line = src[..span].lines().count();
 			let col = src[..span].lines().last().map_or(0, |l| l.len()) + 1;
-			eprintln!("Runtime error at {line}:{col}: {e}");
-			return;
+			
+			Err(format!("Runtime error at {line}:{col}: {e}"))?
 		}
 	};
 
@@ -144,6 +153,8 @@ fn main() {
 			None => println!("null"),
 		}
 	}
+
+	Ok(())
 }
 
 struct ConstStrings {
@@ -179,15 +190,6 @@ impl ConstStrings {
 	}
 }
 
-#[warn(
-	clippy::panic,
-	clippy::todo,
-	clippy::unwrap_used,
-	clippy::panic_in_result_fn,
-	clippy::panicking_unwrap,
-	clippy::panicking_overflow_checks,
-	clippy::unimplemented,
-)]
 fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, const_nums: &[f64]) -> Result<Vec<Option<types::Value>>, (usize, Box<dyn std::error::Error>)> {
 	use crate::types::{Value, ToValue};
 	use crate::prelude::Num;
