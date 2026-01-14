@@ -9,6 +9,7 @@ mod asm;
 mod state;
 mod expressions;
 mod loops;
+mod debug;
 
 pub use asm::{parse_asm, fmt_asm};
 pub use state::Parsed;
@@ -135,10 +136,11 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut impl Parse
 		Token::For => todo!(),
 		Token::Break => state.emit_break()?,
 		Token::Goto => {
+			let span = lexer.src_index();
 			let label = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
 			let goto_op_pos = state.get_ops().len();
 			let goto_target = state.find_label(label, goto_op_pos);
-			state.emit(Op::goto(goto_target));
+			state.emit(Op::goto(goto_target), span);
 		},
 		head @ (Token::Identifier(_) | Token::ParenOpen) => {
 			use expressions::IdentExpr;
@@ -208,10 +210,11 @@ fn parse_if_statement<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, outer_state: &
 	let mut if_end_jump_positions = Vec::new();
 
 	'outer: loop {
+		let span = lexer.src_index();
 		let cond = parse_expr(lexer.next_must()?, lexer, outer_state)?.to_slot(lexer, outer_state)?;
-		outer_state.emit(Op::SkpIf(cond));
+		outer_state.emit(Op::SkpIf(cond), span);
 		let next_branch_jump_pos = outer_state.get_ops().len();
-		outer_state.emit(Op::GoTo(0, 0)); // Placeholder
+		outer_state.emit(Op::GoTo(0, 0), span); // Placeholder
 
 		expect_tok!(lexer, Token::Then)?;
 
@@ -228,7 +231,7 @@ fn parse_if_statement<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, outer_state: &
 
 		if matches!(end_tok, Token::Else | Token::ElseIf) {
 			if_end_jump_positions.push(if_state.get_ops().len());
-			if_state.emit(Op::GoTo(0, 0)); // Placeholder
+			if_state.emit(Op::GoTo(0, 0), lexer.src_index()); // Placeholder
 		}
 
 		let end_pos = if_state.get_ops().len();

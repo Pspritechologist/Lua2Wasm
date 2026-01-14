@@ -58,6 +58,8 @@ enum InfixOp<'s> {
 impl<'s> InfixOp<'s> {
 	fn parse_infix(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), left: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
 		let mut std_infix = |make_op: fn(u8, u8, u8) -> Op| {
+			let span = lexer.src_index();
+
 			let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
 
 			if let (Expr::Constant(a), Expr::Constant(b)) = (left, right) &&
@@ -72,7 +74,7 @@ impl<'s> InfixOp<'s> {
 			let lhs = left.to_slot(lexer, state)?;
 			let rhs = right.to_slot(lexer, state)?;
 			
-			state.emit(make_op(dst, lhs, rhs));
+			state.emit(make_op(dst, lhs, rhs), span);
 
 			Ok(Expr::Temp(dst))
 		};
@@ -102,9 +104,9 @@ impl<'s> InfixOp<'s> {
 			InfixOp::And => {
 				let dst = left.to_temp(lexer, state)?;
 
-				state.emit(Op::SkpIf(dst));
+				state.emit(Op::SkpIf(dst), lexer.src_index());
 				let goto_pos = state.get_ops().len();
-				state.emit(Op::GoTo(0, 0)); // Placeholder
+				state.emit(Op::GoTo(0, 0), lexer.src_index()); // Placeholder
 				
 				let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
 				right.set_to_slot(lexer, state, dst)?;
@@ -117,9 +119,9 @@ impl<'s> InfixOp<'s> {
 			InfixOp::Or => {
 				let dst = left.to_temp(lexer, state)?;
 
-				state.emit(Op::SkpIfNot(dst));
+				state.emit(Op::SkpIfNot(dst), lexer.src_index());
 				let goto_pos = state.get_ops().len();
-				state.emit(Op::GoTo(0, 0)); // Placeholder
+				state.emit(Op::GoTo(0, 0), lexer.src_index()); // Placeholder
 				
 				let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
 				right.set_to_slot(lexer, state, dst)?;
@@ -213,6 +215,8 @@ enum PrefixOp {
 }
 impl PrefixOp {
 	fn parse_prefix<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<Expr<'s>, Error<'s>> {
+		let span = lexer.src_index();
+
 		let right = parse_expr(lexer.next_must()?, lexer, state, self.prec())?;
 
 		if let Expr::Constant(a) = right && let Some(res) = self.fold_const(a) {
@@ -222,10 +226,10 @@ impl PrefixOp {
 		let dst = right.to_temp(lexer, state)?;
 
 		match self {
-			PrefixOp::Neg => state.emit(Op::Neg(dst, dst)),
-			PrefixOp::BitNot => state.emit(Op::BitNot(dst, dst)),
-			PrefixOp::Len => state.emit(Op::Len(dst, dst)),
-			PrefixOp::Not => state.emit(Op::Not(dst, dst)),
+			PrefixOp::Neg => state.emit(Op::Neg(dst, dst), span),
+			PrefixOp::BitNot => state.emit(Op::BitNot(dst, dst), span),
+			PrefixOp::Len => state.emit(Op::Len(dst, dst), span),
+			PrefixOp::Not => state.emit(Op::Not(dst, dst), span),
 		}
 		
 		Ok(Expr::Temp(dst))

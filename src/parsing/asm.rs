@@ -121,6 +121,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 		operations: ops,
 		numbers,
 		strings,
+		debug: None,
 		used_regs: max_reg + 1,
 	}
 }
@@ -131,6 +132,7 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Resul
 		numbers,
 		strings,
 		used_regs: _,
+		debug: _,
 	} = bytecode;
 
 	// Print all operations

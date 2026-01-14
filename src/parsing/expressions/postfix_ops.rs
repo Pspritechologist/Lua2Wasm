@@ -5,12 +5,13 @@ use luant_lexer::{Lexer, Token};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedCall {
+	pub span: usize,
 	pub func_reg: u8,
 	pub arg_count: u8,
 }
 impl ParsedCall {
 	pub fn handle_call<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), ret_count: u8) -> Result<Expr<'s>, Error<'s>> {
-		state.emit(Op::Call(self.func_reg, self.arg_count, ret_count));
+		state.emit(Op::Call(self.func_reg, self.arg_count, ret_count), self.span);
 		Ok(Expr::Temp(self.func_reg))
 	}
 }
@@ -23,6 +24,8 @@ impl<'s> CallType<'s> {
 	pub fn parse_call_args(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized), left: Expr<'s>) -> Result<ParsedCall, Error<'s>> {
 		let func_reg = state.new_temp();
 		left.set_to_slot(lexer, state, func_reg)?;
+
+		let span = lexer.src_index();
 
 		Ok(match self {
 			CallType::Args => {
@@ -43,7 +46,7 @@ impl<'s> CallType<'s> {
 					}
 				}
 
-				ParsedCall { func_reg, arg_count }
+				ParsedCall { func_reg, arg_count, span }
 			},
 			CallType::Method => todo!(),
 			CallType::Table => todo!(),
@@ -65,6 +68,7 @@ impl<'s> CallType<'s> {
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedIndex<'s> {
 	index_expr: Expr<'s>,
+	span: usize,
 }
 impl<'s> ParsedIndex<'s> {
 	/// Emits the `get` operation for this index operation.
@@ -72,7 +76,7 @@ impl<'s> ParsedIndex<'s> {
 		let target_slot = target.to_slot(lexer, state)?;
 		let index_slot = self.index_expr.to_slot(lexer, state)?;
 		let result_reg = state.new_temp();
-		state.emit(Op::Get(result_reg, target_slot, index_slot));
+		state.emit(Op::Get(result_reg, target_slot, index_slot), self.span);
 		Ok(Expr::Temp(result_reg))
 	}
 	
@@ -90,6 +94,8 @@ impl IndexType {
 	/// Use 'handle_index' to emit the `get` operation if desired.\
 	/// Note that this function expects the leading open bracket or dot to have already been consumed.
 	pub fn parse_index<'s>(self, lexer: &mut Lexer<'s>, state: &mut (impl ParseState<'s> + ?Sized)) -> Result<ParsedIndex<'s>, Error<'s>> {
+		let span = lexer.src_index();
+
 		let index_expr = match self {
 			IndexType::Index => {
 				let index_expr = super::parse_expr(lexer.next_must()?, lexer, state)?;
@@ -107,6 +113,7 @@ impl IndexType {
 		
 		Ok(ParsedIndex {
 			index_expr,
+			span,
 		})
 	}
 

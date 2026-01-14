@@ -16,7 +16,7 @@ pub enum Value {
 	Str(LString),
 	Bool(bool),
 	Table(Table),
-	Func(fn(args: &[Option<Value>]) -> Vec<Option<Value>>),
+	Func(fn(args: &[Option<Value>]) -> Result<Vec<Option<Value>>, Box<dyn std::error::Error>>),
 }
 
 impl Value {
@@ -37,6 +37,15 @@ impl Value {
 			Value::Num(n) => Some(*n),
 			_ => None,
 		}
+	}
+
+	pub fn coerce_num(val: Option<&Self>) -> Result<Num, Box<dyn std::error::Error>> {
+		Ok(match val {
+			Some(Value::Num(n)) => *n,
+			Some(Value::Str(s)) => s.to_num()?,
+			None => return Err("Expected number found nil".into()),
+			_ => return Err("Cannot coerce to number".into()),
+		})
 	}
 }
 

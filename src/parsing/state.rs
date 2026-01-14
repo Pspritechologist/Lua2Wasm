@@ -9,7 +9,7 @@ use hashbrown::HashMap;
 /// scopes, functions, etc.
 #[auto_impl::auto_impl(&mut)]
 pub trait ParseState<'s> {
-	fn emit(&mut self, op: Op) { self.parent().emit(op) }
+	fn emit(&mut self, op: Op, src_index: usize) { self.parent().emit(op, src_index) }
 	fn get_ops(&self) -> &[Op];
 	fn get_ops_mut(&mut self) -> &mut [Op];
 	fn number_idx(&mut self, n: f64) -> u16 { self.parent().number_idx(n) }
@@ -45,6 +45,7 @@ pub struct RootState<'s> {
 	strings: Vec<&'s BStr>,
 	labels: SparseSecondaryMap<IdentKey, usize>,
 	missing_labels: Vec<(IdentKey, usize)>,
+	debug_info: super::debug::InfoCollector,
 }
 
 #[derive(Debug)]
@@ -52,6 +53,7 @@ pub struct Parsed<'s> {
 	pub operations: Vec<Op>,
 	pub numbers: Vec<f64>,
 	pub strings: Vec<&'s BStr>,
+	pub debug: Option<crate::debug::DebugInfo>,
 
 	pub used_regs: u8,
 }
@@ -69,6 +71,7 @@ impl<'s> RootState<'s> {
 			operations: self.operations,
 			numbers: self.numbers,
 			strings: self.strings,
+			debug: Some(crate::debug::DebugInfo::new_file(self.debug_info.into_map(), None::<&str>)),
 
 			used_regs: self.highest_temp_count + self.local_count,
 		})
@@ -78,8 +81,9 @@ impl<'s> RootState<'s> {
 impl<'s> ParseState<'s> for RootState<'s> {
 	fn parent(&mut self) -> &mut dyn ParseState<'s> { unreachable!() }
 
-	fn emit(&mut self, op: Op) {
+	fn emit(&mut self, op: Op, src_index: usize) {
 		self.operations.push(op);
+		self.debug_info.emit(src_index);
 	}
 	fn get_ops(&self) -> &[Op] {
 		&self.operations

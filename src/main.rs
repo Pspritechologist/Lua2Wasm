@@ -8,6 +8,7 @@ use prelude::BStr;
 
 mod types;
 mod parsing;
+mod debug;
 
 mod prelude {
 	pub use bstr::BStr;
@@ -93,6 +94,13 @@ pub struct State {
 	gc_buf: Vec<u8>,
 }
 
+pub struct ClosureProto {
+	operations: std::rc::Rc<[Operation]>,
+	const_nums: std::rc::Rc<[f64]>,
+	const_strs: std::rc::Rc<ConstStrings>,
+	max_stack_size: u8,
+}
+
 #[derive(Default)]
 struct Frame {
 	pc: usize,
@@ -100,20 +108,34 @@ struct Frame {
 }
 
 fn main() {
-	// let parsed = parsing::parse_asm(include_str!("../src/test.asm"));
-	let parsed = parsing::parse(include_str!("../src/test.lua")).unwrap();
+	let src = include_str!("../src/test.lua");
+
+	// let parsed = parsing::parse_asm(src);
+	let parsed = parsing::parse(src).unwrap();
 	let mut buf = String::new();
 	parsing::fmt_asm(&mut buf, &parsed).unwrap();
 	std::fs::write("out.asm", buf).unwrap();
 	
-	let parsing::Parsed { operations, numbers, strings, used_regs } = parsed;
+	let parsing::Parsed { operations, numbers, strings, used_regs, debug } = parsed;
 
-	let stack = run_vm(
+	let stack = match run_vm(
 		&operations,
 		used_regs,
 		ConstStrings::new(strings),
 		&numbers,
-	);
+	) {
+		Ok(stack) => stack,
+		Err((op_idx, e)) => {
+			let span = debug.as_ref()
+				.and_then(|d| d.src_map().get(op_idx))
+				.unwrap_or(0);
+
+			let line = src[..span].lines().count();
+			let col = src[..span].lines().last().map_or(0, |l| l.len()) + 1;
+			eprintln!("Runtime error at {line}:{col}: {e}");
+			return;
+		}
+	};
 
 	for (reg, val) in stack.iter().enumerate() {
 		print!("{reg} = ");
@@ -157,7 +179,16 @@ impl ConstStrings {
 	}
 }
 
-fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, const_nums: &[f64]) -> Vec<Option<types::Value>> {
+#[warn(
+	clippy::panic,
+	clippy::todo,
+	clippy::unwrap_used,
+	clippy::panic_in_result_fn,
+	clippy::panicking_unwrap,
+	clippy::panicking_overflow_checks,
+	clippy::unimplemented,
+)]
+fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, const_nums: &[f64]) -> Result<Vec<Option<types::Value>>, (usize, Box<dyn std::error::Error>)> {
 	use crate::types::{Value, ToValue};
 	use crate::prelude::Num;
 
@@ -188,7 +219,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 		println!();
 
-		vec![]
+		Ok(vec![])
 	}));
 	registers[1] = Some(Value::Table(types::Table::from_iter(&mut state, [
 		("assert", Value::Func(|args| {
@@ -197,13 +228,13 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 			if !condition.as_ref().is_some_and(|v| v.is_truthy()) {
 				if let Some(Some(Value::Str(s))) = msg {
-					panic!("Assertion failed: {}", s.as_str());
+					return Err(format!("Assertion failed: {}", s.as_str()).into());
 				} else {
-					panic!("Assertion failed");
+					return Err("Assertion failed".into());
 				}
 			}
 
-			vec![]
+			Ok(vec![])
 		})),
 		("assert_eq", Value::Func(|args| {
 			let a = &args[0];
@@ -212,37 +243,27 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 			if a != b {
 				if let Some(Some(Value::Str(s))) = msg {
-					panic!("Assertion failed: {a:?} != {b:?}: {}", s.as_str());
+					return Err(format!("Assertion failed: {a:?} != {b:?}: {}", s.as_str()).into());
 				} else {
-					panic!("Assertion failed: {a:#?} != {b:#?}");
+					return Err(format!("Assertion failed: {a:#?} != {b:#?}").into());
 				}
 			}
 
-			vec![]
+			Ok(vec![])
 		})),
 	])));
 	
 	macro_rules! math_op {
 		($dst:expr, $a:expr, $b:expr, $op:tt) => { {
-			let a = &registers[$a as usize];
-			let b = &registers[$b as usize];
-			match (a, b) {
-				(Some(Value::Num(a)), Some(Value::Num(b))) => {
-					let result = a.$op(**b).unwrap_or_default();
-					registers[$dst as usize] = Some(result.to_value(&mut state));
-				}
-				_ => unimplemented!(),
-			}
+			let a = Value::coerce_num(registers[$a as usize].as_ref()).map_err(|e| (frame.pc, e))?;
+			let b = Value::coerce_num(registers[$b as usize].as_ref()).map_err(|e| (frame.pc, e))?;
+			let result = a.$op(*b).unwrap_or_default();
+			registers[$dst as usize] = Some(result.to_value(&mut state));
 		} };
 		($dst:expr, $a:expr, $op:tt) => { {
-			let a = &registers[$a as usize];
-			match a {
-				Some(Value::Num(a)) => {
-					let result = a.$op().unwrap_or_default();
-					registers[$dst as usize] = Some(result.to_value(&mut state));
-				}
-				_ => unimplemented!(),
-			}
+			let a = Value::coerce_num(registers[$a as usize].as_ref()).map_err(|e| (frame.pc, e))?;
+			let result = a.$op().unwrap_or_default();
+			registers[$dst as usize] = Some(result.to_value(&mut state));
 		} };
 	}
 	
@@ -305,13 +326,13 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			Operation::LoadTab(dst) => registers[dst as usize] = Some(Value::Table(Default::default())),
 			Operation::Set(tab, key, val) => {
 				let Some(key) = registers[key as usize].clone() else {
-					unimplemented!()
+					return Err((frame.pc, "Attempted to use nil value as table key".into()));
 				};
 
 				let value = registers[val as usize].clone();
 
 				let Some(Value::Table(tab)) = registers[tab as usize].as_mut() else {
-					unimplemented!()
+					return Err((frame.pc, "Attempted to index non-table value".into()));
 				};
 
 				match value {
@@ -321,11 +342,11 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			},
 			Operation::Get(dst, tab, key) => {
 				let Some(Value::Table(tab)) = registers[tab as usize].as_ref() else {
-					unimplemented!()
+					return Err((frame.pc, "Attempted to index non-table value".into()));
 				};
 
 				let Some(key) = registers[key as usize].clone() else {
-					unimplemented!()
+					return Err((frame.pc, "Attempted to use nil value as table key".into()));
 				};
 
 				let value = tab.get(&key);
@@ -377,11 +398,15 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 						registers[dst as usize] = Some(Value::Str(value));
 					}
-					_ => unimplemented!(),
+					_ => Err("Attempted to concatenate non-string values".into()).map_err(|e| (frame.pc, e))?,
 				}
 			},
-			Operation::Len(dst, a) =>
-				registers[dst as usize] = registers[a as usize].as_ref().map(|v| v.len().unwrap().to_value(&mut state)),
+			Operation::Len(dst, a) => {
+				// registers[dst as usize] = registers[a as usize].as_ref().map(|v| v.len().unwrap().to_value(&mut state)),
+				let target = &registers[a as usize];
+				let result = target.as_ref().and_then(|v| v.len()).ok_or_else(|| (frame.pc, "Attempted to get length of non-string/table value".into()))?;
+				registers[dst as usize] = Some(result.to_value(&mut state));
+			},
 			Operation::Call(func_reg, arg_count, ret_count) => {
 				let func = registers[func_reg as usize].clone();
 				let args_start = func_reg as usize + 1;
@@ -389,8 +414,9 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				let args = &registers[args_start..args_end];
 
 				let rets = match func {
-					Some(Value::Func(f)) => f(args),
-					_ => unimplemented!(),
+					Some(Value::Func(f)) => f(args).map_err(|e| (frame.pc, e))?,
+					None => return Err((frame.pc, "Attempted to call nil value".into())),
+					_ => return Err((frame.pc, "Attempted to call non-function value".into())),
 				};
 
 				for (i, ret) in rets.into_iter().enumerate().take(ret_count as usize) {
@@ -436,5 +462,5 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 		frame.pc += 1;
 	}
 
-	stack
+	Ok(stack)
 }

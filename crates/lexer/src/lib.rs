@@ -8,6 +8,10 @@ const FLOAT_PARSE_FORMAT: u128 = lexical_parse_float::NumberFormatBuilder::new()
 	.no_special(true)
 	.build_strict();
 
+pub fn parse_num(s: impl AsRef<[u8]>) -> Result<real_float::Finite<f64>, lexical_parse_float::Error> {
+	f64::from_lexical_with_options::<FLOAT_PARSE_FORMAT>(s.as_ref(), &Default::default()).map(real_float::Finite::new)
+}
+
 pub trait TokPat<'s> {
 	fn matches(self, tok: Token<'s>) -> bool;
 }
@@ -80,6 +84,10 @@ impl<'s> Lexer<'s> {
 		self.inner.span()
 	}
 
+	pub fn src_index(&self) -> usize {
+		self.current_span().end
+	}
+
 	pub fn current_pos(&self) -> (usize, usize) {
 		let span = self.current_span();
 		let src = self.inner.source();
@@ -111,13 +119,14 @@ slotmap::new_key_type! {
 	pub struct IdentKey;
 }
 
+#[doc(hidden)] //? Has to be public for logos extras.
 #[derive(Default)]
 pub struct LexState<'s> {
 	idents: slotmap::SlotMap<IdentKey, &'s BStr>,
 	ident_table: hashbrown::HashMap<&'s BStr, IdentKey>,
 }
 impl<'s> LexState<'s> {
-	pub fn resolve_ident(&self, key: IdentKey) -> &'s BStr {
+	fn resolve_ident(&self, key: IdentKey) -> &'s BStr {
 		self.idents.get(key).expect("Invalid Label key")
 	}
 
@@ -137,7 +146,8 @@ impl<'s> LexState<'s> {
 fn handle_comment<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<logos::Skip, LexError<'s>> {
 	if !lex.slice().starts_with(b"--[") {
 		// Single-line comment
-		let end = lex.remainder().find(b"\n").unwrap_or(lex.remainder().len());
+		// let end = lex.remainder().find(b"\n").unwrap_or(lex.remainder().len());
+		let end = lex.remainder().lines().next().map(|l| l.len()).unwrap_or(lex.remainder().len());
 		lex.bump(end);
 		return Ok(logos::Skip);
 	}
@@ -166,10 +176,16 @@ fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<&'s 
 	let str_end = end - end_pat.len();
 	let s = &lex.remainder()[..str_end];
 	// Multiline-strings ignore the first newline.
-	let s = s.strip_prefix(b"\r\n")
-		.or_else(|| s.strip_prefix(b"\n"))
-		.or_else(|| s.strip_prefix(b"\r"))
-		.unwrap_or(s);
+	// let s = s.strip_prefix(b"\r\n")
+	// 	.or_else(|| s.strip_prefix(b"\n"))
+	// 	.or_else(|| s.strip_prefix(b"\r"))
+	// 	.unwrap_or(s);
+	let mut lines = s.lines();
+	let s = if let Some(l) = lines.next() && l.is_empty() {
+		lines.as_bytes()
+	} else {
+		s
+	};
 
 	lex.bump(end + end_pat.len());
 	
@@ -251,7 +267,7 @@ pub enum Token<'s> {
 
 	#[regex(
 		r"[-+]?\d+(\.\d*)?([eE][-+]?\d+)?",
-		|lex| f64::from_lexical_with_options::<FLOAT_PARSE_FORMAT>(lex.slice(), &Default::default()).map(real_float::Finite::new), 
+		|lex| parse_num(lex.slice()), 
 	)]//|lex| lex.slice().parse::<f64>().map(real_float::Finite::new)
 	Number(real_float::Finite<f64>),
 

@@ -57,6 +57,10 @@ impl LString {
 		let (a, b) = (self, other);
 		Gc::ptr_eq(&a.inner, &b.inner) || (a.get_hash() == b.get_hash() && a.len() == b.len() && a.as_str() == b.as_str())
 	}
+
+	pub fn to_num(&self) -> Result<Num, Box<dyn std::error::Error>> {
+		Ok(luant_lexer::parse_num(self.as_str()).map(Num::new)?)
+	}
 }
 
 impl AsRef<BStr> for LString {

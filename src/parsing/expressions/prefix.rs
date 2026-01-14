@@ -8,6 +8,7 @@ use luant_lexer::{Lexer, Token};
 pub enum PlaceExpr<'s> {
 	Name(IdentKey),
 	Index {
+		span: usize,
 		target: Expr<'s>,
 		index: Expr<'s>,
 	},
@@ -20,12 +21,12 @@ impl<'s> PlaceExpr<'s> {
 				let slot = state.local(lexer, ident)?;
 				expr.set_to_slot(lexer, state, slot)
 			},
-			PlaceExpr::Index { target, index } => {
+			PlaceExpr::Index { target, index, span } => {
 				let table_slot = target.to_slot(lexer, state)?;
 				let index_slot = index.to_slot(lexer, state)?;
 				let value_slot = expr.to_slot(lexer, state)?;
 
-				state.emit(Op::Set(table_slot, index_slot, value_slot));
+				state.emit(Op::Set(table_slot, index_slot, value_slot), span);
 
 				Ok(())
 			},
@@ -71,6 +72,7 @@ impl<'s> IdentExpr<'s> {
 				},
 				TrailingOp::Index(index_type) => {
 					let index = index_type.parse_index(lexer, state)?;
+					let span = lexer.src_index();
 					next_op = match lexer.next_if_map(TrailingOp::from_token)? {
 						Some(next_op) => {
 							expr = index.handle_index(lexer, state, expr)?;
@@ -79,6 +81,7 @@ impl<'s> IdentExpr<'s> {
 						None => return Ok(IdentExpr::Place(PlaceExpr::Index {
 							target: expr,
 							index: index.to_key()?,
+							span,
 						})),
 					}
 				},
