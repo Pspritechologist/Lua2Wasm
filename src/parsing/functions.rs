@@ -62,6 +62,7 @@ impl<'a, 's> FuncState<'a, 's> {
 
 	pub fn set_slots_used(&mut self, used: u8) {
 		self.cur_slot_use = used;
+		self.max_slot_use = self.max_slot_use.max(self.cur_slot_use);
 	}
 	
 	pub fn number_idx(&mut self, n: f64) -> u16 {
