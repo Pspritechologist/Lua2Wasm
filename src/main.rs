@@ -2,6 +2,7 @@
 	iter_array_chunks,
 	ptr_metadata,
 	macro_metavar_expr,
+	trim_prefix_suffix,
 )]
 
 use prelude::BStr;
@@ -284,12 +285,12 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			match (a, b) {
 				(Some(Value::Num(a)), Some(Value::Num(b))) => {
 					let (Some($ai), Some($bi)) = (a.as_i64(), b.as_i64()) else {
-						unimplemented!();
+						return Err((frame.pc, "Attempted to perform bitwise operation on non-integer number".into()));
 					};
 					let result = { $f };
 					registers[$dst as usize] = Some(result.to_value(&mut state));
 				}
-				_ => unimplemented!(),
+				_ => return Err((frame.pc, "Attempted to perform bitwise operation on non-number value".into())),
 			}
 		} };
 		($dst:expr, $a:expr, |$ai:ident| $f:expr) => { {
@@ -297,12 +298,12 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			match a {
 				Some(Value::Num(a)) => {
 					let Some($ai) = a.as_i64() else {
-						unimplemented!();
+						return Err((frame.pc, "Attempted to perform bitwise operation on non-integer number".into()));
 					};
 					let result = { $f };
 					registers[$dst as usize] = Some(result.to_value(&mut state));
 				}
-				_ => unimplemented!(),
+				_ => return Err((frame.pc, "Attempted to perform bitwise operation on non-number value".into())),
 			}
 		} };
 	}
@@ -376,10 +377,10 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			Operation::BitShR(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a >> b),
 			Operation::BitNot(dst, a) => bitwise_op!(dst, a, |a| !a),
 			Operation::Concat(dst, a, b) => {
-				let a = &registers[a as usize];
-				let b = &registers[b as usize];
+				let a = Value::coerce_str(registers[a as usize].as_ref(), &mut state).map_err(|e| (frame.pc, e));
+				let b = Value::coerce_str(registers[b as usize].as_ref(), &mut state).map_err(|e| (frame.pc, e));
 				match (a, b) {
-					(Some(Value::Str(a)), Some(Value::Str(b))) => {
+					(Ok(a), Ok(b)) => {
 						let buf = &mut state.gc_buf;
 
 						let text_len = a.len() + b.len();
@@ -389,8 +390,8 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 						buf.extend([0u8; 8]); // Placeholder for hash.
 
-						buf.extend_from_slice(a);
-						buf.extend_from_slice(b);
+						buf.extend_from_slice(&a);
+						buf.extend_from_slice(&b);
 
 						let hash = state.hasher.hash_bytes(&buf[8..]);
 						buf[..8].copy_from_slice(&hash.to_ne_bytes());
@@ -404,7 +405,6 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				}
 			},
 			Operation::Len(dst, a) => {
-				// registers[dst as usize] = registers[a as usize].as_ref().map(|v| v.len().unwrap().to_value(&mut state)),
 				let target = &registers[a as usize];
 				let result = target.as_ref().and_then(|v| v.len()).ok_or_else(|| (frame.pc, "Attempted to get length of non-string/table value".into()))?;
 				registers[dst as usize] = Some(result.to_value(&mut state));

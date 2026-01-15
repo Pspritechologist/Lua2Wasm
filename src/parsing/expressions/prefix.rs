@@ -1,5 +1,5 @@
 use crate::parsing::LexerExt;
-use super::{Error, ParseState, IdentKey, Op, expect_tok};
+use super::{Error, ParseScope, IdentKey, Op, expect_tok};
 use super::{Expr, FuncState};
 use super::postfix_ops::{CallType, IndexType};
 use luant_lexer::{Lexer, Token};
@@ -15,7 +15,7 @@ pub enum PlaceExpr<'s> {
 }
 
 impl<'s> PlaceExpr<'s> {
-	pub fn set_expr(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, expr: Expr<'s>) -> Result<(), Error<'s>> {
+	pub fn set_expr(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, expr: Expr<'s>) -> Result<(), Error<'s>> {
 		match self {
 			PlaceExpr::Name(ident) => {
 				let slot = scope.get_local(lexer, ident)?;
@@ -41,7 +41,7 @@ pub enum IdentExpr<'s> {
 }
 
 impl<'s> IdentExpr<'s> {
-	pub fn parse(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<IdentExpr<'s>, Error<'s>> {
+	pub fn parse(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<IdentExpr<'s>, Error<'s>> {
 		let expr = match head {
 			Token::ParenOpen => {
 				let expr = super::parse_expr(lexer.next_must()?, lexer, scope, state)?;

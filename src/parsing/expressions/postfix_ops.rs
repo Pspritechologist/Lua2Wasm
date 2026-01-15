@@ -1,5 +1,5 @@
 use crate::parsing::LexerExt;
-use super::{Error, ParseState, Op, expect_tok};
+use super::{Error, ParseScope, Op, expect_tok};
 use super::{Expr, Const, FuncState};
 use luant_lexer::{Lexer, Token};
 
@@ -10,7 +10,7 @@ pub struct ParsedCall {
 	pub arg_count: u8,
 }
 impl ParsedCall {
-	pub fn handle_call<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: u8) -> Result<Expr<'s>, Error<'s>> {
+	pub fn handle_call<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: u8) -> Result<Expr<'s>, Error<'s>> {
 		state.emit(Op::Call(self.func_reg, self.arg_count, ret_count), self.span);
 		Ok(Expr::Temp(self.func_reg))
 	}
@@ -21,7 +21,7 @@ pub enum CallType<'s> {
 	Args, Method, Table, String(&'s bstr::BStr),
 }
 impl<'s> CallType<'s> {
-	pub fn parse_call_args(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, left: Expr<'s>) -> Result<ParsedCall, Error<'s>> {
+	pub fn parse_call_args(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, left: Expr<'s>) -> Result<ParsedCall, Error<'s>> {
 		let span = lexer.src_index();
 
 		Ok(match self {
@@ -84,7 +84,7 @@ pub struct ParsedIndex<'s> {
 }
 impl<'s> ParsedIndex<'s> {
 	/// Emits the `get` operation for this index operation.
-	pub fn handle_index(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, target: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
+	pub fn handle_index(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, target: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
 		let target_slot = target.to_slot(lexer, scope, state)?;
 		let index_slot = self.index_expr.to_slot(lexer, scope, state)?;
 		let result_reg = state.reserve_slot();
@@ -105,7 +105,7 @@ impl IndexType {
 	/// Parses the key expression for the index operation and returns it.
 	/// Use 'handle_index' to emit the `get` operation if desired.\
 	/// Note that this function expects the leading open bracket or dot to have already been consumed.
-	pub fn parse_index<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<ParsedIndex<'s>, Error<'s>> {
+	pub fn parse_index<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<ParsedIndex<'s>, Error<'s>> {
 		let span = lexer.src_index();
 
 		let index_expr = match self {

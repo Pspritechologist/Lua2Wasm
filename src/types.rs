@@ -47,6 +47,14 @@ impl Value {
 			_ => return Err("Cannot coerce to number".into()),
 		})
 	}
+
+	pub fn coerce_str(val: Option<&Self>, state: &mut State) -> Result<LString, Box<dyn std::error::Error>> {
+		Ok(match val {
+			Some(Value::Str(s)) => s.clone(),
+			Some(Value::Num(n)) => n.to_str(state),
+			_ => return Err("Cannot coerce to string".into()),
+		})
+	}
 }
 
 unsafe impl<V: dumpster::Visitor> dumpster::TraceWith<V> for Value {

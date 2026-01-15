@@ -2,9 +2,8 @@ use crate::Operation as Op;
 use luant_lexer::{IdentKey, Lexer, Token};
 
 use functions::FuncState;
-use scopes::{ParseState, RootScope, VariableScope};
+use scopes::{ParseScope, RootScope, VariableScope};
 use expressions::*;
-use loops::*;
 
 mod asm;
 mod functions;
@@ -111,7 +110,7 @@ use expect_tok;
 
 type Error<'s> = Box<dyn std::error::Error + 's>;
 
-fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl ParseState<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
+fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
 	match head {
 		Token::LineTerm => (),
 		Token::Label => {
@@ -167,9 +166,9 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 		Token::Do => parse_do_block(lexer, scope, state)?,
 		Token::If => parse_if_statement(lexer, scope, state)?,
 		Token::Else => todo!(),
-		Token::While => todo!(),
+		Token::While => loops::parse_while(lexer, scope, state)?,
 		Token::For => todo!(),
-		Token::Break => scope.emit_break()?,
+		Token::Break => scope.emit_break(state, lexer.src_index())?,
 		Token::Goto => {
 			let span = lexer.src_index();
 			let label = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
@@ -222,7 +221,7 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 	Ok(())
 }
 
-fn parse_do_block<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseState<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
+fn parse_do_block<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
 	let mut scope = VariableScope::new(scope);
 
 	loop {
@@ -237,7 +236,7 @@ fn parse_do_block<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseState<'s>, sta
 	Ok(())
 }
 
-fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseState<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
+fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
 	let mut if_end_jump_positions = Vec::new();
 
 	'outer: loop {

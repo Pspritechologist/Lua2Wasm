@@ -1,89 +1,86 @@
-// use crate::parsing::LexerExt;
-// use super::{Error, ParseState, Op, VariableScope, expect_tok};
-// use luant_lexer::{Lexer, Token};
+use crate::parsing::LexerExt;
+use super::{Error, ParseScope, Op, VariableScope, FuncState, expect_tok};
+use luant_lexer::{Lexer, Token};
 
-// struct LoopState<'a, 's> {
-// 	parent: &'a mut dyn ParseState<'s>,
-// 	start_pos: usize,
-// 	end_jumps: Vec<usize>,
-// }
-// impl<'a, 's> LoopState<'a, 's> {
-// 	fn new(parent: &'a mut dyn ParseState<'s>, start_pos: usize) -> Self {
-// 		Self {
-// 			parent,
-// 			start_pos,
-// 			end_jumps: Vec::new(),
-// 		}
-// 	}
+struct LoopScope<'a, 's> {
+	parent: &'a mut dyn ParseScope<'s>,
+	start_pos: usize,
+	end_jumps: Vec<usize>,
+}
+impl<'a, 's> LoopScope<'a, 's> {
+	fn new(parent: &'a mut dyn ParseScope<'s>, start_pos: usize) -> Self {
+		Self {
+			parent,
+			start_pos,
+			end_jumps: Vec::new(),
+		}
+	}
 
-// 	fn patch_end_jumps(&mut self) {
-// 		let end_pos = self.parent.get_ops().len();
-// 		let (p32, p8) = ((end_pos >> 8) as u32, (end_pos & 0xFF) as u8);
+	fn patch_end_jumps(&mut self, state: &mut FuncState<'_, 's>) {
+		let end_op = Op::goto(state.ops().len());
+		let ops = state.ops_mut();
 
-// 		let ops = self.parent.get_ops_mut();
+		for &jump_pos in &self.end_jumps {
+			debug_assert!(matches!(ops[jump_pos], Op::GoTo(_, _)), "Expected GoTo at position {jump_pos}, found {:?}", ops[jump_pos]);
+			ops[jump_pos] = end_op;
+		}
+	}
+}
+impl<'a, 's> ParseScope<'s> for LoopScope<'a, 's> {
+	fn parent(&mut self) -> &mut dyn ParseScope<'s> { self.parent }
 
-// 		for &jump_pos in &self.end_jumps {
-// 			if let Op::GoTo(ref mut to32, ref mut to8) = self.parent.get_ops_mut()[jump_pos] {
-// 				*to32 = p32;
-// 				*to8 = p8;
-// 			} else {
-// 				panic!("Expected GoTo at position {jump_pos}, found {:?}", self.parent.get_ops()[jump_pos]);
-// 			}
-// 		}
-// 	}
-// }
-// impl<'a, 's> ParseState<'s> for LoopState<'a, 's> {
-// 	fn parent(&mut self) -> &mut dyn ParseState<'s> { self.parent }
-// 	fn get_ops(&self) -> &[Op] { self.parent.get_ops() }
-// 	fn get_ops_mut(&mut self) -> &mut [Op] { self.parent.get_ops_mut() }
+	fn emit_break(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> {
+		let break_pos = state.ops().len();
+		state.emit(Op::GoTo(0, 0), span); // Placeholder
+		self.end_jumps.push(break_pos);
+		Ok(())
+	}
 
-// 	fn emit_break(&mut self) -> Result<(), Error<'s>> {
-// 		let break_pos = self.get_ops().len();
-// 		self.emit(Op::GoTo(0, 0)); // Placeholder
-// 		self.end_jumps.push(break_pos);
-// 		Ok(())
-// 	}
+	fn emit_continue(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> {
+		state.emit(Op::goto(self.start_pos), span);
+		Ok(())
+	}
+}
 
-// 	fn emit_continue(&mut self) -> Result<(), Error<'s>> {
-// 		let pos = self.start_pos;
-// 		let (p32, p8) = ((pos >> 8) as u32, (pos & 0xFF) as u8);
-// 		self.emit(Op::GoTo(p32, p8));
-// 		Ok(())
-// 	}
-// }
+pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
+	let start = state.ops().len();
+	
+	let initial_slots_used = state.slots_used();
+	let cond = super::parse_expr(lexer.next_must()?, lexer, scope, state)?;
 
-// pub fn parse_while<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, state: &mut dyn ParseState<'s>) -> Result<(), Error<'s>> {
-// 	assert!(matches!(head, Token::While));
+	let mut scope = VariableScope::new(LoopScope::new(scope, start));
 
-// 	let start = state.get_ops().len();
-// 	let mut state = VariableScope::new(LoopState::new(state, start));
+	match cond.as_const().map(|c| c.is_truthy()) {
+		Some(true) => (), // This is an infinite loop and no check need be compiled.
+		Some(false) | //TODO: Don't compile unreachable loops.
+		None => {
+			let span = lexer.src_index();
+			let cond = cond.to_slot(lexer, &mut scope, state)?;
+			state.emit(Op::SkpIf(cond), span);
+			scope.emit_break(state, span)?;
+			
+			state.set_slots_used(initial_slots_used);
+		}
+	}
 
-// 	// let cond = super::try_parse_expr(lexer.next_must()?, lexer, &mut state)?.set_to_slot(&mut state);
+	expect_tok!(lexer, Token::Do)?;
 
-// 	expect_tok!(lexer, Token::Do)?;
+	loop {
+		let tok = lexer.next_must()?;
+		if matches!(tok, Token::End) {
+			break;
+		}
 
-// 	// Condition check
-// 	// state.emit(op);
+		super::parse_stmt(tok, lexer, &mut scope, state)?;
+	}
 
-// 	loop {
-// 		let tok = lexer.next_must()?;
-// 		if matches!(tok, Token::End) {
-// 			break;
-// 		}
+	let mut loop_scope = scope.into_inner();
 
-// 		// super::parse_stmt(tok, lexer, &mut state)?;
-// 	}
+	// Jump back to the start of the loop.
+	state.emit(Op::goto(loop_scope.start_pos), lexer.src_index());
 
-// 	let LoopState { parent: state, end_jumps, .. } = state.into_inner();
+	// Patch in jumps to the end of the loop (breaks).
+	loop_scope.patch_end_jumps(state);
 
-// 	let end_pos = state.get_ops().len();
-// 	end_jumps.into_iter().for_each(|pos| {
-// 		let Op::GoTo(p32, p8) = &mut state.get_ops_mut()[pos] else {
-// 			panic!("Expected GoTo at position {pos}, found {:?}", state.get_ops()[pos]);
-// 		};
-// 		*p32 = (end_pos >> 8) as u32;
-// 		*p8 = (end_pos & 0xFF) as u8;
-// 	});
-
-// 	Ok(())
-// }
+	Ok(())
+}

@@ -1,5 +1,5 @@
 use crate::prelude::BStr;
-use super::{Error, ParseState, LexerExt, Op, IdentKey, expect_tok};
+use super::{Error, ParseScope, LexerExt, Op, IdentKey, expect_tok};
 use super::functions::FuncState;
 use luant_lexer::{Lexer, Token};
 
@@ -25,10 +25,6 @@ impl<'s> Const<'s> {
 	pub fn is_truthy(self) -> bool {
 		!matches!(self, Const::Bool(false) | Const::Nil)
 	}
-
-	pub fn is_null(self) -> bool {
-		matches!(self, Const::Nil)
-	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,8 +35,15 @@ pub enum Expr<'s> {
 }
 
 impl<'s> Expr<'s> {
+	pub fn as_const(self) -> Option<Const<'s>> {
+		match self {
+			Expr::Constant(c) => Some(c),
+			_ => None,
+		}
+	}
+
 	#[inline]
-	pub fn to_temp(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
+	pub fn to_temp(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
 		match self.as_temp() {
 			Some(t) => Ok(t),
 			None => {
@@ -60,14 +63,14 @@ impl<'s> Expr<'s> {
 	}
 
 	#[inline]
-	pub fn to_new_local(self, lexer: &Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
+	pub fn to_new_local(self, lexer: &Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
 		let local = scope.new_local(lexer, state, name)?;
 		self.set_to_slot(lexer, scope, state, local)?;
 		Ok(local)
 	}
 
 	#[inline]
-	pub fn to_slot(self, lexer: &Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
+	pub fn to_slot(self, lexer: &Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
 		match self {
 			Expr::Constant(_) => {
 				let temp = state.reserve_slot();
@@ -80,7 +83,7 @@ impl<'s> Expr<'s> {
 	}
 
 	#[inline]
-	pub fn set_to_slot(self, lexer: &Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, slot: u8) -> Result<(), Error<'s>> {
+	pub fn set_to_slot(self, lexer: &Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, slot: u8) -> Result<(), Error<'s>> {
 		match self {
 			Expr::Temp(temp) => if temp != slot {
 				state.emit(Op::Copy(slot, temp), lexer.src_index())
@@ -107,14 +110,14 @@ impl<'s> Expr<'s> {
 	}
 }
 
-pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr<'s>, Error<'s>> {
+pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr<'s>, Error<'s>> {
 	// let slots_used = state.slots_used();
 	let expr = pratt::parse_expr(head, lexer, scope, state, 0)?;
-	// state.set_slot_use(slots_used);
+	// state.set_slots_used(slots_used);
 	Ok(expr)
 }
 
-pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
+pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
 	assert_eq!(head, Token::BraceOpen);
 
 	let tab_slot = state.reserve_slot();

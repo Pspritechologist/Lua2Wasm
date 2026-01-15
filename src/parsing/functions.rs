@@ -1,5 +1,5 @@
 use crate::{prelude::BStr, debug::{DebugInfo, SrcMap}};
-use super::{debug::InfoCollector, scopes::{RootScope, ParseState}, LexerExt, Error, Op, expect_tok};
+use super::{debug::InfoCollector, scopes::{RootScope, ParseScope}, LexerExt, Error, Op, expect_tok};
 use luant_lexer::{Lexer, Token};
 
 #[derive(Debug)]
@@ -86,7 +86,7 @@ impl<'a, 's> FuncState<'a, 's> {
 	}
 }
 	
-pub fn parse_function<'s>(lexer: &mut Lexer<'s>, scope: impl ParseState<'s>, state: &mut FuncState<'_, 's>) -> Result<ParsedFunction, Error<'s>> {
+pub fn parse_function<'s>(lexer: &mut Lexer<'s>, scope: impl ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<ParsedFunction, Error<'s>> {
 	let span = lexer.src_index();
 
 	let name = match lexer.next_must()? {

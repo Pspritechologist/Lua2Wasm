@@ -7,6 +7,11 @@ impl Num {
 	pub fn new(value: Inner) -> Self {
 		Self(value)
 	}
+
+	pub fn to_str(self, state: &mut super::State) -> super::LString {
+		//TODO: Seems a little silly to use a trim here, but so be it :P
+		super::LString::new(state, zmij::Buffer::new().format_finite(self.val()).trim_suffix(".0"))
+	}
 }
 
 macro_rules! int_impl {

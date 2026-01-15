@@ -1,11 +1,11 @@
 use crate::parsing::LexerExt;
 use crate::types::Num;
-use super::{Error, ParseState, Op, IdentKey, expect_tok};
+use super::{Error, ParseScope, Op, IdentKey, expect_tok};
 use super::{Expr, Const, FuncState, parse_table_init};
 use super::postfix_ops::{CallType, IndexType};
 use luant_lexer::{Lexer, Token};
 
-pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, prec: u8) -> Result<Expr<'s>, Error<'s>> {
+pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, prec: u8) -> Result<Expr<'s>, Error<'s>> {
 	let expr = match PrefixOp::from_token(head) {
 		// Handle prefix operators.
 		Some(prefix_op) => prefix_op.parse_prefix(lexer, scope, state)?,
@@ -56,7 +56,7 @@ enum InfixOp<'s> {
 	Index(IndexType),
 }
 impl<'s> InfixOp<'s> {
-	fn parse_infix(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>, left: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
+	fn parse_infix(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, left: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
 		let mut std_infix = |make_op: fn(u8, u8, u8) -> Op| {
 			let span = lexer.src_index();
 
@@ -219,7 +219,7 @@ enum PrefixOp {
 	Neg, BitNot, Len, Not,
 }
 impl PrefixOp {
-	fn parse_prefix<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseState<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr<'s>, Error<'s>> {
+	fn parse_prefix<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr<'s>, Error<'s>> {
 		let span = lexer.src_index();
 
 		let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;

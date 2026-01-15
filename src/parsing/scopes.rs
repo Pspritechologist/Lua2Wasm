@@ -6,19 +6,19 @@ use slotmap::SparseSecondaryMap;
 /// This trait may be implemented separately to represent
 /// scopes, functions, etc.
 #[auto_impl::auto_impl(&mut)]
-pub trait ParseState<'s> {
+pub trait ParseScope<'s> {
 	fn new_label(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, label: IdentKey, pos: usize) -> Result<(), Error<'s>> { self.parent().new_label(lexer, state, label, pos) }
 	fn find_label(&mut self, label: IdentKey, pos: usize) -> usize { self.parent().find_label(label, pos) }
 	fn label_exists(&mut self, label: IdentKey) -> bool { self.parent().label_exists(label) }
 	fn merge_missing_labels(&mut self, other: &mut Vec<(IdentKey, usize)>) { self.parent().merge_missing_labels(other) }
-	fn emit_break(&mut self) -> Result<(), Error<'s>> { self.parent().emit_break() }
-	fn emit_continue(&mut self) -> Result<(), Error<'s>> { self.parent().emit_continue() }
+	fn emit_break(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> { self.parent().emit_break(state, span) }
+	fn emit_continue(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> { self.parent().emit_continue(state, span) }
 
 	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().new_local(lexer, state, name) }
 	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().get_local(lexer, name) }
 	fn local_count(&mut self) -> u8 { self.parent().local_count() }
 
-	fn parent(&'_ mut self) -> &'_ mut dyn ParseState<'s>;
+	fn parent(&'_ mut self) -> &'_ mut dyn ParseScope<'s>;
 }
 
 /// The root parsing scope.\
@@ -45,8 +45,8 @@ impl<'s> RootScope {
 	}
 }
 
-impl<'s> ParseState<'s> for RootScope {
-	fn parent(&mut self) -> &mut dyn ParseState<'s> { unreachable!() }
+impl<'s> ParseScope<'s> for RootScope {
+	fn parent(&mut self) -> &mut dyn ParseScope<'s> { unreachable!() }
 
 	fn new_label(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, label: IdentKey, label_pos: usize) -> Result<(), Error<'s>> {
 		if self.label_exists(label) {
@@ -81,10 +81,10 @@ impl<'s> ParseState<'s> for RootScope {
 		self.missing_labels.append(other);
 	}
 
-	fn emit_break(&mut self) -> Result<(), Error<'s>> {
+	fn emit_break(&mut self, _state: &mut FuncState<'_, 's>, _span: usize) -> Result<(), Error<'s>> {
 		Err("Break statement not within a loop".into())
 	}
-	fn emit_continue(&mut self) -> Result<(), Error<'s>> {
+	fn emit_continue(&mut self, _state: &mut FuncState<'_, 's>, _span: usize) -> Result<(), Error<'s>> {
 		Err("Continue statement not within a loop".into())
 	}
 
@@ -113,7 +113,7 @@ impl<'s> ParseState<'s> for RootScope {
 /// A basic state-extension that layers locals and labels on top
 /// of an existing state. Used for blocks such as `do` or `if`.
 #[derive(Debug, Default)]
-pub struct VariableScope<'s, P: ParseState<'s>> {
+pub struct VariableScope<'s, P: ParseScope<'s>> {
 	parent: P,
 	locals: SparseSecondaryMap<IdentKey, u8>,
 	local_count: u8,
@@ -121,7 +121,7 @@ pub struct VariableScope<'s, P: ParseState<'s>> {
 	missing_labels: Vec<(IdentKey, usize)>,
 	pd: std::marker::PhantomData<&'s ()>,
 }
-impl<'s, P: ParseState<'s>> VariableScope<'s, P> {
+impl<'s, P: ParseScope<'s>> VariableScope<'s, P> {
 	pub fn new(parent: P) -> Self {
 		Self {
 			parent,
@@ -143,13 +143,13 @@ impl<'s, P: ParseState<'s>> VariableScope<'s, P> {
 		parent
 	}
 }
-impl<'s, P: ParseState<'s>> Drop for VariableScope<'s, P> {
+impl<'s, P: ParseScope<'s>> Drop for VariableScope<'s, P> {
 	fn drop(&mut self) {
 		self.parent.merge_missing_labels(&mut self.missing_labels);
 	}
 }
-impl<'s, P: ParseState<'s>> ParseState<'s> for VariableScope<'s, P> {
-	fn parent(&mut self) -> &mut dyn ParseState<'s> { &mut self.parent }
+impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
+	fn parent(&mut self) -> &mut dyn ParseScope<'s> { &mut self.parent }
 	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
 		if self.locals.contains_key(name) {
 			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
