@@ -106,13 +106,15 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, scope: impl ParseScope<'s>, sta
 	expect_tok!(lexer, Token::ParenClose)?;
 
 	let mut state = FuncState::new(state.constants);
-	let mut root_scope = RootScope::default();
+	let mut root_scope = RootScope::new_root();
 
 	loop {
 		let tok = lexer.next_must()?;
 		if tok == Token::End { break; }
 		super::parse_stmt(tok, lexer, &mut root_scope, &mut state)?;
 	}
+
+	root_scope.finalize(&mut state, lexer)?;
 
 	let parsed = ParsedFunction {
 		operations: state.operations.into_boxed_slice(),

@@ -38,7 +38,7 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 	let mut constants = ConstantMap::default();
 	let mut state = functions::FuncState::new(&mut constants);
 	let mut lexer = luant_lexer::lexer(src.bytes());
-	let mut root_scope = RootScope::default();
+	let mut root_scope = RootScope::new_root();
 
 	//TODO: Temp printing.
 	let print = lexer.get_ident("print");
@@ -58,7 +58,7 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 		format!("Error at {l}:{c}: {e}")
 	})?;
 
-	root_scope.finalize(&lexer)?;
+	root_scope.finalize(&mut state, &lexer)?;
 
 	let (ops, src_map, used_regs) = state.into_inner();
 
@@ -233,6 +233,8 @@ fn parse_do_block<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, sta
 		parse_stmt(tok, lexer, &mut scope, state)?;
 	}
 
+	scope.finalize_root();
+
 	Ok(())
 }
 
@@ -248,7 +250,7 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 
 		expect_tok!(lexer, Token::Then)?;
 
-		let mut if_state = VariableScope::new(&mut *outer_scope);
+		let mut if_scope = VariableScope::new(&mut *outer_scope);
 
 		let end_tok = loop {
 			let tok = lexer.next_must()?;
@@ -256,7 +258,7 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 				break tok;
 			}
 
-			parse_stmt(tok, lexer, &mut if_state, state)?;
+			parse_stmt(tok, lexer, &mut if_scope, state)?;
 		};
 
 		if matches!(end_tok, Token::Else | Token::ElseIf) {
@@ -267,7 +269,7 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 		let end_pos = state.ops().len();
 		state.ops_mut()[next_branch_jump_pos] = Op::goto(end_pos);
 
-		let outer_scope = if_state.into_inner();
+		let outer_scope = if_scope.finalize_root();
 
 		match end_tok {
 			Token::Else => {
@@ -275,6 +277,7 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 				loop {
 					let tok = lexer.next_must()?;
 					if tok == Token::End {
+						else_scope.finalize_root();
 						break 'outer;
 					}
 

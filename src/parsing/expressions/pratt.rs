@@ -106,6 +106,7 @@ impl<'s> InfixOp<'s> {
 			InfixOp::Shr => std_infix(Op::BitShR),
 			InfixOp::Call(call) => call.parse_call_args(lexer, scope, state, left)?.handle_call(lexer, scope, state, 1),
 			InfixOp::Index(index) => index.parse_index(lexer, scope, state)?.handle_index(lexer, scope, state, left),
+			//TODO: Fold consts here.
 			InfixOp::And => {
 				let dst = left.to_temp(lexer, scope, state)?;
 

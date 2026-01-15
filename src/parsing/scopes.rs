@@ -24,61 +24,25 @@ pub trait ParseScope<'s> {
 /// The root parsing scope.\
 /// All methods on [`ParseState`] must be implemented here as
 /// attempting to call `parent()` will panic.
-#[derive(Debug, Default, Clone)]
-pub struct RootScope {
-	locals: SparseSecondaryMap<IdentKey, u8>,
-	local_count: u8,
-	labels: SparseSecondaryMap<IdentKey, usize>,
-	missing_labels: Vec<(IdentKey, usize)>,
-}
-
-impl<'s> RootScope {
-	/// Checks that no labels were left unresolved and returns the completed bytecode.
-	pub fn finalize(mut self, lexer: &Lexer<'s>) -> Result<(), Error<'s>> {
-		let missing_labels = std::mem::take(&mut self.missing_labels);
-		// Attempt to resolve all missing labels.
-		if let Some((label, _)) = missing_labels.first() {
-			return Err(format!("Undefined label '{}'", lexer.resolve_ident(*label)).into());
-		}
-
-		Ok(())
+#[derive(Debug, Clone)]
+pub struct RootScope(());
+impl RootScope {
+	pub fn new_root<'s>() -> VariableScope<'s, Self> {
+		VariableScope::new(Self(()))
 	}
 }
 
 impl<'s> ParseScope<'s> for RootScope {
 	fn parent(&mut self) -> &mut dyn ParseScope<'s> { unreachable!() }
 
-	fn new_label(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, label: IdentKey, label_pos: usize) -> Result<(), Error<'s>> {
-		if self.label_exists(label) {
-			return Err(format!("Label '{}' already defined", lexer.resolve_ident(label)).into());
-		}
-		self.labels.insert(label, label_pos);
-
-		let mut missing_labels = std::mem::take(&mut self.missing_labels);
-		missing_labels.retain(|(missing, op_pos)| {
-			if *missing == label {
-				state.ops_mut()[label_pos] = Op::goto(*op_pos);
-				false
-			} else { true }
-		});
-		self.missing_labels = missing_labels;
-
-		Ok(())
+	fn new_label(&mut self, _lexer: &Lexer<'s>, _state: &mut FuncState<'_, 's>, _label: IdentKey, _label_pos: usize) -> Result<(), Error<'s>> {
+		unreachable!()
 	}
-	fn find_label(&mut self, label: IdentKey, pos: usize) -> usize {
-		if let Some(&pos) = self.labels.get(label) {
-			return pos;
-		}
+	fn find_label(&mut self, _label: IdentKey, _pos: usize) -> usize { unreachable!() }
+	fn label_exists(&mut self, _label: IdentKey) -> bool { false }
 
-		// Add to the list to fill in at a later date.
-		self.missing_labels.push((label, pos));
-		0
-	}
-	fn label_exists(&mut self, label: IdentKey) -> bool {
-		self.labels.contains_key(label)
-	}
-	fn merge_missing_labels(&mut self,other: &mut Vec<(IdentKey,usize)>) {
-		self.missing_labels.append(other);
+	fn merge_missing_labels(&mut self, _other: &mut Vec<(IdentKey, usize)>) {
+		unreachable!()
 	}
 
 	fn emit_break(&mut self, _state: &mut FuncState<'_, 's>, _span: usize) -> Result<(), Error<'s>> {
@@ -88,25 +52,19 @@ impl<'s> ParseScope<'s> for RootScope {
 		Err("Continue statement not within a loop".into())
 	}
 
-	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
-		if self.locals.contains_key(name) {
-			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
-		}
-		let reg = self.local_count();
-		self.locals.insert(name, reg);
-		self.local_count += 1;
-
-		if state.slots_used() <= reg {
-			state.reserve_slot();
-		}
-
-		Ok(reg)
+	fn new_local(&mut self, _lexer: &Lexer<'s>, _state: &mut FuncState<'_, 's>, _name: IdentKey) -> Result<u8, Error<'s>> {
+		unreachable!()
 	}
 	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s> > {
-		self.locals.get(name).copied().ok_or_else(|| format!("Local variable `{}` not found", lexer.resolve_ident(name)).into())
+		Err(format!("Local variable `{}` not found", lexer.resolve_ident(name)).into())
 	}
-	fn local_count(&mut self) -> u8 {
-		self.local_count
+	fn local_count(&mut self) -> u8 { 0 }
+}
+
+impl<'s> VariableScope<'s, RootScope> {
+	pub fn finalize(self, state: &mut FuncState<'_, 's>, lexer: &Lexer<'s>) -> Result<(), Error<'s>> {
+		let root = self.into_inner(&mut *state, lexer)?;
+		Ok(())
 	}
 }
 
@@ -133,21 +91,26 @@ impl<'s, P: ParseScope<'s>> VariableScope<'s, P> {
 		}
 	}
 
-	pub fn into_inner(mut self) -> P {
-		let mut missing_labels = std::mem::take(&mut self.missing_labels);
-		let mut parent = unsafe { std::ptr::read(&self.parent) };
-		// Prevent Drop from running since we've moved out the important fields
-		std::mem::forget(self);
+	pub fn finalize_root(self) -> P {
+		let Self { mut parent, mut missing_labels, .. } = self;
+		
 		// We need to manually call merge_missing_labels since Drop won't run
 		parent.merge_missing_labels(&mut missing_labels);
 		parent
 	}
-}
-impl<'s, P: ParseScope<'s>> Drop for VariableScope<'s, P> {
-	fn drop(&mut self) {
-		self.parent.merge_missing_labels(&mut self.missing_labels);
+
+	pub fn into_inner(self, _state: &mut FuncState<'_, 's>, lexer: &Lexer<'s>) -> Result<P, Error<'s>> {
+		let Self { parent, missing_labels, .. } = self;
+
+		// Attempt to resolve all missing labels.
+		if let Some((label, _)) = missing_labels.first() {
+			return Err(format!("Undefined label '{}'", lexer.resolve_ident(*label)).into());
+		}
+
+		Ok(parent)
 	}
 }
+
 impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 	fn parent(&mut self) -> &mut dyn ParseScope<'s> { &mut self.parent }
 	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
