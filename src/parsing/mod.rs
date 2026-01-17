@@ -143,14 +143,10 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 				let first_ident = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
 				let mut rest_idents = Vec::new();
 				
-				match lexer.peek()? {
-					Some(Token::Assign) => (),
-					Some(Token::Comma) => {
-						while lexer.next_if(Token::Comma)?.is_some() {
-							rest_idents.push(expect_tok!(lexer, Token::Identifier(ident) => ident)?);
-						}
-					},
-					_ => Err("Expected '=', ',' or 'function'")?,
+				if lexer.peek()? == Some(Token::Comma) {
+					while lexer.next_if(Token::Comma)?.is_some() {
+						rest_idents.push(expect_tok!(lexer, Token::Identifier(ident) => ident)?);
+					}
 				}
 
 				if lexer.next_if(Token::Assign)?.is_none() {

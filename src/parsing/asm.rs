@@ -135,60 +135,70 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 
 pub fn fmt_asm(mut buf: impl std::fmt::Write, parsed: &super::Parsed) -> Result<(), std::fmt::Error> {
 	let super::Parsed {
-		parsed_func: super::functions::ParsedFunction { operations, .. },
+		parsed_func,
+		closures,
 		numbers,
 		strings,
 		..
 	} = parsed;
 
-	// Print all operations
-	for (idx, op) in operations.iter().enumerate() {
-		match op {
-			Operation::LoadNil(dst, cnt) => writeln!(buf, "loadnull {dst} {cnt}")?,
-			Operation::LoadBool(dst, val) => writeln!(buf, "loadbool {dst} {val}")?,
-			Operation::LoadNum(dst, num_idx) => {
-				let num = numbers.get(*num_idx as usize).unwrap_or(&0.0);
-				writeln!(buf, "loadnum {dst} {num}")?
-			},
-			Operation::LoadStr(dst, str_idx) => writeln!(buf, "loadstr {dst} {str_idx}")?,
-			Operation::LoadTab(dst) => writeln!(buf, "loadtab {dst}")?,
-			Operation::LoadClosure(dst, idx) => writeln!(buf, "loadclosure {dst} {idx}")?,
-			Operation::Set(tab, key, val) => writeln!(buf, "set {tab} {key} {val}")?,
-			Operation::Get(dst, tab, key) => writeln!(buf, "get {dst} {tab} {key}")?,
-			Operation::Copy(dst, src) => writeln!(buf, "copy {dst} {src}")?,
-			Operation::Add(dst, a, b) => writeln!(buf, "add {dst} {a} {b}")?,
-			Operation::Sub(dst, a, b) => writeln!(buf, "sub {dst} {a} {b}")?,
-			Operation::Mul(dst, a, b) => writeln!(buf, "mul {dst} {a} {b}")?,
-			Operation::Div(dst, a, b) => writeln!(buf, "div {dst} {a} {b}")?,
-			Operation::Mod(dst, a, b) => writeln!(buf, "mod {dst} {a} {b}")?,
-			Operation::Pow(dst, a, b) => writeln!(buf, "pow {dst} {a} {b}")?,
-			Operation::Neg(dst, src) => writeln!(buf, "neg {dst} {src}")?,
-			Operation::Eq(dst, a, b) => writeln!(buf, "eq {dst} {a} {b}")?,
-			Operation::Neq(dst, a, b) => writeln!(buf, "neq {dst} {a} {b}")?,
-			Operation::Lt(dst, a, b) => writeln!(buf, "lt {dst} {a} {b}")?,
-			Operation::Lte(dst, a, b) => writeln!(buf, "lte {dst} {a} {b}")?,
-			Operation::Gt(dst, a, b) => writeln!(buf, "gt {dst} {a} {b}")?,
-			Operation::Gte(dst, a, b) => writeln!(buf, "gte {dst} {a} {b}")?,
-			Operation::Not(dst, src) => writeln!(buf, "not {dst} {src}")?,
-			Operation::BitAnd(dst, a, b) => writeln!(buf, "band {dst} {a} {b}")?,
-			Operation::BitOr(dst, a, b) => writeln!(buf, "bor {dst} {a} {b}")?,
-			Operation::BitXor(dst, a, b) => writeln!(buf, "bxor {dst} {a} {b}")?,
-			Operation::BitShL(dst, a, b) => writeln!(buf, "shl {dst} {a} {b}")?,
-			Operation::BitShR(dst, a, b) => writeln!(buf, "shr {dst} {a} {b}")?,
-			Operation::BitNot(dst, src) => writeln!(buf, "bnot {dst} {src}")?,
-			Operation::Concat(dst, a, b) => writeln!(buf, "concat {dst} {a} {b}")?,
-			Operation::Len(dst, src) => writeln!(buf, "len {dst} {src}")?,
-			Operation::Call(dst, func, arg_cnt) => writeln!(buf, "call {dst} {func} {arg_cnt}")?,
-			Operation::Ret(dst, ret_cnt) => writeln!(buf, "ret {dst} {ret_cnt}")?,
-			Operation::SkpIf(cond) => writeln!(buf, "skpif {cond}")?,
-			Operation::SkpIfNot(cond) => writeln!(buf, "skpifnot {cond}")?,
-			Operation::GoTo(p32, p8) => {
-				// Convert absolute position back to relative offset
-				let position = Operation::decode_goto(*p32, *p8);
-				let offset = position as isize - idx as isize;
-				writeln!(buf, "goto {offset}")?
-			},
+	for closure in std::iter::once(parsed_func).chain(closures) {
+		let name = closure.debug.as_ref()
+			.and_then(|d| d.func_name())
+			.unwrap_or("<unnamed>");
+		writeln!(buf, "{name}:")?;
+
+		// Print all operations
+		for (idx, op) in closure.operations.iter().enumerate() {
+			match op {
+				Operation::LoadNil(dst, cnt) => writeln!(buf, "\tloadnull {dst} {cnt}")?,
+				Operation::LoadBool(dst, val) => writeln!(buf, "\tloadbool {dst} {val}")?,
+				Operation::LoadNum(dst, num_idx) => {
+					let num = numbers.get(*num_idx as usize).unwrap_or(&0.0);
+					writeln!(buf, "\tloadnum {dst} {num}")?
+				},
+				Operation::LoadStr(dst, str_idx) => writeln!(buf, "\tloadstr {dst} {str_idx}")?,
+				Operation::LoadTab(dst) => writeln!(buf, "\tloadtab {dst}")?,
+				Operation::LoadClosure(dst, idx) => writeln!(buf, "\tloadclosure {dst} {idx}")?,
+				Operation::Set(tab, key, val) => writeln!(buf, "\tset {tab} {key} {val}")?,
+				Operation::Get(dst, tab, key) => writeln!(buf, "\tget {dst} {tab} {key}")?,
+				Operation::Copy(dst, src) => writeln!(buf, "\tcopy {dst} {src}")?,
+				Operation::Add(dst, a, b) => writeln!(buf, "\tadd {dst} {a} {b}")?,
+				Operation::Sub(dst, a, b) => writeln!(buf, "\tsub {dst} {a} {b}")?,
+				Operation::Mul(dst, a, b) => writeln!(buf, "\tmul {dst} {a} {b}")?,
+				Operation::Div(dst, a, b) => writeln!(buf, "\tdiv {dst} {a} {b}")?,
+				Operation::Mod(dst, a, b) => writeln!(buf, "\tmod {dst} {a} {b}")?,
+				Operation::Pow(dst, a, b) => writeln!(buf, "\tpow {dst} {a} {b}")?,
+				Operation::Neg(dst, src) => writeln!(buf, "\tneg {dst} {src}")?,
+				Operation::Eq(dst, a, b) => writeln!(buf, "\teq {dst} {a} {b}")?,
+				Operation::Neq(dst, a, b) => writeln!(buf, "\tneq {dst} {a} {b}")?,
+				Operation::Lt(dst, a, b) => writeln!(buf, "\tlt {dst} {a} {b}")?,
+				Operation::Lte(dst, a, b) => writeln!(buf, "\tlte {dst} {a} {b}")?,
+				Operation::Gt(dst, a, b) => writeln!(buf, "\tgt {dst} {a} {b}")?,
+				Operation::Gte(dst, a, b) => writeln!(buf, "\tgte {dst} {a} {b}")?,
+				Operation::Not(dst, src) => writeln!(buf, "\tnot {dst} {src}")?,
+				Operation::BitAnd(dst, a, b) => writeln!(buf, "\tband {dst} {a} {b}")?,
+				Operation::BitOr(dst, a, b) => writeln!(buf, "\tbor {dst} {a} {b}")?,
+				Operation::BitXor(dst, a, b) => writeln!(buf, "\tbxor {dst} {a} {b}")?,
+				Operation::BitShL(dst, a, b) => writeln!(buf, "\tshl {dst} {a} {b}")?,
+				Operation::BitShR(dst, a, b) => writeln!(buf, "\tshr {dst} {a} {b}")?,
+				Operation::BitNot(dst, src) => writeln!(buf, "\tbnot {dst} {src}")?,
+				Operation::Concat(dst, a, b) => writeln!(buf, "\tconcat {dst} {a} {b}")?,
+				Operation::Len(dst, src) => writeln!(buf, "\tlen {dst} {src}")?,
+				Operation::Call(dst, func, arg_cnt) => writeln!(buf, "\tcall {dst} {func} {arg_cnt}")?,
+				Operation::Ret(dst, ret_cnt) => writeln!(buf, "\tret {dst} {ret_cnt}")?,
+				Operation::SkpIf(cond) => writeln!(buf, "\tskpif {cond}")?,
+				Operation::SkpIfNot(cond) => writeln!(buf, "\tskpifnot {cond}")?,
+				Operation::GoTo(p32, p8) => {
+					// Convert absolute position back to relative offset
+					let position = Operation::decode_goto(*p32, *p8);
+					let offset = position as isize - idx as isize;
+					writeln!(buf, "\tgoto {offset}")?
+				},
+			}
 		}
+
+		writeln!(buf)?;
 	}
 
 	// Print the data separator

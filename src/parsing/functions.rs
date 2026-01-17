@@ -140,6 +140,11 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, scope: impl ParseScope<'s>, sta
 		super::parse_stmt(tok, lexer, &mut closure_scope, &mut closure_state)?;
 	}
 
+	// Ensure the function ends with a return.
+	if !matches!(closure_state.ops().last(), Some(Op::Ret(..))) {
+		closure_state.emit(Op::Ret(0, 0), lexer.src_index());
+	}
+
 	closure_scope.finalize(&mut closure_state, lexer)?;
 
 	let debug = crate::debug::DebugInfo::new_closure(

@@ -96,7 +96,7 @@ struct Frame {
 	pc: usize,
 	stack_base: usize,
 	call_proto: usize,
-	expected_returns: u8,
+	expected_to_return: u8,
 }
 
 impl Frame {
@@ -105,7 +105,7 @@ impl Frame {
 			pc: 0,
 			stack_base: 0,
 			call_proto: 0,
-			expected_returns: 0,
+			expected_to_return: 0,
 		}
 	}
 
@@ -114,7 +114,7 @@ impl Frame {
 			pc: 0,
 			stack_base,
 			call_proto,
-			expected_returns,
+			expected_to_return: expected_returns,
 		}
 	}
 }
@@ -548,12 +548,12 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 
 				frame = frames.last_mut().unwrap();
 
-				if frame.expected_returns > 0 {
-					let expected_returns = frame.expected_returns as usize;
+				if last_frame.expected_to_return > 0 {
+					let expected_returns = last_frame.expected_to_return as usize;
 					let actual_returns = ret_count.min(expected_returns);
 
-					// We overwrite the function itself, followed by its args, for return values.
-					let dst_start = last_frame.stack_base - 1;
+					// Function returns are written the function's arguments.
+					let dst_start = last_frame.stack_base;
 					let dst_end = dst_start + actual_returns;
 					let src_start = ret_start + last_frame.stack_base;
 					let src_end = src_start + actual_returns;
