@@ -16,8 +16,9 @@ pub struct FuncState<'a, 's> {
 #[derive(Debug, Clone)]
 pub struct ParsedFunction {
 	pub operations: Box<[Op]>,
-	pub debug: DebugInfo,
+	pub debug: Option<DebugInfo>,
 	pub frame_size: u8,
+	pub param_count: u8,
 }
 
 impl<'a, 's> FuncState<'a, 's> {
@@ -66,6 +67,10 @@ impl<'a, 's> FuncState<'a, 's> {
 		self.max_slot_use = self.max_slot_use.max(self.cur_slot_use);
 	}
 	
+	pub fn update_max_slots_used(&mut self, used: u8) {
+		self.max_slot_use = self.max_slot_use.max(used);
+	}
+	
 	pub fn number_idx(&mut self, n: f64) -> u16 {
 		if let Some(idx) = self.constants.numbers.iter().position(|&num| num == n) {
 			idx
@@ -90,7 +95,9 @@ impl<'a, 's> FuncState<'a, 's> {
 	pub fn push_closure(&mut self, func: ParsedFunction) -> u16 {
 		let idx = self.constants.closures.len();
 		self.constants.closures.push(func);
-		idx.try_into().expect("Too many closures :(")
+		// This is + 1 because 0 is the 'main' function and unnameable.
+		//TODO: This assumes the main function will always be at index 0. Is that fine?
+		(idx + 1).try_into().expect("Too many closures :(")
 	}
 }
 
@@ -98,25 +105,21 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, scope: impl ParseScope<'s>, sta
 	let mut closure_state = FuncState::new(state.constants);
 	let mut closure_scope = RootScope::new_root();
 
-	//TODO: Temp printing.
-	let print = lexer.get_ident("print");
-	assert_eq!(closure_scope.new_local(lexer, &mut closure_state, print)?, 0);
-	let libs = lexer.get_ident("lib");
-	assert_eq!(closure_scope.new_local(lexer, &mut closure_state, libs)?, 1);
-
 	expect_tok!(lexer, Token::ParenOpen)?;
 
-	let params = 0u8;
+	let mut params = 0u8;
 
 	let mut tok = lexer.next_must()?;
 	loop {
 		let ident = match tok {
 			Token::Identifier(ident) => ident,
+			Token::VarArgs => todo!(),
+			Token::ParenClose => break,
 			tok => Err(format!("Expected parameter name, found {tok:?}"))?,
 		};
 
 		closure_scope.new_local(lexer, &mut closure_state, ident)?;
-		params.checked_add(1).ok_or("Too many function parameters")?;
+		params = params.checked_add(1).ok_or("Too many function parameters")?;
 
 		match lexer.next_must()? {
 			Token::Comma => tok = lexer.next_must()?,
@@ -124,6 +127,12 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, scope: impl ParseScope<'s>, sta
 			tok => Err(format!("Expected ',' or ')', found {tok:?}"))?,
 		}
 	}
+
+	//TODO: Temp printing.
+	let print = lexer.get_ident("print");
+	assert_eq!(closure_scope.new_local(lexer, &mut closure_state, print)?, params);
+	let libs = lexer.get_ident("lib");
+	assert_eq!(closure_scope.new_local(lexer, &mut closure_state, libs)?, params + 1);
 
 	loop {
 		let tok = lexer.next_must()?;
@@ -140,8 +149,9 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, scope: impl ParseScope<'s>, sta
 	);
 
 	let parsed = ParsedFunction {
+		param_count: params,
 		operations: closure_state.operations.into_boxed_slice(),
-		debug,
+		debug: Some(debug),
 		frame_size: closure_state.max_slot_use,
 	};
 

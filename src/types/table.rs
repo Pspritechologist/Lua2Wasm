@@ -15,6 +15,7 @@ fn hash_impl(value: &Value) -> u64 {
 		Value::Str(gc) => gc.get_hash(),
 		Value::Bool(b) => if *b { 1 } else { 0 },
 		Value::Table(tab) => Gc::as_ptr(&tab.inner).addr() as u64,
+		Value::Closure(c) => c.proto_idx as u64, //TODO: Hmmm
 		Value::Func(f) => (*f as *const ()).addr() as u64,
 	}
 }

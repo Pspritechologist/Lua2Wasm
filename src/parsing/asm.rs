@@ -93,7 +93,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 			"concat" => simple_op!(Concat),
 			"len" => simple_op!(Len u8, u8),
 			"call" => simple_op!(Call u8, u8, u8),
-			// "ret" => simple_op!(Ret u8, u8),
+			"ret" => simple_op!(Ret u8, u8),
 			"skpif" => {
 				let cond = args!(u8);
 				max_reg = max_reg.max(cond);
@@ -118,25 +118,28 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 		strings.push(bstr::BStr::new(line));
 	}
 
-	super::Parsed {
+	let parsed_func = super::functions::ParsedFunction {
 		operations: ops.into_boxed_slice(),
+		param_count: 0,
+		frame_size: max_reg + 1,
+		debug: None,
+	};
+
+	super::Parsed {
 		numbers: numbers.into_boxed_slice(),
 		strings: strings.into_boxed_slice(),
 		closures: Default::default(),
-		debug: None,
-		used_regs: max_reg + 1,
+		parsed_func,
 	}
 }
 
-pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Result<(), std::fmt::Error> {
+pub fn fmt_asm(mut buf: impl std::fmt::Write, parsed: &super::Parsed) -> Result<(), std::fmt::Error> {
 	let super::Parsed {
-		operations,
+		parsed_func: super::functions::ParsedFunction { operations, .. },
 		numbers,
 		strings,
-		closures: _,
-		used_regs: _,
-		debug: _,
-	} = bytecode;
+		..
+	} = parsed;
 
 	// Print all operations
 	for (idx, op) in operations.iter().enumerate() {
@@ -176,7 +179,7 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Resul
 			Operation::Concat(dst, a, b) => writeln!(buf, "concat {dst} {a} {b}")?,
 			Operation::Len(dst, src) => writeln!(buf, "len {dst} {src}")?,
 			Operation::Call(dst, func, arg_cnt) => writeln!(buf, "call {dst} {func} {arg_cnt}")?,
-			// Operation::Ret(dst, ret_cnt) => writeln!(buf, "ret {dst} {ret_cnt}")?,
+			Operation::Ret(dst, ret_cnt) => writeln!(buf, "ret {dst} {ret_cnt}")?,
 			Operation::SkpIf(cond) => writeln!(buf, "skpif {cond}")?,
 			Operation::SkpIfNot(cond) => writeln!(buf, "skpifnot {cond}")?,
 			Operation::GoTo(p32, p8) => {

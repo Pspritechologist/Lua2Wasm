@@ -6,6 +6,7 @@ use super::postfix_ops::{CallType, IndexType};
 use luant_lexer::{Lexer, Token};
 
 pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, prec: u8) -> Result<Expr<'s>, Error<'s>> {
+	// If the matches in this list are modified, be sure to update `super::can_start_expr` as well.
 	let expr = match PrefixOp::from_token(head) {
 		// Handle prefix operators.
 		Some(prefix_op) => prefix_op.parse_prefix(lexer, scope, state)?,
@@ -242,6 +243,7 @@ impl PrefixOp {
 	}
 
 	fn from_token(tok: Token) -> Option<Self> {
+		// If the matches in this list are modified, be sure to update `super::can_start_expr` as well.
 		Some(match tok {
 			Token::Minus => PrefixOp::Neg,
 			Token::BitNot => PrefixOp::BitNot,
@@ -256,6 +258,7 @@ impl PrefixOp {
 		Some(match (self, a) {
 			(PrefixOp::Neg, Number(a)) => Number(Num::new(a.try_neg().ok()?)),
 			(PrefixOp::Not, a) => Bool(!a.is_truthy()),
+			(PrefixOp::Len, String(s)) => Number(Num::from(s.len())),
 			(PrefixOp::BitNot, Number(a)) => Number(Num::try_from((!a.as_i64()?) as f64).ok()?),
 			_ => return None,
 		})

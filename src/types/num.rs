@@ -25,10 +25,25 @@ macro_rules! int_impl {
 				}
 			)* }
 		}
+
+		$(
+			impl From<$t> for Num {
+				fn from(value: $t) -> Self {
+					Self(Inner::new(value as f64))
+				}
+			}
+		)*
 	};
 }
 
 int_impl!(u8, u16, u32, u64, i8, i16, i32, i64, usize, isize);
+
+impl TryFrom<f32> for Num {
+	type Error = real_float::InfiniteError;
+	fn try_from(value: f32) -> Result<Self, Self::Error> {
+		Inner::try_new(value.into()).map(Self)
+	}
+}
 
 impl TryFrom<f64> for Num {
 	type Error = real_float::InfiniteError;

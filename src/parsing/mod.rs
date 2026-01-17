@@ -5,14 +5,14 @@ use functions::FuncState;
 use scopes::{ParseScope, RootScope, VariableScope};
 use expressions::*;
 
-// mod asm;
+mod asm;
 mod functions;
 mod scopes;
 mod expressions;
 mod loops;
 mod debug;
 
-// pub use asm::{parse_asm, fmt_asm};
+pub use asm::{parse_asm, fmt_asm};
 
 #[derive(Debug)]
 pub struct Parsed<'s> {
@@ -67,8 +67,9 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 
 	let parsed_func = functions::ParsedFunction {
 		operations: ops.into_boxed_slice(),
+		param_count: 0,
 		frame_size: used_regs,
-		debug,
+		debug: Some(debug),
 	};
 
 	Ok(Parsed {
@@ -137,6 +138,7 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 				state.emit(Op::LoadClosure(dst, idx), span);
 			} else {
 				//TODO: This uses two Vecs in the worst case and just isn't very shwifty.
+				//TODO: Globals/Upvalues.
 
 				let first_ident = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
 				let mut rest_idents = Vec::new();
@@ -177,10 +179,32 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 				}
 			}
 		},
-		Token::Return => todo!(),
+		Token::Return => {
+			if lexer.peek()?.is_none_or(|tok| !expressions::can_start_expr(tok)) {
+				state.emit(Op::Ret(0, 0), lexer.src_index());
+			} else {
+				let start_reg = scope.local_count();
+
+				let mut ret_count = 0;
+				loop {
+					ret_count += 1;
+					
+					let expr = parse_expr(lexer.next_must()?, lexer, scope, state)?;
+					expr.set_to_slot(lexer, scope, state, start_reg + ret_count - 1)?;
+					
+					if lexer.next_if(Token::Comma)?.is_none() {
+						break;
+					}
+				}
+
+				state.update_max_slots_used(start_reg + ret_count);
+				
+				let ret = Op::Ret(start_reg, ret_count);
+				state.emit(ret, lexer.src_index());
+			}
+		},
 		Token::Do => parse_do_block(lexer, scope, state)?,
 		Token::If => parse_if_statement(lexer, scope, state)?,
-		Token::Else => todo!(),
 		Token::While => loops::parse_while(lexer, scope, state)?,
 		Token::For => todo!(),
 		Token::Break => scope.emit_break(state, lexer.src_index())?,
@@ -224,9 +248,10 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 					
 					place_iter.try_for_each(|place| place.set_expr(lexer, scope, state, Expr::Constant(Const::Nil)))?;
 				},
-				IdentExpr::Call(_) => (),
+				IdentExpr::Call(func_slot) => {
+					func_slot.handle_call(lexer, scope, state, 0)?;
+				},
 			}
-
 		},
 		tok => return Err(format!("Expected statement, found {tok:?}").into()),
 	}

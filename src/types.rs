@@ -3,12 +3,14 @@ use super::Luant;
 mod num;
 mod table;
 mod string;
+mod func;
 mod hasher;
 
 pub use num::Num;
 pub use table::Table;
 pub use string::LString;
 pub use hasher::Hasher;
+pub use func::Closure;
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -16,6 +18,7 @@ pub enum Value {
 	Str(LString),
 	Bool(bool),
 	Table(Table),
+	Closure(func::Closure),
 	Func(fn(args: &[Option<Value>]) -> Result<Vec<Option<Value>>, Box<dyn std::error::Error>>),
 }
 
@@ -64,6 +67,7 @@ unsafe impl<V: dumpster::Visitor> dumpster::TraceWith<V> for Value {
             Value::Str(s) => s.accept(visitor),
             Value::Bool(b) => b.accept(visitor),
             Value::Table(tab) => tab.accept(visitor),
+			Value::Closure(_) => Ok(()),
             Value::Func(_) => Ok(()),
         }
     }
@@ -77,6 +81,7 @@ impl std::fmt::Display for Value {
 				Value::Str(s) => write!(f, "{}", s.as_str()),
 				Value::Bool(b) => write!(f, "{b}"),
 				Value::Table(tab) => write!(f, "Table({:p})", tab.get_ptr()),
+				Value::Closure(_) => write!(f, "Closure(...)"),
 				Value::Func(func) => write!(f, "Func({:p})", *func as *const ()),
 			};
 		}
@@ -102,6 +107,7 @@ impl std::fmt::Display for Value {
 				// }
 					write!(f, "}}")
 			},
+			Value::Closure(_) => write!(f, "Closure(...)"),
 			Value::Func(func) => write!(f, "Func({:p})", *func as *const ()),
 		}
 	}

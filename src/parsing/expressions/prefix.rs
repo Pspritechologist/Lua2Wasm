@@ -1,7 +1,7 @@
 use crate::parsing::LexerExt;
 use super::{Error, ParseScope, IdentKey, Op, expect_tok};
 use super::{Expr, FuncState};
-use super::postfix_ops::{CallType, IndexType};
+use super::postfix_ops::{CallType, IndexType, ParsedCall};
 use luant_lexer::{Lexer, Token};
 
 #[derive(Debug, Clone, Copy)]
@@ -37,7 +37,7 @@ impl<'s> PlaceExpr<'s> {
 #[derive(Debug, Clone, Copy)]
 pub enum IdentExpr<'s> {
 	Place(PlaceExpr<'s>),
-	Call(Expr<'s>),
+	Call(ParsedCall),
 }
 
 impl<'s> IdentExpr<'s> {
@@ -64,10 +64,13 @@ impl<'s> IdentExpr<'s> {
 		loop {
 			match next_op {
 				TrailingOp::Call(call_type) => {
-					expr = call_type.parse_call_args(lexer, scope, state, expr)?.handle_call(lexer, scope, state, 1)?;
-					next_op = match lexer.next_if_map(TrailingOp::from_token)? {
-						Some(next_op) => next_op,
-						None => return Ok(IdentExpr::Call(expr)),
+					let parsed_call = call_type.parse_call_args(lexer, scope, state, expr)?;
+					match lexer.next_if_map(TrailingOp::from_token)? {
+						Some(found_op) => {
+							next_op = found_op;
+							expr = parsed_call.handle_call(lexer, scope, state, 1)?;
+						},
+						None => return Ok(IdentExpr::Call(parsed_call)),
 					}
 				},
 				TrailingOp::Index(index_type) => {

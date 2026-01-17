@@ -12,7 +12,9 @@ pub struct ParsedCall {
 impl ParsedCall {
 	pub fn handle_call<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: u8) -> Result<Expr<'s>, Error<'s>> {
 		state.emit(Op::Call(self.func_reg, self.arg_count, ret_count), self.span);
-		Ok(Expr::Temp(self.func_reg))
+		// The first return value is stored over top the first argument.
+		//TODO: Multiple returns.
+		Ok(Expr::Temp(self.func_reg + 1))
 	}
 }
 
@@ -28,17 +30,17 @@ impl<'s> CallType<'s> {
 			CallType::Args => {
 				let mut head = lexer.next_must()?;
 
+				let func_reg = state.reserve_slot();
+				left.set_to_slot(lexer, scope, state, func_reg)?;
+
 				// Special case zero arg calls.
 				if head == Token::ParenClose {
 					return Ok(ParsedCall {
-						func_reg: left.to_slot(lexer, scope, state)?,
+						func_reg,
 						arg_count: 0,
 						span,
 					});
 				}
-
-				let func_reg = state.reserve_slot();
-				left.set_to_slot(lexer, scope, state, func_reg)?;
 
 				let mut arg_count = 0;
 				let initial_slots_used = state.slots_used();

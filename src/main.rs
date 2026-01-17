@@ -57,7 +57,7 @@ enum Operation {
 	Len(u8, u8),
 	// Calling.
 	Call(u8, u8, u8),
-	// Ret(u8, u8),
+	Ret(u8, u8),
 	// Control.
 	GoTo(u32, u8),
 	SkpIf(u8),
@@ -84,17 +84,39 @@ impl Operation {
 
 struct ClosureProto {
 	operations: Box<[Operation]>,
+	param_count: u8,
+	slots_needed: u8,
 	number_offset: usize,
 	string_offset: usize,
 	closure_offset: usize,
-	slots_needed: u8,
 	debug: Option<debug::DebugInfo>,
 }
 
-#[derive(Default)]
 struct Frame {
 	pc: usize,
 	stack_base: usize,
+	call_proto: usize,
+	expected_returns: u8,
+}
+
+impl Frame {
+	pub fn initial() -> Self {
+		Self {
+			pc: 0,
+			stack_base: 0,
+			call_proto: 0,
+			expected_returns: 0,
+		}
+	}
+
+	pub fn new(call_proto: usize, stack_base: usize, expected_returns: u8) -> Self {
+		Self {
+			pc: 0,
+			stack_base,
+			call_proto,
+			expected_returns,
+		}
+	}
 }
 
 fn main() -> std::process::ExitCode {
@@ -112,20 +134,21 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 	// let parsed = parsing::parse_asm(src);
 	let parsed = parsing::parse(src)?;
 	let mut buf = String::new();
-	// parsing::fmt_asm(&mut buf, &parsed)?;
+	parsing::fmt_asm(&mut buf, &parsed)?;
 	std::fs::write("out.asm", buf)?;
 	
 	let parsing::Parsed { parsed_func, numbers, strings, closures } = parsed;
 	let strings = ConstStrings::new(strings);
 
-	let closures: Vec<_> = std::iter::once(parsed_func).chain(closures).map(|closure| {
+	let closures: Vec<_> = std::iter::once(parsed_func).chain(closures).map(|c| {
 		ClosureProto {
-			operations: closure.operations,
+			operations: c.operations,
+			param_count: c.param_count,
 			number_offset: 0,
 			string_offset: 0,
 			closure_offset: 0,
-			slots_needed: closure.frame_size,
-			debug: Some(closure.debug),
+			slots_needed: c.frame_size,
+			debug: c.debug,
 		}
 	}).collect();
 
@@ -138,12 +161,11 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 		..Default::default()
 	});
 
-	let main_func = Closure {
-		luant: luant.clone(),
-		idx: 0,
+	let main_func = types::Closure {
+		proto_idx: 0,
 	};
 
-	let stack = match call_func(&main_func) {
+	let stack = match call_func(&main_func, &luant) {
 		Ok(stack) => stack,
 		Err((op_idx, e)) => {
 			let span = luant.constants.closures[0].debug.as_ref()
@@ -232,24 +254,19 @@ impl Luant {
 	}
 }
 
-struct Closure {
-	luant: Rc<Luant>,
-	idx: usize,
-}
-
-fn call_func(func: &Closure) -> Result<Vec<Option<types::Value>>, (usize, Box<dyn std::error::Error>)> {
+fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<types::Value>>, (usize, Box<dyn std::error::Error>)> {
 	use crate::types::{Value, ToValue, Num};
 
-	let luant = &func.luant;
-	let proto = &luant.constants.closures[func.idx];
+	let luant = &**luant;
+	let proto = &luant.constants.closures[func.proto_idx];
 
-	let mut frames: Vec<Frame> = Vec::from([Frame { pc: 0, stack_base: 0 }]);
+	let mut frames: Vec<Frame> = Vec::from([Frame::initial()]);
 	let mut stack: Vec<Option<Value>> = vec![None; proto.slots_needed.into()];
 
 	let mut frame = frames.last_mut().unwrap();
 	let mut registers = &mut stack[frame.stack_base..];
 
-	let operations = &proto.operations[..];
+	let mut operations = &proto.operations[..];
 
 	//TODO: Temp printing.
 	let print_fn = Some(Value::Func(|args| {
@@ -369,18 +386,25 @@ fn call_func(func: &Closure) -> Result<Vec<Option<types::Value>>, (usize, Box<dy
 			Operation::LoadNil(dst, cnt) => (dst..dst + cnt).for_each(|dst| registers[dst as usize] = None),
 			Operation::LoadBool(dst, val) => registers[dst as usize] = Some(Value::Bool(val)),
 			Operation::LoadNum(dst, idx) => {
-				let num = luant.constants.numbers[idx as usize];
+				let idx = idx as usize + proto.number_offset;
+				let num = luant.constants.numbers[idx];
 				let value = Num::try_from(num).unwrap_or_default().to_value(luant);
 				registers[dst as usize] = Some(value);
 			},
 			Operation::LoadStr(dst, idx) => {
-				let s = luant.constants.strings.get(idx as usize);
+				let idx = idx as usize + proto.string_offset;
+				let s = luant.constants.strings.get(idx);
 				let value = s.to_value(luant);
 				registers[dst as usize] = Some(value);
 			},
 			Operation::LoadTab(dst) => registers[dst as usize] = Some(Value::Table(Default::default())),
 			Operation::LoadClosure(dst, idx) => {
+				let proto_idx = proto.closure_offset + (idx as usize);
+				let closure = types::Closure {
+					proto_idx,
+				};
 
+				registers[dst as usize] = Some(Value::Closure(closure));
 			},
 			Operation::Set(tab, key, val) => {
 				let Some(key) = registers[key as usize].clone() else {
@@ -468,19 +492,89 @@ fn call_func(func: &Closure) -> Result<Vec<Option<types::Value>>, (usize, Box<dy
 			},
 			Operation::Call(func_reg, arg_count, ret_count) => {
 				let func = registers[func_reg as usize].clone();
-				let args_start = func_reg as usize + 1;
-				let args_end = args_start + arg_count as usize;
-				let args = &registers[args_start..args_end];
 
-				let rets = match func {
-					Some(Value::Func(f)) => f(args).map_err(|e| (frame.pc, e))?,
+				match func {
+					Some(Value::Func(f)) => {
+						// Native function pointer, simple.
+						let args_start = func_reg as usize + 1;
+						let args_end = args_start + arg_count as usize;
+						let args = &registers[args_start..args_end];
+
+						let rets = f(args).map_err(|e| (frame.pc, e))?;
+						for (i, ret) in rets.into_iter().enumerate().take(ret_count as usize) {
+							registers[func_reg as usize + i] = ret;
+						}
+					},
+					Some(Value::Closure(c)) => {
+						let closure_proto = &luant.constants.closures[c.proto_idx];
+						let new_stack_base = 1 + frame.stack_base + func_reg as usize;
+						let new_stack_end = new_stack_base + closure_proto.slots_needed as usize;
+
+						let new_len = stack.len().max(new_stack_end);
+						stack.resize(new_len, None);
+						frames.push(Frame::new(c.proto_idx, new_stack_base, ret_count));
+
+						frame = frames.last_mut().unwrap();
+						registers = &mut stack[frame.stack_base..new_stack_end];
+						operations = &closure_proto.operations[..];
+
+						// Zero out missing params.
+						if arg_count < closure_proto.param_count {
+							(arg_count..closure_proto.param_count).for_each(|i| {
+								registers[i as usize] = None;
+							});
+						}
+
+						registers[closure_proto.param_count as usize] = print_fn.clone();
+						registers[(closure_proto.param_count + 1) as usize] = libs_tab.clone();
+
+						// Continue to avoid incrementing the pc.
+						continue;
+					},
 					None => return Err((frame.pc, "Attempted to call nil value".into())),
 					_ => return Err((frame.pc, "Attempted to call non-function value".into())),
-				};
-
-				for (i, ret) in rets.into_iter().enumerate().take(ret_count as usize) {
-					registers[func_reg as usize + i] = ret;
 				}
+			},
+			Operation::Ret(reg, count) => {
+				let ret_start = reg as usize;
+				let ret_count = count as usize;
+
+				let last_frame = frames.pop().unwrap();
+
+				if frames.is_empty() {
+					//TODO: Returning values and stuff.
+					break;
+				}
+
+				frame = frames.last_mut().unwrap();
+
+				if frame.expected_returns > 0 {
+					let expected_returns = frame.expected_returns as usize;
+					let actual_returns = ret_count.min(expected_returns);
+
+					// We overwrite the function itself, followed by its args, for return values.
+					let dst_start = last_frame.stack_base - 1;
+					let dst_end = dst_start + actual_returns;
+					let src_start = ret_start + last_frame.stack_base;
+					let src_end = src_start + actual_returns;
+					
+					(dst_start..dst_end).zip(src_start..src_end).for_each(|(dst, src)| {
+						let val = std::mem::take(&mut stack[src]);
+						stack[dst] = val;
+					});
+
+					// Clear out any remaining expected return slots.
+					if let Some(extra_returns) = expected_returns.checked_sub(actual_returns) {
+						let clear_start = dst_start + actual_returns;
+						let clear_end = clear_start + extra_returns;
+						(clear_start..clear_end).for_each(|dst| {
+							stack[dst] = None;
+						});
+					}
+				}
+
+				registers = &mut stack[frame.stack_base..];
+				operations = &luant.constants.closures[frame.call_proto].operations[..];
 			},
 			Operation::SkpIf(cond) => {
 				let condition = registers[cond as usize].as_ref().is_some_and(|v| v.is_truthy());

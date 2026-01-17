@@ -110,6 +110,14 @@ impl<'s> Expr<'s> {
 	}
 }
 
+pub fn can_start_expr(tok: Token) -> bool {
+	use Token::*;
+	matches! { tok,
+		BraceOpen | ParenOpen | VarArgs | Function | Number(_) | Identifier(_) | String(_) | True | False | Nil |
+		Minus | BitNot | Len | Not
+	}
+}
+
 pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr<'s>, Error<'s>> {
 	// let slots_used = state.slots_used();
 	let expr = pratt::parse_expr(head, lexer, scope, state, 0)?;
