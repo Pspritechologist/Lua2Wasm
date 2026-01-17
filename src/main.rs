@@ -5,23 +5,16 @@
 	trim_prefix_suffix,
 )]
 
-use prelude::BStr;
+use std::rc::Rc;
+use bstr::BStr;
 
 mod types;
 mod parsing;
 mod debug;
 
-mod prelude {
-	pub use bstr::BStr;
-
-	pub mod gc {
-		pub use dumpster::unsync::*;
-		pub use dumpster::Trace;
-	}
-
-	pub(crate) use crate::types;
-	pub(crate) use types::Num;
-	pub(crate) use crate::State;
+mod gc {
+	pub use dumpster::unsync::*;
+	pub use dumpster::Trace;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -32,7 +25,7 @@ enum Operation {
 	LoadNum(u8, u16),
 	LoadStr(u8, u16),
 	LoadTab(u8),
-	// LoadClosure(u8, u16),
+	LoadClosure(u8, u16),
 	// Tables.
 	Set(u8, u8, u8),
 	Get(u8, u8, u8),
@@ -89,17 +82,13 @@ impl Operation {
 	}
 }
 
-#[derive(Debug, Default)]
-pub struct State {
-	hasher: types::Hasher,
-	gc_buf: Vec<u8>,
-}
-
-pub struct ClosureProto {
-	operations: std::rc::Rc<[Operation]>,
-	const_nums: std::rc::Rc<[f64]>,
-	const_strs: std::rc::Rc<ConstStrings>,
-	max_stack_size: u8,
+struct ClosureProto {
+	operations: Box<[Operation]>,
+	number_offset: usize,
+	string_offset: usize,
+	closure_offset: usize,
+	slots_needed: u8,
+	debug: Option<debug::DebugInfo>,
 }
 
 #[derive(Default)]
@@ -123,20 +112,41 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 	// let parsed = parsing::parse_asm(src);
 	let parsed = parsing::parse(src)?;
 	let mut buf = String::new();
-	parsing::fmt_asm(&mut buf, &parsed)?;
+	// parsing::fmt_asm(&mut buf, &parsed)?;
 	std::fs::write("out.asm", buf)?;
 	
-	let parsing::Parsed { operations, numbers, strings, used_regs, debug } = parsed;
+	let parsing::Parsed { parsed_func, numbers, strings, closures } = parsed;
+	let strings = ConstStrings::new(strings);
 
-	let stack = match run_vm(
-		&operations,
-		used_regs,
-		ConstStrings::new(strings),
-		&numbers,
-	) {
+	let closures: Vec<_> = std::iter::once(parsed_func).chain(closures).map(|closure| {
+		ClosureProto {
+			operations: closure.operations,
+			number_offset: 0,
+			string_offset: 0,
+			closure_offset: 0,
+			slots_needed: closure.frame_size,
+			debug: Some(closure.debug),
+		}
+	}).collect();
+
+	let luant = Rc::new(Luant {
+		constants: Constants {
+			numbers: numbers.to_vec(),
+			strings,
+			closures,
+		},
+		..Default::default()
+	});
+
+	let main_func = Closure {
+		luant: luant.clone(),
+		idx: 0,
+	};
+
+	let stack = match call_func(&main_func) {
 		Ok(stack) => stack,
 		Err((op_idx, e)) => {
-			let span = debug.as_ref()
+			let span = luant.constants.closures[0].debug.as_ref()
 				.and_then(|d| d.src_map().get(op_idx))
 				.unwrap_or(0);
 
@@ -158,6 +168,7 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 	Ok(())
 }
 
+#[derive(Default)]
 struct ConstStrings {
 	data: Vec<u8>,
 	map: Vec<(usize, usize)>,
@@ -189,21 +200,59 @@ impl ConstStrings {
 
 		Self { data, map }
 	}
+
+	pub fn len(&self) -> usize {
+		self.data.len()
+	}
 }
 
-fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, const_nums: &[f64]) -> Result<Vec<Option<types::Value>>, (usize, Box<dyn std::error::Error>)> {
-	use crate::types::{Value, ToValue};
-	use crate::prelude::Num;
+#[derive(Default)]
+struct Constants {
+	numbers: Vec<f64>,
+	strings: ConstStrings,
+	closures: Vec<ClosureProto>,
+}
 
-	let mut state = State::default();
+#[derive(Default)]
+struct VmState {
+	hasher: types::Hasher,
+	gc_buf: std::cell::Cell<Vec<u8>>,
+}
+
+#[derive(Default)]
+struct Luant {
+	vm_state: VmState,
+	constants: Constants,
+	global_table: types::Table,
+}
+
+impl Luant {
+	pub fn new() -> Self {
+		Self::default()
+	}
+}
+
+struct Closure {
+	luant: Rc<Luant>,
+	idx: usize,
+}
+
+fn call_func(func: &Closure) -> Result<Vec<Option<types::Value>>, (usize, Box<dyn std::error::Error>)> {
+	use crate::types::{Value, ToValue, Num};
+
+	let luant = &func.luant;
+	let proto = &luant.constants.closures[func.idx];
+
 	let mut frames: Vec<Frame> = Vec::from([Frame { pc: 0, stack_base: 0 }]);
-	let mut stack: Vec<Option<Value>> = vec![None; stack_size.into()];
+	let mut stack: Vec<Option<Value>> = vec![None; proto.slots_needed.into()];
 
 	let mut frame = frames.last_mut().unwrap();
 	let mut registers = &mut stack[frame.stack_base..];
 
+	let operations = &proto.operations[..];
+
 	//TODO: Temp printing.
-	registers[0] = Some(Value::Func(|args| {
+	let print_fn = Some(Value::Func(|args| {
 		let mut values = args.iter();
 
 		if let Some(v) = values.next() {
@@ -224,7 +273,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 
 		Ok(vec![])
 	}));
-	registers[1] = Some(Value::Table(types::Table::from_iter(&mut state, [
+	let libs_tab = Some(Value::Table(types::Table::from_iter(luant, [
 		("assert", Value::Func(|args| {
 			let condition = &args[0];
 			let msg = args.get(1);
@@ -255,18 +304,21 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			Ok(vec![])
 		})),
 	])));
+
+	registers[0] = print_fn.clone();
+	registers[1] = libs_tab.clone();
 	
 	macro_rules! math_op {
 		($dst:expr, $a:expr, $b:expr, $op:tt) => { {
 			let a = Value::coerce_num(registers[$a as usize].as_ref()).map_err(|e| (frame.pc, e))?;
 			let b = Value::coerce_num(registers[$b as usize].as_ref()).map_err(|e| (frame.pc, e))?;
 			let result = a.$op(*b).unwrap_or_default();
-			registers[$dst as usize] = Some(result.to_value(&mut state));
+			registers[$dst as usize] = Some(result.to_value(&luant));
 		} };
 		($dst:expr, $a:expr, $op:tt) => { {
 			let a = Value::coerce_num(registers[$a as usize].as_ref()).map_err(|e| (frame.pc, e))?;
 			let result = a.$op().unwrap_or_default();
-			registers[$dst as usize] = Some(result.to_value(&mut state));
+			registers[$dst as usize] = Some(result.to_value(&luant));
 		} };
 	}
 	
@@ -288,7 +340,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 						return Err((frame.pc, "Attempted to perform bitwise operation on non-integer number".into()));
 					};
 					let result = { $f };
-					registers[$dst as usize] = Some(result.to_value(&mut state));
+					registers[$dst as usize] = Some(result.to_value(&luant));
 				}
 				_ => return Err((frame.pc, "Attempted to perform bitwise operation on non-number value".into())),
 			}
@@ -301,7 +353,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 						return Err((frame.pc, "Attempted to perform bitwise operation on non-integer number".into()));
 					};
 					let result = { $f };
-					registers[$dst as usize] = Some(result.to_value(&mut state));
+					registers[$dst as usize] = Some(result.to_value(&luant));
 				}
 				_ => return Err((frame.pc, "Attempted to perform bitwise operation on non-number value".into())),
 			}
@@ -309,7 +361,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 	}
 
 	loop {
-		let Some(&op) = byte_code.get(frame.pc) else {
+		let Some(&op) = operations.get(frame.pc) else {
 			break;
 		};
 
@@ -317,16 +369,19 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			Operation::LoadNil(dst, cnt) => (dst..dst + cnt).for_each(|dst| registers[dst as usize] = None),
 			Operation::LoadBool(dst, val) => registers[dst as usize] = Some(Value::Bool(val)),
 			Operation::LoadNum(dst, idx) => {
-				let num = const_nums[idx as usize];
-				let value = Num::try_from(num).unwrap_or_default().to_value(&mut state);
+				let num = luant.constants.numbers[idx as usize];
+				let value = Num::try_from(num).unwrap_or_default().to_value(luant);
 				registers[dst as usize] = Some(value);
 			},
 			Operation::LoadStr(dst, idx) => {
-				let s = const_strs.get(idx as usize);
-				let value = s.to_value(&mut state);
+				let s = luant.constants.strings.get(idx as usize);
+				let value = s.to_value(luant);
 				registers[dst as usize] = Some(value);
 			},
 			Operation::LoadTab(dst) => registers[dst as usize] = Some(Value::Table(Default::default())),
+			Operation::LoadClosure(dst, idx) => {
+
+			},
 			Operation::Set(tab, key, val) => {
 				let Some(key) = registers[key as usize].clone() else {
 					return Err((frame.pc, "Attempted to use nil value as table key".into()));
@@ -377,11 +432,11 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			Operation::BitShR(dst, a, b) => bitwise_op!(dst, a, b, |a, b| a >> b),
 			Operation::BitNot(dst, a) => bitwise_op!(dst, a, |a| !a),
 			Operation::Concat(dst, a, b) => {
-				let a = Value::coerce_str(registers[a as usize].as_ref(), &mut state).map_err(|e| (frame.pc, e));
-				let b = Value::coerce_str(registers[b as usize].as_ref(), &mut state).map_err(|e| (frame.pc, e));
+				let a = Value::coerce_str(registers[a as usize].as_ref(), luant).map_err(|e| (frame.pc, e));
+				let b = Value::coerce_str(registers[b as usize].as_ref(), luant).map_err(|e| (frame.pc, e));
 				match (a, b) {
 					(Ok(a), Ok(b)) => {
-						let buf = &mut state.gc_buf;
+						let mut buf = luant.vm_state.gc_buf.take();
 
 						let text_len = a.len() + b.len();
 
@@ -393,13 +448,15 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 						buf.extend_from_slice(&a);
 						buf.extend_from_slice(&b);
 
-						let hash = state.hasher.hash_bytes(&buf[8..]);
+						let hash = luant.vm_state.hasher.hash_bytes(&buf[8..]);
 						buf[..8].copy_from_slice(&hash.to_ne_bytes());
 
 						// SAFETY: We just constructed `buf` to have a valid hash and valid UTF-8 data.
 						let value = unsafe { types::LString::new_from_buf(buf.as_slice(), text_len) };
 
 						registers[dst as usize] = Some(Value::Str(value));
+
+						luant.vm_state.gc_buf.set(buf);
 					}
 					_ => Err("Attempted to concatenate non-string values".into()).map_err(|e| (frame.pc, e))?,
 				}
@@ -407,7 +464,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 			Operation::Len(dst, a) => {
 				let target = &registers[a as usize];
 				let result = target.as_ref().and_then(|v| v.len()).ok_or_else(|| (frame.pc, "Attempted to get length of non-string/table value".into()))?;
-				registers[dst as usize] = Some(result.to_value(&mut state));
+				registers[dst as usize] = Some(result.to_value(luant));
 			},
 			Operation::Call(func_reg, arg_count, ret_count) => {
 				let func = registers[func_reg as usize].clone();
@@ -429,7 +486,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				let condition = registers[cond as usize].as_ref().is_some_and(|v| v.is_truthy());
 
 				if !condition {
-					if let Some(Operation::GoTo(p32, p8)) = byte_code.get(frame.pc + 1) {
+					if let Some(Operation::GoTo(p32, p8)) = operations.get(frame.pc + 1) {
 						let position = Operation::decode_goto(*p32, *p8);
 						frame.pc = position;
 						continue;
@@ -442,7 +499,7 @@ fn run_vm(byte_code: &[Operation], stack_size: u8, const_strs: ConstStrings, con
 				let condition = registers[cond as usize].as_ref().is_some_and(|v| v.is_truthy());
 
 				if condition {
-					if let Some(Operation::GoTo(p32, p8)) = byte_code.get(frame.pc + 1) {
+					if let Some(Operation::GoTo(p32, p8)) = operations.get(frame.pc + 1) {
 						let position = Operation::decode_goto(*p32, *p8);
 						frame.pc = position;
 						continue;

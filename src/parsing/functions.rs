@@ -1,6 +1,7 @@
-use crate::{prelude::BStr, debug::{DebugInfo, SrcMap}};
+use crate::debug::{DebugInfo, SrcMap};
 use super::{debug::InfoCollector, scopes::{RootScope, ParseScope}, LexerExt, Error, Op, expect_tok};
 use luant_lexer::{Lexer, Token};
+use bstr::BStr;
 
 #[derive(Debug)]
 pub struct FuncState<'a, 's> {
@@ -85,41 +86,63 @@ impl<'a, 's> FuncState<'a, 's> {
 			idx
 		}.try_into().expect("Too many string consts :(")
 	}
-}
-	
-pub fn parse_function<'s>(lexer: &mut Lexer<'s>, scope: impl ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<ParsedFunction, Error<'s>> {
-	let span = lexer.src_index();
 
-	let name = match lexer.next_must()? {
-		Token::Identifier(name) => {
-			expect_tok!(lexer, Token::ParenOpen)?;
-			Some(name)
-		},
-		Token::ParenOpen => None,
-		tok => return Err(format!("Expected function name or '(', found {tok:?}").into()),
-	};
+	pub fn push_closure(&mut self, func: ParsedFunction) -> u16 {
+		let idx = self.constants.closures.len();
+		self.constants.closures.push(func);
+		idx.try_into().expect("Too many closures :(")
+	}
+}
+
+pub fn parse_function<'s>(lexer: &mut Lexer<'s>, scope: impl ParseScope<'s>, state: &mut FuncState<'_, 's>, name: Option<super::IdentKey>, span: usize) -> Result<ParsedFunction, Error<'s>> {
+	let mut closure_state = FuncState::new(state.constants);
+	let mut closure_scope = RootScope::new_root();
+
+	//TODO: Temp printing.
+	let print = lexer.get_ident("print");
+	assert_eq!(closure_scope.new_local(lexer, &mut closure_state, print)?, 0);
+	let libs = lexer.get_ident("lib");
+	assert_eq!(closure_scope.new_local(lexer, &mut closure_state, libs)?, 1);
 
 	expect_tok!(lexer, Token::ParenOpen)?;
 
-	//TODO: Parse params.
+	let params = 0u8;
 
-	expect_tok!(lexer, Token::ParenClose)?;
+	let mut tok = lexer.next_must()?;
+	loop {
+		let ident = match tok {
+			Token::Identifier(ident) => ident,
+			tok => Err(format!("Expected parameter name, found {tok:?}"))?,
+		};
 
-	let mut state = FuncState::new(state.constants);
-	let mut root_scope = RootScope::new_root();
+		closure_scope.new_local(lexer, &mut closure_state, ident)?;
+		params.checked_add(1).ok_or("Too many function parameters")?;
+
+		match lexer.next_must()? {
+			Token::Comma => tok = lexer.next_must()?,
+			Token::ParenClose => break,
+			tok => Err(format!("Expected ',' or ')', found {tok:?}"))?,
+		}
+	}
 
 	loop {
 		let tok = lexer.next_must()?;
 		if tok == Token::End { break; }
-		super::parse_stmt(tok, lexer, &mut root_scope, &mut state)?;
+		super::parse_stmt(tok, lexer, &mut closure_scope, &mut closure_state)?;
 	}
 
-	root_scope.finalize(&mut state, lexer)?;
+	closure_scope.finalize(&mut closure_state, lexer)?;
+
+	let debug = crate::debug::DebugInfo::new_closure(
+		closure_state.debug_info.into_map(),
+		name.map(|i| lexer.resolve_ident(i)),
+		span,
+	);
 
 	let parsed = ParsedFunction {
-		operations: state.operations.into_boxed_slice(),
-		debug: crate::debug::DebugInfo::new_closure(state.debug_info.into_map(), name.map(|i| lexer.resolve_ident(i)), span),
-		frame_size: state.max_slot_use,
+		operations: closure_state.operations.into_boxed_slice(),
+		debug,
+		frame_size: closure_state.max_slot_use,
 	};
 
 	Ok(parsed)

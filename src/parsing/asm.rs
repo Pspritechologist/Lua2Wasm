@@ -66,6 +66,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 			},
 			"loadstr" => simple_op!(LoadStr u8, u16),
 			"loadtab" => simple_op!(LoadTab u8),
+			"loadclosure" => simple_op!(LoadClosure u8, u16),
 			"set" => simple_op!(Set u8, u8, u8),
 			"get" => simple_op!(Get u8, u8, u8),
 			"copy" => simple_op!(Copy u8, u8),
@@ -121,6 +122,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 		operations: ops.into_boxed_slice(),
 		numbers: numbers.into_boxed_slice(),
 		strings: strings.into_boxed_slice(),
+		closures: Default::default(),
 		debug: None,
 		used_regs: max_reg + 1,
 	}
@@ -131,6 +133,7 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Resul
 		operations,
 		numbers,
 		strings,
+		closures: _,
 		used_regs: _,
 		debug: _,
 	} = bytecode;
@@ -146,6 +149,7 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, bytecode: &super::Parsed) -> Resul
 			},
 			Operation::LoadStr(dst, str_idx) => writeln!(buf, "loadstr {dst} {str_idx}")?,
 			Operation::LoadTab(dst) => writeln!(buf, "loadtab {dst}")?,
+			Operation::LoadClosure(dst, idx) => writeln!(buf, "loadclosure {dst} {idx}")?,
 			Operation::Set(tab, key, val) => writeln!(buf, "set {tab} {key} {val}")?,
 			Operation::Get(dst, tab, key) => writeln!(buf, "get {dst} {tab} {key}")?,
 			Operation::Copy(dst, src) => writeln!(buf, "copy {dst} {src}")?,

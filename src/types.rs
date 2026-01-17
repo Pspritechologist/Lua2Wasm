@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use super::Luant;
 
 mod num;
 mod table;
@@ -48,7 +48,7 @@ impl Value {
 		})
 	}
 
-	pub fn coerce_str(val: Option<&Self>, state: &mut State) -> Result<LString, Box<dyn std::error::Error>> {
+	pub fn coerce_str(val: Option<&Self>, state: &Luant) -> Result<LString, Box<dyn std::error::Error>> {
 		Ok(match val {
 			Some(Value::Str(s)) => s.clone(),
 			Some(Value::Num(n)) => n.to_str(state),
@@ -146,31 +146,31 @@ impl PartialOrd<Option<Self>> for Value {
 }
 
 pub trait ToValue {
-	fn to_value(self, state: &mut State) -> Value;
+	fn to_value(self, state: &Luant) -> Value;
 }
 
 impl ToValue for Value {
-	fn to_value(self, _state: &mut State) -> Value { self }
+	fn to_value(self, _state: &Luant) -> Value { self }
 }
 
 impl ToValue for LString {
-	fn to_value(self, _state: &mut State) -> Value {
+	fn to_value(self, _state: &Luant) -> Value {
 		Value::Str(self)
 	}
 }
 
 impl ToValue for &str {
-	fn to_value(self, state: &mut State) -> Value {
+	fn to_value(self, state: &Luant) -> Value {
 		Value::Str(LString::new(state, self))
 	}
 }
 impl ToValue for &bstr::BStr {
-	fn to_value(self, state: &mut State) -> Value {
+	fn to_value(self, state: &Luant) -> Value {
 		Value::Str(LString::new(state, self))
 	}
 }
 impl ToValue for &[u8] {
-	fn to_value(self, state: &mut State) -> Value {
+	fn to_value(self, state: &Luant) -> Value {
 		Value::Str(LString::new(state, self))
 	}
 }
@@ -179,13 +179,13 @@ macro_rules! impl_num {
 	($($t:ty),*) => {
 		$(
 			impl ToValue for $t {
-				fn to_value(self, _state: &mut State) -> Value {
+				fn to_value(self, _state: &Luant) -> Value {
 					Value::Num(Num::try_from(self as f64).unwrap_or_default())
 				}
 			}
 
 			impl ToValue for &$t {
-				fn to_value(self, state: &mut State) -> Value {
+				fn to_value(self, state: &Luant) -> Value {
 					(*self).to_value(state)
 				}
 			}
@@ -195,13 +195,13 @@ macro_rules! impl_num {
 impl_num!(u8, u16, u32, u64, i8, i16, i32, i64, usize, isize, f32, f64);
 
 impl ToValue for real_float::Finite<f64> {
-	fn to_value(self, _state: &mut State) -> Value {
+	fn to_value(self, _state: &Luant) -> Value {
 		Value::Num(Num::new(self))
 	}
 }
 
 impl ToValue for &real_float::Finite<f64> {
-	fn to_value(self, state: &mut State) -> Value {
+	fn to_value(self, state: &Luant) -> Value {
 		(*self).to_value(state)
 	}
 }

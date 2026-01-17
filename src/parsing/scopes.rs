@@ -63,8 +63,7 @@ impl<'s> ParseScope<'s> for RootScope {
 
 impl<'s> VariableScope<'s, RootScope> {
 	pub fn finalize(self, state: &mut FuncState<'_, 's>, lexer: &Lexer<'s>) -> Result<(), Error<'s>> {
-		let root = self.into_inner(&mut *state, lexer)?;
-		Ok(())
+		self.into_inner(&mut *state, lexer).map(|_| ())
 	}
 }
 

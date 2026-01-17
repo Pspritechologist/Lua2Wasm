@@ -1,6 +1,5 @@
-use crate::prelude::*;
-use gc::Gc;
-use types::Value;
+use crate::gc::Gc;
+use crate::types::Value;
 use dumpster::{Trace, TraceWith, Visitor};
 use hashbrown::HashTable;
 use std::iter;
@@ -86,7 +85,7 @@ impl Table {
 		Default::default()
 	}
 
-	pub fn from_iter<I, K, V>(state: &mut crate::State, iter: I) -> Self
+	pub fn from_iter<I, K, V>(state: &crate::Luant, iter: I) -> Self
 	where
 		I: IntoIterator<Item = (K, V)>,
 		K: super::ToValue,

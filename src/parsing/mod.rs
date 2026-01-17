@@ -5,23 +5,21 @@ use functions::FuncState;
 use scopes::{ParseScope, RootScope, VariableScope};
 use expressions::*;
 
-mod asm;
+// mod asm;
 mod functions;
 mod scopes;
 mod expressions;
 mod loops;
 mod debug;
 
-pub use asm::{parse_asm, fmt_asm};
+// pub use asm::{parse_asm, fmt_asm};
 
 #[derive(Debug)]
 pub struct Parsed<'s> {
-	pub operations: Box<[Op]>,
+	pub parsed_func: functions::ParsedFunction,
 	pub numbers: Box<[f64]>,
 	pub strings: Box<[&'s bstr::BStr]>,
-	pub debug: Option<crate::debug::DebugInfo>,
-
-	pub used_regs: u8,
+	pub closures: Box<[functions::ParsedFunction]>,
 }
 
 pub trait ParseSrc {
@@ -67,12 +65,17 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 		None::<&str>,
 	);
 
-	Ok(Parsed {
+	let parsed_func = functions::ParsedFunction {
 		operations: ops.into_boxed_slice(),
+		frame_size: used_regs,
+		debug,
+	};
+
+	Ok(Parsed {
+		parsed_func,
 		numbers: constants.numbers.into_boxed_slice(),
 		strings: constants.strings.into_boxed_slice(),
-		debug: Some(debug),
-		used_regs,
+		closures: constants.closures.into_boxed_slice(),
 	})
 }
 
@@ -81,6 +84,7 @@ pub struct ConstantMap<'s> {
 	numbers: Vec<f64>,
 	string_indexes: hashbrown::HashMap<&'s bstr::BStr, usize>,
 	strings: Vec<&'s bstr::BStr>,
+	closures: Vec<functions::ParsedFunction>,
 }
 
 trait LexerExt<'s> {
@@ -121,45 +125,56 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 		},
 		Token::Function => todo!(),
 		Token::Local => {
-			//TODO: This uses two Vecs in the worst case and just isn't very shwifty.
+			if lexer.next_if(Token::Function)?.is_some() {
+				let span = lexer.src_index();
+				let name = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
 
-			let first_ident = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
-			let mut rest_idents = Vec::new();
-			
-			match lexer.peek()? {
-				Some(Token::Function) => todo!(),
-				Some(Token::Assign) => (),
-				Some(Token::Comma) => {
-					while lexer.next_if(Token::Comma)?.is_some() {
-						rest_idents.push(expect_tok!(lexer, Token::Identifier(ident) => ident)?);
-					}
-				},
-				_ => Err("Expected '=', ',' or 'function'")?,
-			}
+				let dst = scope.new_local(lexer, state, name)?;
 
-			if lexer.next_if(Token::Assign)?.is_none() {
-				// No assignments.
-				scope.new_local(lexer, state, first_ident)?;
-				rest_idents.into_iter()
-					.try_for_each(|ident| scope.new_local(lexer, state, ident).map(|_| ()))?;
+				let closure = functions::parse_function(lexer, &mut *scope, state, Some(name), span)?;
+				let idx = state.push_closure(closure);
+
+				state.emit(Op::LoadClosure(dst, idx), span);
 			} else {
-				let first_expr = parse_expr(lexer.next_must()?, lexer, scope, state)?;
-				let mut rest_exprs = Vec::new();
-				while lexer.next_if(Token::Comma)?.is_some() {
-					rest_exprs.push(parse_expr(lexer.next_must()?, lexer, scope, state)?);
-				}
-	
-				first_expr.to_new_local(lexer, scope, state, first_ident)?;
+				//TODO: This uses two Vecs in the worst case and just isn't very shwifty.
 
-				let mut ident_iter = rest_idents.into_iter();
+				let first_ident = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
+				let mut rest_idents = Vec::new();
 				
-				rest_exprs.into_iter()
-					.zip(ident_iter.by_ref())
-					.try_for_each(|(expr, ident)| expr.to_new_local(lexer, scope, state, ident).map(|_| ()))?;
-				
-				ident_iter.try_for_each(
-					|ident| Expr::Constant(Const::Nil).to_new_local(lexer, scope, state, ident).map(|_| ())
-				)?;
+				match lexer.peek()? {
+					Some(Token::Assign) => (),
+					Some(Token::Comma) => {
+						while lexer.next_if(Token::Comma)?.is_some() {
+							rest_idents.push(expect_tok!(lexer, Token::Identifier(ident) => ident)?);
+						}
+					},
+					_ => Err("Expected '=', ',' or 'function'")?,
+				}
+
+				if lexer.next_if(Token::Assign)?.is_none() {
+					// No assignments.
+					scope.new_local(lexer, state, first_ident)?;
+					rest_idents.into_iter()
+						.try_for_each(|ident| scope.new_local(lexer, state, ident).map(|_| ()))?;
+				} else {
+					let first_expr = parse_expr(lexer.next_must()?, lexer, scope, state)?;
+					let mut rest_exprs = Vec::new();
+					while lexer.next_if(Token::Comma)?.is_some() {
+						rest_exprs.push(parse_expr(lexer.next_must()?, lexer, scope, state)?);
+					}
+		
+					first_expr.to_new_local(lexer, scope, state, first_ident)?;
+
+					let mut ident_iter = rest_idents.into_iter();
+					
+					rest_exprs.into_iter()
+						.zip(ident_iter.by_ref())
+						.try_for_each(|(expr, ident)| expr.to_new_local(lexer, scope, state, ident).map(|_| ()))?;
+					
+					ident_iter.try_for_each(
+						|ident| Expr::Constant(Const::Nil).to_new_local(lexer, scope, state, ident).map(|_| ())
+					)?;
+				}
 			}
 		},
 		Token::Return => todo!(),

@@ -1,5 +1,9 @@
-use crate::prelude::*;
-use gc::{Trace, Gc};
+use crate::{
+	Luant,
+	types::Num,
+	gc::{Trace, Gc},
+};
+use bstr::BStr;
 use std::ops::Deref;
 
 #[derive(Debug, Clone, PartialEq, Eq, Trace)]
@@ -15,21 +19,24 @@ struct LStringInner {
 }
 
 impl LString {
-	pub fn new(state: &mut State, data: impl AsRef<[u8]>) -> Self {
+	pub fn new(state: &Luant, data: impl AsRef<[u8]>) -> Self {
+		let mut buf = state.vm_state.gc_buf.take();
+
 		let data = data.as_ref();
 
-		let hash = state.hasher.hash_bytes(data);
+		let hash = state.vm_state.hasher.hash_bytes(data);
 
-		let buf = &mut state.gc_buf;
 		buf.clear();
 		buf.extend(hash.to_ne_bytes());
 		buf.extend(data);
 		
 		// SAFETY: We just constructed `buf` to have a valid hash and valid UTF-8 data.
-		let gc = unsafe { Self::new_from_buf(buf, data.len()) };
+		let gc = unsafe { Self::new_from_buf(&buf, data.len()) };
 
 		debug_assert_eq!(gc.inner.hash, hash);
 		debug_assert_eq!(&gc.inner.data, data);
+
+		state.vm_state.gc_buf.set(buf);
 
 		gc
 	}

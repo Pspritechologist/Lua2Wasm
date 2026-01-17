@@ -1,6 +1,6 @@
-use crate::prelude::BStr;
 use super::{Error, ParseScope, LexerExt, Op, IdentKey, expect_tok};
 use super::functions::FuncState;
+use bstr::BStr;
 use luant_lexer::{Lexer, Token};
 
 mod postfix_ops;
