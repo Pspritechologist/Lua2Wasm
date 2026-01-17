@@ -42,16 +42,17 @@ impl<'s, F: FnOnce(Token<'s>) -> bool> TokPat<'s> for F {
 
 pub struct Lexer<'s> {
 	inner: logos::Lexer<'s, Token<'s>>,
-	peeked: Option<Token<'s>>,
+	peeked: Option<(Token<'s>, std::ops::Range<usize>)>,
 }
 
 impl<'s> Lexer<'s> {
 	pub fn peek(&mut self) -> Result<Option<Token<'s>>, LexError<'s>> {
 		if self.peeked.is_none() {
-			self.peeked = self.inner.next().transpose()?;
+			let span = self.current_span();
+			self.peeked = self.inner.next().transpose()?.map(|tok| (tok, span));
 		}
 
-		Ok(self.peeked)
+		Ok(self.peeked.as_ref().map(|(tok, _)| *tok))
 	}
 
 	pub fn next_if(&mut self, pat: impl TokPat<'s>) -> Result<Option<Token<'s>>, LexError<'s>> {
@@ -81,7 +82,7 @@ impl<'s> Lexer<'s> {
 	}
 
 	pub fn current_span(&self) -> std::ops::Range<usize> {
-		self.inner.span()
+		self.peeked.as_ref().map(|(_, span)| span.clone()).unwrap_or_else(|| self.inner.span())
 	}
 
 	pub fn src_index(&self) -> usize {
@@ -103,7 +104,7 @@ impl<'s> Iterator for Lexer<'s> {
 	type Item = Result<Token<'s>, LexError<'s>>;
 	fn next(&mut self) -> Option<Self::Item> {
 		self.peeked.take()
-			.map(Ok)
+			.map(|(tok, _)| Ok(tok))
 			.or_else(|| self.inner.next())
 	}
 }
