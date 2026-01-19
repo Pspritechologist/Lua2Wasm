@@ -55,7 +55,7 @@ pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, st
 		Some(false) | //TODO: Don't compile unreachable loops.
 		None => {
 			let span = lexer.src_index();
-			let cond = cond.to_slot(lexer, &mut scope, state)?;
+			let cond = cond.to_slot(lexer, state)?;
 			state.emit(Op::SkpIf(cond), span);
 			scope.emit_break(state, span)?;
 			

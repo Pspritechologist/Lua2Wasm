@@ -109,6 +109,13 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 				let position = ops.len().strict_add_signed(offset);
 				Operation::goto(position)
 			},
+			"getupval" => simple_op!(GetUpVal u8, u8),
+			"setupval" => simple_op!(SetUpVal u8, u8),
+			"getuptab" => simple_op!(GetUpTab u8, u16),
+			"setuptab" => {
+				let (idx, src) = args!(u16, u8);
+				Operation::SetUpTab(idx, src)
+			},
 			op => panic!("Unknown operation: {op}"),
 		});
 	}
@@ -195,6 +202,10 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, parsed: &super::Parsed) -> Result<
 					let offset = position as isize - idx as isize;
 					writeln!(buf, "\tgoto {offset}")?
 				},
+				Operation::GetUpVal(dst, idx) => writeln!(buf, "\tgetupval {dst} {idx}")?,
+				Operation::SetUpVal(idx, src) => writeln!(buf, "\tsetupval {idx} {src}")?,
+				Operation::GetUpTab(dst, key) => writeln!(buf, "\tgetuptab {dst} {key}")?,
+				Operation::SetUpTab(tab, key) => writeln!(buf, "\tsetuptab {tab} {key}")?,
 			}
 		}
 

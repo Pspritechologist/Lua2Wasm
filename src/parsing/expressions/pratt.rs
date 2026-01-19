@@ -21,7 +21,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl 
 			Token::VarArgs => todo!(),
 			Token::Function => todo!(),
 			Token::Number(n) => Expr::Constant(Const::Number(Num::new(n))),
-			Token::Identifier(ident) => Expr::Local(ident),
+			Token::Identifier(ident) => Expr::from_named(scope.resolve_name(state, ident)?),
 			Token::String(s) => Expr::Constant(Const::String(s)),
 			Token::True => Expr::Constant(Const::Bool(true)),
 			Token::False => Expr::Constant(Const::Bool(false)),
@@ -63,7 +63,7 @@ impl<'s> InfixOp<'s> {
 
 			let initial_slots_used = state.slots_used();
 
-			let lhs = left.to_slot(lexer, scope, state)?;
+			let lhs = left.to_slot(lexer, state)?;
 
 			let pre_rhs_slots_used = state.slots_used();
 			let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
@@ -74,7 +74,7 @@ impl<'s> InfixOp<'s> {
 				return Ok(Expr::Constant(res));
 			}
 
-			let rhs = right.to_slot(lexer, scope, state)?;
+			let rhs = right.to_slot(lexer, state)?;
 
 			state.set_slots_used(initial_slots_used);
 
@@ -106,17 +106,17 @@ impl<'s> InfixOp<'s> {
 			InfixOp::Shl => std_infix(Op::BitShL),
 			InfixOp::Shr => std_infix(Op::BitShR),
 			InfixOp::Call(call) => call.parse_call_args(lexer, scope, state, left)?.handle_call(lexer, scope, state, 1),
-			InfixOp::Index(index) => index.parse_index(lexer, scope, state)?.handle_index(lexer, scope, state, left),
+			InfixOp::Index(index) => index.parse_index(lexer, scope, state)?.handle_index(lexer, state, left),
 			//TODO: Fold consts here.
 			InfixOp::And => {
-				let dst = left.to_temp(lexer, scope, state)?;
+				let dst = left.to_temp(lexer, state)?;
 
 				state.emit(Op::SkpIf(dst), lexer.src_index());
 				let goto_pos = state.ops().len();
 				state.emit(Op::GoTo(0, 0), lexer.src_index()); // Placeholder
 				
 				let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
-				right.set_to_slot(lexer, scope, state, dst)?;
+				right.set_to_slot(lexer, state, dst)?;
 
 				let end_pos = state.ops().len();
 				state.ops_mut()[goto_pos] = Op::goto(end_pos);
@@ -124,14 +124,14 @@ impl<'s> InfixOp<'s> {
 				Ok(Expr::Temp(dst))
 			},
 			InfixOp::Or => {
-				let dst = left.to_temp(lexer, scope, state)?;
+				let dst = left.to_temp(lexer, state)?;
 
 				state.emit(Op::SkpIfNot(dst), lexer.src_index());
 				let goto_pos = state.ops().len();
 				state.emit(Op::GoTo(0, 0), lexer.src_index()); // Placeholder
 				
 				let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
-				right.set_to_slot(lexer, scope, state, dst)?;
+				right.set_to_slot(lexer, state, dst)?;
 
 				let end_pos = state.ops().len();
 				state.ops_mut()[goto_pos] = Op::goto(end_pos);
@@ -230,7 +230,7 @@ impl PrefixOp {
 			return Ok(Expr::Constant(res));
 		}
 
-		let dst = right.to_temp(lexer, scope, state)?;
+		let dst = right.to_temp(lexer, state)?;
 
 		match self {
 			PrefixOp::Neg => state.emit(Op::Neg(dst, dst), span),

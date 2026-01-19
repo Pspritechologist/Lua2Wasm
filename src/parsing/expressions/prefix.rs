@@ -1,5 +1,4 @@
-use crate::parsing::LexerExt;
-use super::{Error, ParseScope, IdentKey, Op, expect_tok};
+use super::{LexerExt, Error, ParseScope, Named, IdentKey, Op, expect_tok};
 use super::{Expr, FuncState};
 use super::postfix_ops::{CallType, IndexType, ParsedCall};
 use luant_lexer::{Lexer, Token};
@@ -18,13 +17,25 @@ impl<'s> PlaceExpr<'s> {
 	pub fn set_expr(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, expr: Expr<'s>) -> Result<(), Error<'s>> {
 		match self {
 			PlaceExpr::Name(ident) => {
-				let slot = scope.get_local(lexer, ident)?;
-				expr.set_to_slot(lexer, scope, state, slot)
+				match scope.resolve_name(state, ident)? {
+					Named::Local(slot) => expr.set_to_slot(lexer, state, slot)?,
+					Named::UpValue(idx) => {
+						let src = expr.to_slot(lexer, state)?;
+						state.emit(Op::SetUpVal(idx, src), lexer.src_index())
+					},
+					Named::Global(name) => {
+						let src = expr.to_slot(lexer, state)?;
+						let idx = state.string_idx(lexer.resolve_ident(name).as_bytes());
+						state.emit(Op::SetUpTab(idx, src), lexer.src_index())
+					},
+				}
+
+				Ok(())
 			},
 			PlaceExpr::Index { target, index, span } => {
-				let table_slot = target.to_slot(lexer, scope, state)?;
-				let index_slot = index.to_slot(lexer, scope, state)?;
-				let value_slot = expr.to_slot(lexer, scope, state)?;
+				let table_slot = target.to_slot(lexer, state)?;
+				let index_slot = index.to_slot(lexer, state)?;
+				let value_slot = expr.to_slot(lexer, state)?;
 
 				state.emit(Op::Set(table_slot, index_slot, value_slot), span);
 
@@ -48,7 +59,11 @@ impl<'s> IdentExpr<'s> {
 				expect_tok!(lexer, Token::ParenClose)?;
 				expr
 			},
-			Token::Identifier(ident) => Expr::Local(ident),
+			Token::Identifier(ident) => match scope.resolve_name(state, ident)? {
+				Named::Local(slot) => Expr::Local(slot),
+				Named::UpValue(idx) => Expr::UpValue(idx),
+				Named::Global(name) => Expr::Global(name),
+			},
 			tok => return Err(format!("Expected expression, found {tok:?}").into()),
 		};
 	
@@ -78,7 +93,7 @@ impl<'s> IdentExpr<'s> {
 					let span = lexer.src_index();
 					next_op = match lexer.next_if_map(TrailingOp::from_token)? {
 						Some(next_op) => {
-							expr = index.handle_index(lexer, scope, state, expr)?;
+							expr = index.handle_index(lexer, state, expr)?;
 							next_op
 						},
 						None => return Ok(IdentExpr::Place(PlaceExpr::Index {

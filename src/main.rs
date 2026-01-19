@@ -64,6 +64,10 @@ enum Operation {
 	SkpIfNot(u8),
 	// Meta.
 	Copy(u8, u8),
+	GetUpVal(u8, u8),
+	SetUpVal(u8, u8),
+	GetUpTab(u8, u16),
+	SetUpTab(u16, u8),
 }
 impl Operation {
 	pub fn goto(position: usize) -> Self {
@@ -609,6 +613,18 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 			},
 			Operation::Copy(dst, src) => {
 				registers[dst as usize] = registers[src as usize].clone();
+			},
+			Operation::GetUpVal(dst, idx) => {
+
+			},
+			Operation::SetUpVal(idx, src) => {
+
+			},
+			Operation::GetUpTab(dst, key) => {
+
+			},
+			Operation::SetUpTab(key, src) => {
+
 			},
 		}
 		

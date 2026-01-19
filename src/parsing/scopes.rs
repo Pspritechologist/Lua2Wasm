@@ -16,9 +16,17 @@ pub trait ParseScope<'s> {
 
 	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().new_local(lexer, state, name) }
 	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().get_local(lexer, name) }
+	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Named, Error<'s>> { self.parent().resolve_name(state, name) }
 	fn local_count(&mut self) -> u8 { self.parent().local_count() }
 
 	fn parent(&'_ mut self) -> &'_ mut dyn ParseScope<'s>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Named {
+	Local(u8),
+	UpValue(u8),
+	Global(IdentKey),
 }
 
 /// The root parsing scope.\
@@ -58,6 +66,11 @@ impl<'s> ParseScope<'s> for RootScope {
 	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s> > {
 		Err(format!("Local variable `{}` not found", lexer.resolve_ident(name)).into())
 	}
+
+	fn resolve_name(&mut self, _state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Named, Error<'s>> {
+		Ok(Named::Global(name))
+	}
+
 	fn local_count(&mut self) -> u8 { 0 }
 }
 
@@ -129,6 +142,11 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 
 	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> {
 		self.locals.get(name).copied().map_or_else(|| self.parent.get_local(lexer, name), Ok)
+	}
+
+	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Named, Error<'s>> {
+		self.locals.get(name).copied().map(Named::Local)
+			.map_or_else(|| self.parent.resolve_name(state, name), Ok)
 	}
 
 	fn local_count(&mut self) -> u8 {

@@ -2,7 +2,7 @@ use crate::Operation as Op;
 use luant_lexer::{IdentKey, Lexer, Token};
 
 use functions::FuncState;
-use scopes::{ParseScope, RootScope, VariableScope};
+use scopes::{ParseScope, Named, RootScope, VariableScope};
 use expressions::*;
 
 mod asm;
@@ -186,7 +186,7 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 					ret_count += 1;
 					
 					let expr = parse_expr(lexer.next_must()?, lexer, scope, state)?;
-					expr.set_to_slot(lexer, scope, state, start_reg + ret_count - 1)?;
+					expr.set_to_slot(lexer, state, start_reg + ret_count - 1)?;
 					
 					if lexer.next_if(Token::Comma)?.is_none() {
 						break;
@@ -279,7 +279,7 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 
 	'outer: loop {
 		let span = lexer.src_index();
-		let cond = parse_expr(lexer.next_must()?, lexer, outer_scope, state)?.to_slot(lexer, outer_scope, state)?;
+		let cond = parse_expr(lexer.next_must()?, lexer, outer_scope, state)?.to_slot(lexer, state)?;
 		state.emit(Op::SkpIf(cond), span);
 		let next_branch_jump_pos = state.ops().len();
 		state.emit(Op::GoTo(0, 0), span); // Placeholder

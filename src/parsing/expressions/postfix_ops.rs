@@ -31,7 +31,7 @@ impl<'s> CallType<'s> {
 				let mut head = lexer.next_must()?;
 
 				let func_reg = state.reserve_slot();
-				left.set_to_slot(lexer, scope, state, func_reg)?;
+				left.set_to_slot(lexer, state, func_reg)?;
 
 				// Special case zero arg calls.
 				if head == Token::ParenClose {
@@ -51,7 +51,7 @@ impl<'s> CallType<'s> {
 					state.set_slots_used(initial_slots_used + arg_count);
 
 					let arg_expr = super::parse_expr(head, lexer, scope, state)?;
-					arg_expr.set_to_slot(lexer, scope, state, func_reg + arg_count)?;
+					arg_expr.set_to_slot(lexer, state, func_reg + arg_count)?;
 					
 					match lexer.next_must()? {
 						Token::Comma => head = lexer.next_must()?,
@@ -86,9 +86,9 @@ pub struct ParsedIndex<'s> {
 }
 impl<'s> ParsedIndex<'s> {
 	/// Emits the `get` operation for this index operation.
-	pub fn handle_index(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, target: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
-		let target_slot = target.to_slot(lexer, scope, state)?;
-		let index_slot = self.index_expr.to_slot(lexer, scope, state)?;
+	pub fn handle_index(self, lexer: &mut Lexer<'s>, state: &mut FuncState<'_, 's>, target: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
+		let target_slot = target.to_slot(lexer, state)?;
+		let index_slot = self.index_expr.to_slot(lexer, state)?;
 		let result_reg = state.reserve_slot();
 		state.emit(Op::Get(result_reg, target_slot, index_slot), self.span);
 		Ok(Expr::Temp(result_reg))
