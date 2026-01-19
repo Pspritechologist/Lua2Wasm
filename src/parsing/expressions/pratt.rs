@@ -21,7 +21,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl 
 			Token::VarArgs => todo!(),
 			Token::Function => todo!(),
 			Token::Number(n) => Expr::Constant(Const::Number(Num::new(n))),
-			Token::Identifier(ident) => Expr::from_named(scope.resolve_name(state, ident)?),
+			Token::Identifier(ident) => Expr::from_named(scope.resolve_name(state, ident, false)?),
 			Token::String(s) => Expr::Constant(Const::String(s)),
 			Token::True => Expr::Constant(Const::Bool(true)),
 			Token::False => Expr::Constant(Const::Bool(false)),

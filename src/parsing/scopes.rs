@@ -15,8 +15,7 @@ pub trait ParseScope<'s> {
 	fn emit_continue(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> { self.parent().emit_continue(state, span) }
 
 	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().new_local(lexer, state, name) }
-	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().get_local(lexer, name) }
-	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Named, Error<'s>> { self.parent().resolve_name(state, name) }
+	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> { self.parent().resolve_name(state, name, is_capturing) }
 	fn local_count(&mut self) -> u8 { self.parent().local_count() }
 
 	fn parent(&'_ mut self) -> &'_ mut dyn ParseScope<'s>;
@@ -33,10 +32,12 @@ pub enum Named {
 /// All methods on [`ParseState`] must be implemented here as
 /// attempting to call `parent()` will panic.
 #[derive(Debug, Clone)]
-pub struct RootScope(());
+pub struct RootScope {
+	env_ident: IdentKey,
+}
 impl RootScope {
-	pub fn new_root<'s>() -> VariableScope<'s, Self> {
-		VariableScope::new(Self(()))
+	pub fn new_root<'s>(lexer: &mut Lexer<'s>) -> VariableScope<'s, Self> {
+		VariableScope::new(Self { env_ident: lexer.get_ident("_ENV") })
 	}
 }
 
@@ -63,12 +64,14 @@ impl<'s> ParseScope<'s> for RootScope {
 	fn new_local(&mut self, _lexer: &Lexer<'s>, _state: &mut FuncState<'_, 's>, _name: IdentKey) -> Result<u8, Error<'s>> {
 		unreachable!()
 	}
-	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s> > {
-		Err(format!("Local variable `{}` not found", lexer.resolve_ident(name)).into())
-	}
 
-	fn resolve_name(&mut self, _state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Named, Error<'s>> {
-		Ok(Named::Global(name))
+	fn resolve_name(&mut self, _state: &mut FuncState<'_, 's>, name: IdentKey, _is_capturing: bool) -> Result<Named, Error<'s>> {
+		if name == self.env_ident {
+			// The 'main' function of a script always has exactly one upvalue, _ENV, the global environment.
+			Ok(Named::UpValue(0))
+		} else {
+			Ok(Named::Global(name))
+		}
 	}
 
 	fn local_count(&mut self) -> u8 { 0 }
@@ -89,6 +92,7 @@ pub struct VariableScope<'s, P: ParseScope<'s>> {
 	local_count: u8,
 	labels: SparseSecondaryMap<IdentKey, usize>,
 	missing_labels: Vec<(IdentKey, usize)>,
+	has_captured_locals: bool,
 	pd: std::marker::PhantomData<&'s ()>,
 }
 impl<'s, P: ParseScope<'s>> VariableScope<'s, P> {
@@ -99,14 +103,13 @@ impl<'s, P: ParseScope<'s>> VariableScope<'s, P> {
 			locals: Default::default(),
 			local_count: 0,
 			missing_labels: Default::default(),
+			has_captured_locals: false,
 			pd: std::marker::PhantomData,
 		}
 	}
 
-	pub fn finalize_root(self) -> P {
+	pub fn finalize_scope(self) -> P {
 		let Self { mut parent, mut missing_labels, .. } = self;
-		
-		// We need to manually call merge_missing_labels since Drop won't run
 		parent.merge_missing_labels(&mut missing_labels);
 		parent
 	}
@@ -121,6 +124,14 @@ impl<'s, P: ParseScope<'s>> VariableScope<'s, P> {
 
 		Ok(parent)
 	}
+
+	pub fn has_captures(&self) -> bool {
+		self.has_captured_locals
+	}
+
+	pub fn local_base(&mut self) -> u8 {
+		self.parent.local_count()
+	}
 }
 
 impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
@@ -129,6 +140,7 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 		if self.locals.contains_key(name) {
 			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
 		}
+		//TODO: Feels like this should be cached.
 		let reg = self.local_count();
 		self.locals.insert(name, reg);
 		self.local_count += 1;
@@ -140,13 +152,13 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 		Ok(reg)
 	}
 
-	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s>> {
-		self.locals.get(name).copied().map_or_else(|| self.parent.get_local(lexer, name), Ok)
-	}
+	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> {
+		if let Some(&slot) = self.locals.get(name) {
+			self.has_captured_locals |= is_capturing;
+			return Ok(Named::Local(slot));
+		}
 
-	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Named, Error<'s>> {
-		self.locals.get(name).copied().map(Named::Local)
-			.map_or_else(|| self.parent.resolve_name(state, name), Ok)
+		self.parent.resolve_name(state, name, is_capturing)
 	}
 
 	fn local_count(&mut self) -> u8 {

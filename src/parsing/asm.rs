@@ -130,6 +130,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 		param_count: 0,
 		frame_size: max_reg + 1,
 		debug: None,
+		upvalues: Box::new([]),
 	};
 
 	super::Parsed {

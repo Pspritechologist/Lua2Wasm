@@ -17,7 +17,7 @@ impl<'s> PlaceExpr<'s> {
 	pub fn set_expr(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, expr: Expr<'s>) -> Result<(), Error<'s>> {
 		match self {
 			PlaceExpr::Name(ident) => {
-				match scope.resolve_name(state, ident)? {
+				match scope.resolve_name(state, ident, false)? {
 					Named::Local(slot) => expr.set_to_slot(lexer, state, slot)?,
 					Named::UpValue(idx) => {
 						let src = expr.to_slot(lexer, state)?;
@@ -59,7 +59,7 @@ impl<'s> IdentExpr<'s> {
 				expect_tok!(lexer, Token::ParenClose)?;
 				expr
 			},
-			Token::Identifier(ident) => match scope.resolve_name(state, ident)? {
+			Token::Identifier(ident) => match scope.resolve_name(state, ident, false)? {
 				Named::Local(slot) => Expr::Local(slot),
 				Named::UpValue(idx) => Expr::UpValue(idx),
 				Named::Global(name) => Expr::Global(name),

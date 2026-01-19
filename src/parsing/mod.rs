@@ -13,6 +13,7 @@ mod loops;
 mod debug;
 
 pub use asm::{parse_asm, fmt_asm};
+pub use functions::Upvalue;
 
 #[derive(Debug)]
 pub struct Parsed<'s> {
@@ -36,7 +37,7 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 	let mut constants = ConstantMap::default();
 	let mut state = functions::FuncState::new(&mut constants);
 	let mut lexer = luant_lexer::lexer(src.bytes());
-	let mut root_scope = RootScope::new_root();
+	let mut root_scope = RootScope::new_root(&mut lexer);
 
 	//TODO: Temp printing.
 	let print = lexer.get_ident("print");
@@ -70,6 +71,7 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 		param_count: 0,
 		frame_size: used_regs,
 		debug: Some(debug),
+		upvalues: Box::new([Upvalue::ParentUpValue(0)]),
 	};
 
 	Ok(Parsed {
@@ -269,7 +271,12 @@ fn parse_do_block<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, sta
 		parse_stmt(tok, lexer, &mut scope, state)?;
 	}
 
-	scope.finalize_root();
+	if scope.has_captures() {
+		let base = scope.local_base();
+		state.emit(Op::Close(base), lexer.src_index());
+	}
+
+	scope.finalize_scope();
 
 	Ok(())
 }
@@ -305,7 +312,7 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 		let end_pos = state.ops().len();
 		state.ops_mut()[next_branch_jump_pos] = Op::goto(end_pos);
 
-		let outer_scope = if_scope.finalize_root();
+		let outer_scope = if_scope.finalize_scope();
 
 		match end_tok {
 			Token::Else => {
@@ -313,7 +320,7 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 				loop {
 					let tok = lexer.next_must()?;
 					if tok == Token::End {
-						else_scope.finalize_root();
+						else_scope.finalize_scope();
 						break 'outer;
 					}
 

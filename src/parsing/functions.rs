@@ -19,6 +19,7 @@ pub struct ParsedFunction {
 	pub debug: Option<DebugInfo>,
 	pub frame_size: u8,
 	pub param_count: u8,
+	pub upvalues: Box<[Upvalue]>,
 }
 
 impl<'a, 's> FuncState<'a, 's> {
@@ -107,6 +108,22 @@ impl<'a, 's> FuncState<'a, 's> {
 /// and such are only accessed as UpValues.
 struct ClosureScope<'a, 's> {
 	outer_scope: &'a mut dyn ParseScope<'s>,
+	upvalues: slotmap::SparseSecondaryMap<IdentKey, (u8, Upvalue)>,
+}
+impl<'a, 's> ClosureScope<'a, 's> {
+	fn new(outer_scope: &'a mut dyn ParseScope<'s>, lexer: &mut Lexer<'s>) -> Self {
+		Self {
+			outer_scope,
+			// The 0th Upvalue of a function is always the global environment.
+			upvalues: FromIterator::from_iter([(lexer.get_ident("_ENV"), (0, Upvalue::ParentUpValue(0)))]),
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Upvalue {
+	ParentSlot(u8),
+	ParentUpValue(u8),
 }
 
 impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
@@ -132,12 +149,25 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 	fn new_local(&mut self, _lexer: &Lexer<'s>, _state: &mut FuncState<'_, 's>, _name: IdentKey) -> Result<u8, Error<'s>> {
 		unreachable!()
 	}
-	fn get_local(&mut self, lexer: &Lexer<'s>, name: IdentKey) -> Result<u8, Error<'s> > {
-		Err(format!("Local variable `{}` not found", lexer.resolve_ident(name)).into())
-	}
 
-	fn resolve_name(&mut self, _state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Named, Error<'s>> {
-		Ok(Named::Global(name))
+	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey, _is_capturing: bool) -> Result<Named, Error<'s>> {
+		if let Some(&(idx, _)) = self.upvalues.get(name) {
+			return Ok(Named::UpValue(idx));
+		}
+
+		Ok(match self.outer_scope.resolve_name(state, name, true)? {
+			Named::Local(slot) => {
+				let upval_idx = self.upvalues.len().try_into().expect("Too many upvalues :(");
+				self.upvalues.insert(name, (upval_idx, Upvalue::ParentSlot(slot)));
+				Named::UpValue(upval_idx)
+			},
+			Named::UpValue(idx) => {
+				let upval_idx = self.upvalues.len().try_into().expect("Too many upvalues :(");
+				self.upvalues.insert(name, (upval_idx, Upvalue::ParentUpValue(idx)));
+				Named::UpValue(upval_idx)
+			},
+			Named::Global(name) => Named::Global(name),
+		})
 	}
 
 	fn local_count(&mut self) -> u8 { 0 }
@@ -145,7 +175,7 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 
 pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>, state: &mut FuncState<'_, 's>, name: Option<super::IdentKey>, span: usize) -> Result<ParsedFunction, Error<'s>> {
 	let mut closure_state = FuncState::new(state.constants);
-	let mut closure_scope = VariableScope::new(ClosureScope { outer_scope: &mut scope });
+	let mut closure_scope = VariableScope::new(ClosureScope::new(&mut scope, lexer));
 
 	expect_tok!(lexer, Token::ParenOpen)?;
 
@@ -187,7 +217,27 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 		closure_state.emit(Op::Ret(0, 0), lexer.src_index());
 	}
 
-	closure_scope.into_inner(&mut closure_state, lexer)?;
+	let upvalues = closure_scope.into_inner(&mut closure_state, lexer)?.upvalues;
+	let upvalues = {
+		let mut buf = Box::new_uninit_slice(upvalues.len());
+		let mut assert_buf = Vec::new();
+
+		for (_, (idx, upval)) in upvalues.into_iter() {
+			buf[usize::from(idx)].write(upval);
+
+			if cfg!(debug_assertions) { assert_buf.push(idx); }
+		}
+
+		if cfg!(debug_assertions) {
+			let initial_len = assert_buf.len();
+			assert_buf.sort_unstable();
+			assert_buf.dedup();
+			assert_eq!(initial_len, assert_buf.len(), "Upvalue indices were not unique");
+		}
+
+		// SAFETY: All elements have been initialized.
+		unsafe { buf.assume_init() }
+	};
 
 	let debug = crate::debug::DebugInfo::new_closure(
 		closure_state.debug_info.into_map(),
@@ -200,6 +250,7 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 		operations: closure_state.operations.into_boxed_slice(),
 		debug: Some(debug),
 		frame_size: closure_state.max_slot_use,
+		upvalues,
 	};
 
 	Ok(parsed)

@@ -74,7 +74,7 @@ pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, st
 		super::parse_stmt(tok, lexer, &mut scope, state)?;
 	}
 
-	let mut loop_scope = scope.finalize_root();
+	let mut loop_scope = scope.finalize_scope();
 
 	// Jump back to the start of the loop.
 	state.emit(Op::goto(loop_scope.start_pos), lexer.src_index());
