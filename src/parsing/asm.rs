@@ -116,6 +116,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 				let (idx, src) = args!(u16, u8);
 				Operation::SetUpTab(idx, src)
 			},
+			"close" => simple_op!(Close u8),
 			op => panic!("Unknown operation: {op}"),
 		});
 	}
@@ -147,7 +148,6 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, parsed: &super::Parsed) -> Result<
 		closures,
 		numbers,
 		strings,
-		..
 	} = parsed;
 
 	for closure in std::iter::once(parsed_func).chain(closures) {
@@ -155,6 +155,11 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, parsed: &super::Parsed) -> Result<
 			.and_then(|d| d.func_name())
 			.unwrap_or("<unnamed>");
 		writeln!(buf, "{name}:")?;
+		
+		writeln!(buf, "\t# Frame size: {}, Params: {}, Upvalues: {}",
+			closure.frame_size,
+			closure.param_count,
+			closure.upvalues.len())?;
 
 		// Print all operations
 		for (idx, op) in closure.operations.iter().enumerate() {
@@ -197,9 +202,9 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, parsed: &super::Parsed) -> Result<
 				Operation::Ret(dst, ret_cnt) => writeln!(buf, "\tret {dst} {ret_cnt}")?,
 				Operation::SkpIf(cond) => writeln!(buf, "\tskpif {cond}")?,
 				Operation::SkpIfNot(cond) => writeln!(buf, "\tskpifnot {cond}")?,
-				Operation::GoTo(p32, p8) => {
+				Operation::GoTo(encoded) => {
 					// Convert absolute position back to relative offset
-					let position = Operation::decode_goto(*p32, *p8);
+					let position = Operation::decode_goto(*encoded);
 					let offset = position as isize - idx as isize;
 					writeln!(buf, "\tgoto {offset}")?
 				},
@@ -207,6 +212,7 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, parsed: &super::Parsed) -> Result<
 				Operation::SetUpVal(idx, src) => writeln!(buf, "\tsetupval {idx} {src}")?,
 				Operation::GetUpTab(dst, key) => writeln!(buf, "\tgetuptab {dst} {key}")?,
 				Operation::SetUpTab(tab, key) => writeln!(buf, "\tsetuptab {tab} {key}")?,
+				Operation::Close(base) => writeln!(buf, "\tclose {base}")?,
 			}
 		}
 

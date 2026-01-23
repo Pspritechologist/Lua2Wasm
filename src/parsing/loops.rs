@@ -21,7 +21,7 @@ impl<'a, 's> LoopScope<'a, 's> {
 		let ops = state.ops_mut();
 
 		for &jump_pos in &self.end_jumps {
-			debug_assert!(matches!(ops[jump_pos], Op::GoTo(_, _)), "Expected GoTo at position {jump_pos}, found {:?}", ops[jump_pos]);
+			debug_assert!(matches!(ops[jump_pos], Op::GoTo(_)), "Expected GoTo at position {jump_pos}, found {:?}", ops[jump_pos]);
 			ops[jump_pos] = end_op;
 		}
 	}
@@ -31,7 +31,7 @@ impl<'a, 's> ParseScope<'s> for LoopScope<'a, 's> {
 
 	fn emit_break(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> {
 		let break_pos = state.ops().len();
-		state.emit(Op::GoTo(0, 0), span); // Placeholder
+		state.emit(Op::tmp_goto(), span); // Placeholder
 		self.end_jumps.push(break_pos);
 		Ok(())
 	}

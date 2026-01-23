@@ -113,7 +113,7 @@ impl<'s> InfixOp<'s> {
 
 				state.emit(Op::SkpIf(dst), lexer.src_index());
 				let goto_pos = state.ops().len();
-				state.emit(Op::GoTo(0, 0), lexer.src_index()); // Placeholder
+				state.emit(Op::tmp_goto(), lexer.src_index()); // Placeholder
 				
 				let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
 				right.set_to_slot(lexer, state, dst)?;
@@ -128,7 +128,7 @@ impl<'s> InfixOp<'s> {
 
 				state.emit(Op::SkpIfNot(dst), lexer.src_index());
 				let goto_pos = state.ops().len();
-				state.emit(Op::GoTo(0, 0), lexer.src_index()); // Placeholder
+				state.emit(Op::tmp_goto(), lexer.src_index()); // Placeholder
 				
 				let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
 				right.set_to_slot(lexer, state, dst)?;

@@ -3,6 +3,7 @@
 	ptr_metadata,
 	macro_metavar_expr,
 	trim_prefix_suffix,
+	cell_get_cloned,
 )]
 
 use std::rc::Rc;
@@ -11,6 +12,7 @@ use bstr::BStr;
 mod types;
 mod parsing;
 mod debug;
+mod globals;
 
 mod gc {
 	pub use dumpster::unsync::*;
@@ -59,7 +61,7 @@ enum Operation {
 	Call(u8, u8, u8),
 	Ret(u8, u8),
 	// Control.
-	GoTo(u32, u8),
+	GoTo([u8; 3]),
 	SkpIf(u8),
 	SkpIfNot(u8),
 	// Meta.
@@ -68,21 +70,43 @@ enum Operation {
 	SetUpVal(u8, u8),
 	GetUpTab(u8, u16),
 	SetUpTab(u16, u8),
+	Close(u8),
 }
 impl Operation {
+	pub fn tmp_goto() -> Self {
+		Self::GoTo([0, 0, 0])
+	}
+
 	pub fn goto(position: usize) -> Self {
-		let (p32, p8) = Self::encode_goto(position);
-		Self::GoTo(p32, p8)
+		let encoded = Self::encode_goto(position);
+		Self::GoTo(encoded)
 	}
 
-	pub fn encode_goto(position: usize) -> (u32, u8) {
-		let p32 = (position & 0xFFFF_FFFF) as u32;
-		let p8 = ((position >> 32) & 0xFF) as u8;
-		(p32, p8)
+	pub fn encode_goto(position: usize) -> [u8; 3] {
+		// Ensure the position can fit in 24 bits.
+		debug_assert!(position < (1 << 24), "Goto position out of range");
+
+		let encoded = position as u32;
+		[
+			((encoded >> 16) & 0xFF) as u8,
+			((encoded >> 8) & 0xFF) as u8,
+			(encoded & 0xFF) as u8,
+		]
 	}
 
-	pub fn decode_goto(p32: u32, p8: u8) -> usize {
-		((p8 as usize) << 32) | (p32 as usize)
+	pub fn decode_goto(encoded: [u8; 3]) -> usize {
+		let [a, b, c] = encoded;
+		let combined = ((a as u32) << 16) | ((b as u32) << 8) | (c as u32);
+		combined as usize
+	}
+
+	pub fn update_goto_target(&mut self, new_target: usize) {
+		if let Self::GoTo(encoded) = self {
+			*encoded = Self::encode_goto(new_target);
+		} else {
+			debug_assert!(false, "Attempted to update target of non-goto operation");
+			unsafe { std::hint::unreachable_unchecked() };
+		}
 	}
 }
 
@@ -93,13 +117,14 @@ struct ClosureProto {
 	number_offset: usize,
 	string_offset: usize,
 	closure_offset: usize,
+	upvalues: Box<[parsing::Upvalue]>,
 	debug: Option<debug::DebugInfo>,
 }
 
 struct Frame {
 	pc: usize,
 	stack_base: usize,
-	call_proto: usize,
+	closure_proto: usize,
 	expected_to_return: u8,
 }
 
@@ -107,8 +132,10 @@ impl Frame {
 	pub fn initial() -> Self {
 		Self {
 			pc: 0,
-			stack_base: 0,
-			call_proto: 0,
+			// The first slot is reserved for the main closure.
+			//TODO: Handle passing arguments to main functions.
+			stack_base: 2,
+			closure_proto: 0,
 			expected_to_return: 0,
 		}
 	}
@@ -117,7 +144,7 @@ impl Frame {
 		Self {
 			pc: 0,
 			stack_base,
-			call_proto,
+			closure_proto: call_proto,
 			expected_to_return: expected_returns,
 		}
 	}
@@ -152,6 +179,7 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 			string_offset: 0,
 			closure_offset: 0,
 			slots_needed: c.frame_size,
+			upvalues: c.upvalues,
 			debug: c.debug,
 		}
 	}).collect();
@@ -162,14 +190,12 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 			strings,
 			closures,
 		},
-		..Default::default()
+		..Luant::new()
 	});
 
-	let main_func = types::Closure {
-		proto_idx: 0,
-	};
+	let main_func = types::Closure::new(0, [types::UpvalueSlot::new(types::Upvalue::Open(0))]);
 
-	let stack = match call_func(&main_func, &luant) {
+	let stack = match call_func(main_func, &luant) {
 		Ok(stack) => stack,
 		Err((op_idx, e)) => {
 			let span = luant.constants.closures[0].debug.as_ref()
@@ -213,7 +239,7 @@ impl ConstStrings {
 		self.map.len() - 1
 	}
 
-	pub fn new<'a>(strings: impl IntoIterator<Item=&'a BStr>) -> Self {
+	pub fn new<'a>(strings: impl IntoIterator<Item = &'a BStr>) -> Self {
 		let mut data = Vec::new();
 		let mut map = Vec::new();
 
@@ -245,7 +271,6 @@ struct VmState {
 	gc_buf: std::cell::Cell<Vec<u8>>,
 }
 
-#[derive(Default)]
 struct Luant {
 	vm_state: VmState,
 	constants: Constants,
@@ -254,80 +279,46 @@ struct Luant {
 
 impl Luant {
 	pub fn new() -> Self {
-		Self::default()
+		let mut inst = Self {
+			vm_state: Default::default(),
+			constants: Default::default(),
+			global_table: Default::default(),
+		};
+		inst.fill_globals();
+		inst
 	}
 }
 
-fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<types::Value>>, (usize, Box<dyn std::error::Error>)> {
+fn call_func(main_func: types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<types::Value>>, (usize, Box<dyn std::error::Error>)> {
 	use crate::types::{Value, ToValue, Num};
-
+		
 	let luant = &**luant;
-	let proto = &luant.constants.closures[func.proto_idx];
+	
+	let mut func_proto: &ClosureProto;
+	let mut frames: Vec<Frame>;
+	let mut stack: Vec<Option<Value>>;
+	let mut open_upvalues: Vec<types::UpvalueSlot>;
 
-	let mut frames: Vec<Frame> = Vec::from([Frame::initial()]);
-	let mut stack: Vec<Option<Value>> = vec![None; proto.slots_needed.into()];
+	let mut frame;
+	let mut registers;
 
-	let mut frame = frames.last_mut().unwrap();
-	let mut registers = &mut stack[frame.stack_base..];
+	let mut operations;
 
-	let mut operations = &proto.operations[..];
+	{
+		let proto = &luant.constants.closures[main_func.proto_idx];
 
-	//TODO: Temp printing.
-	let print_fn = Some(Value::Func(|args| {
-		let mut values = args.iter();
+		func_proto = proto;
+		frames = Vec::from([Frame::initial()]);
+		stack = vec![None; proto.slots_needed as usize + 2];
+		open_upvalues = vec![main_func.upvalues[0].clone()];
+		stack[0] = Some(Value::Table(luant.global_table.clone()));
+		stack[1] = Some(Value::Closure(main_func));
 
-		if let Some(v) = values.next() {
-			match v {
-				Some(v) => print!("{v}"),
-				None => print!("<nil>"),
-			}
-		}
+		frame = frames.last_mut().unwrap();
+		registers = &mut stack[frame.stack_base..];
 
-		for val in values {
-			match val {
-				Some(v) => print!("\t{v}"),
-				None => print!("\t<nil>"),
-			}
-		}
-
-		println!();
-
-		Ok(vec![])
-	}));
-	let libs_tab = Some(Value::Table(types::Table::from_iter(luant, [
-		("assert", Value::Func(|args| {
-			let condition = &args[0];
-			let msg = args.get(1);
-
-			if !condition.as_ref().is_some_and(|v| v.is_truthy()) {
-				if let Some(Some(Value::Str(s))) = msg {
-					return Err(format!("Assertion failed: {}", s.as_str()).into());
-				} else {
-					return Err("Assertion failed".into());
-				}
-			}
-
-			Ok(vec![])
-		})),
-		("assert_eq", Value::Func(|args| {
-			let a = &args[0];
-			let b = &args[1];
-			let msg = args.get(2);
-
-			if a != b {
-				if let Some(Some(Value::Str(s))) = msg {
-					return Err(format!("Assertion failed: {a:?} != {b:?}: {}", s.as_str()).into());
-				} else {
-					return Err(format!("Assertion failed: {a:#?} != {b:#?}").into());
-				}
-			}
-
-			Ok(vec![])
-		})),
-	])));
-
-	registers[0] = print_fn.clone();
-	registers[1] = libs_tab.clone();
+		operations = &proto.operations[..];
+	}
 	
 	macro_rules! math_op {
 		($dst:expr, $a:expr, $b:expr, $op:tt) => { {
@@ -390,23 +381,45 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 			Operation::LoadNil(dst, cnt) => (dst..dst + cnt).for_each(|dst| registers[dst as usize] = None),
 			Operation::LoadBool(dst, val) => registers[dst as usize] = Some(Value::Bool(val)),
 			Operation::LoadNum(dst, idx) => {
-				let idx = idx as usize + proto.number_offset;
+				let idx = idx as usize + func_proto.number_offset;
 				let num = luant.constants.numbers[idx];
 				let value = Num::try_from(num).unwrap_or_default().to_value(luant);
 				registers[dst as usize] = Some(value);
 			},
 			Operation::LoadStr(dst, idx) => {
-				let idx = idx as usize + proto.string_offset;
+				let idx = idx as usize + func_proto.string_offset;
 				let s = luant.constants.strings.get(idx);
 				let value = s.to_value(luant);
 				registers[dst as usize] = Some(value);
 			},
 			Operation::LoadTab(dst) => registers[dst as usize] = Some(Value::Table(Default::default())),
 			Operation::LoadClosure(dst, idx) => {
-				let proto_idx = proto.closure_offset + (idx as usize);
-				let closure = types::Closure {
-					proto_idx,
-				};
+				let proto_idx = func_proto.closure_offset + (idx as usize);
+				let prototype = &luant.constants.closures[proto_idx];
+
+				let upvalues: Vec<_> = prototype.upvalues.iter().map(|&uv| match uv {
+					parsing::Upvalue::ParentSlot(slot) => {
+						let abs_slot = frame.stack_base + (slot as usize);
+						match open_upvalues.iter().find(|uv| unsafe { uv.open_idx().unwrap_unchecked() } == abs_slot) {
+							Some(upval) => upval.clone(),
+							None => {
+								let upval = types::UpvalueSlot::new(types::Upvalue::Open(abs_slot));
+								open_upvalues.push(upval.clone());
+								upval
+							},
+						}
+					},
+					parsing::Upvalue::ParentUpValue(idx) => {
+						// Get the parent closure.
+						let Some(Value::Closure(parent_closure)) = &stack[frame.stack_base - 1] else { unreachable!() };
+						parent_closure.upvalues[idx as usize].clone()
+					},
+				}).collect();
+
+				// Reset registers to avoid borrow issues.
+				registers = &mut stack[frame.stack_base..];
+
+				let closure = types::Closure::new(proto_idx, upvalues);
 
 				registers[dst as usize] = Some(Value::Closure(closure));
 			},
@@ -518,6 +531,7 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 						stack.resize(new_len, None);
 						frames.push(Frame::new(c.proto_idx, new_stack_base, ret_count));
 
+						func_proto = closure_proto;
 						frame = frames.last_mut().unwrap();
 						registers = &mut stack[frame.stack_base..new_stack_end];
 						operations = &closure_proto.operations[..];
@@ -528,9 +542,6 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 								registers[i as usize] = None;
 							});
 						}
-
-						registers[closure_proto.param_count as usize] = print_fn.clone();
-						registers[(closure_proto.param_count + 1) as usize] = libs_tab.clone();
 
 						// Continue to avoid incrementing the pc.
 						continue;
@@ -543,6 +554,9 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 				let ret_start = reg as usize;
 				let ret_count = count as usize;
 
+				// Close upvalues before returning from the frame
+				open_upvalues.retain(|uv| !uv.close_if_above(&stack, frame.stack_base));
+
 				let last_frame = frames.pop().unwrap();
 
 				if frames.is_empty() {
@@ -551,6 +565,7 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 				}
 
 				frame = frames.last_mut().unwrap();
+				func_proto = &luant.constants.closures[frame.closure_proto];
 
 				if last_frame.expected_to_return > 0 {
 					let expected_returns = last_frame.expected_to_return as usize;
@@ -578,14 +593,14 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 				}
 
 				registers = &mut stack[frame.stack_base..];
-				operations = &luant.constants.closures[frame.call_proto].operations[..];
+				operations = &luant.constants.closures[frame.closure_proto].operations[..];
 			},
 			Operation::SkpIf(cond) => {
 				let condition = registers[cond as usize].as_ref().is_some_and(|v| v.is_truthy());
 
 				if !condition {
-					if let Some(Operation::GoTo(p32, p8)) = operations.get(frame.pc + 1) {
-						let position = Operation::decode_goto(*p32, *p8);
+					if let Some(&Operation::GoTo(encoded)) = operations.get(frame.pc + 1) {
+						let position = Operation::decode_goto(encoded);
 						frame.pc = position;
 						continue;
 					};
@@ -597,8 +612,8 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 				let condition = registers[cond as usize].as_ref().is_some_and(|v| v.is_truthy());
 
 				if condition {
-					if let Some(Operation::GoTo(p32, p8)) = operations.get(frame.pc + 1) {
-						let position = Operation::decode_goto(*p32, *p8);
+					if let Some(&Operation::GoTo(encoded)) = operations.get(frame.pc + 1) {
+						let position = Operation::decode_goto(encoded);
 						frame.pc = position;
 						continue;
 					};
@@ -606,8 +621,8 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 					frame.pc += 1;
 				}
 			},
-			Operation::GoTo(p32, p8) => {
-				let position = Operation::decode_goto(p32, p8);
+			Operation::GoTo(encoded) => {
+				let position = Operation::decode_goto(encoded);
 				frame.pc = position;
 				continue;
 			},
@@ -615,16 +630,72 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 				registers[dst as usize] = registers[src as usize].clone();
 			},
 			Operation::GetUpVal(dst, idx) => {
+				let Some(Value::Closure(closure)) = &stack[frame.stack_base - 1] else { unreachable!() };
+				let upval = &closure.upvalues[idx as usize];
+				
+				let value = upval.get_value(&stack);
 
+				// Reset registers to avoid borrow issues.
+				registers = &mut stack[frame.stack_base..];
+
+				registers[dst as usize] = value;
 			},
 			Operation::SetUpVal(idx, src) => {
+				let value = registers[src as usize].clone();
 
+				let Some(Value::Closure(closure)) = &stack[frame.stack_base - 1] else { unreachable!() };
+				let upval = &closure.upvalues[idx as usize];
+				
+				if let Some((idx, value)) = upval.set_value(value) {
+					stack[idx] = value;
+				}
+
+				// Reset registers to avoid borrow issues.
+				registers = &mut stack[frame.stack_base..];
 			},
 			Operation::GetUpTab(dst, key) => {
+				// Indexes a field from the first Upvalue of a function (_ENV).
+				let Some(Value::Closure(closure)) = &stack[frame.stack_base - 1] else { unreachable!() };
+				let upval = &closure.upvalues[0];
+				let Some(Value::Table(tab)) = upval.get_value(&stack) else { unsafe { std::hint::unreachable_unchecked() } };
 
+				let idx = key as usize + func_proto.string_offset;
+				let s = luant.constants.strings.get(idx);
+				let key = s.to_value(luant);
+
+				let value = tab.get(&key);
+
+				// Reset registers to avoid borrow issues.
+				registers = &mut stack[frame.stack_base..];
+
+				registers[dst as usize] = value;
 			},
 			Operation::SetUpTab(key, src) => {
+				// Sets a field in the first Upvalue of a function (_ENV).
+				let value = registers[src as usize].clone();
+				
+				let Some(Value::Closure(closure)) = &stack[frame.stack_base - 1] else { unreachable!() };
+				let upval = &closure.upvalues[0];
+				let Some(Value::Table(mut tab)) = upval.get_value(&stack) else { unsafe { std::hint::unreachable_unchecked() } };
 
+				let idx = key as usize + func_proto.string_offset;
+				let s = luant.constants.strings.get(idx);
+				let key = s.to_value(luant);
+
+				match value {
+					Some(value) => tab.set(key, value),
+					None => { tab.remove(&key); },
+				}
+
+				// Reset registers to avoid borrow issues.
+				registers = &mut stack[frame.stack_base..];
+			},
+			Operation::Close(base) => {
+				let base = frame.stack_base + (base as usize);
+				open_upvalues.retain(|uv| !uv.close_if_above(&stack, base));
+
+				// Reset registers to avoid borrow issues.
+				registers = &mut stack[frame.stack_base..];
 			},
 		}
 		
@@ -632,4 +703,20 @@ fn call_func(func: &types::Closure, luant: &Rc<Luant>) -> Result<Vec<Option<type
 	}
 
 	Ok(stack)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_goto_encoding() {
+		let positions = [0, 1, 2, 12345, 54321, 0x7FFFFF, 0xFFFFFF];
+
+		for &pos in &positions {
+			let encoded = Operation::encode_goto(pos);
+			let decoded_pos = Operation::decode_goto(encoded);
+			assert_eq!(pos, decoded_pos, "Position mismatch for pos={pos}");
+		}
+	}
 }

@@ -200,7 +200,6 @@ fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<&'s 
 
 #[derive(Debug, Clone, Copy, PartialEq, Logos, strum::IntoStaticStr)]
 #[logos(extras = LexState<'s>)]
-// #[logos(skip(r"--[^\n]*"))]
 #[logos(skip(r"\s+"))]
 #[logos(skip(r"--(\[(=*)\[)?", handle_comment))]
 // #[logos(skip(r"--\[=*\[", handle_block_comment))]

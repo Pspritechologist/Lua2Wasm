@@ -41,6 +41,13 @@ impl<'a, 's> FuncState<'a, 's> {
 		self.operations.push(op);
 		self.debug_info.emit(src_index);
 	}
+	pub fn emit_closing_goto(&mut self, base: u8, position: usize, src_index: usize) {
+		self.emit(Op::Close(base), src_index);
+		self.emit(Op::goto(position), src_index);
+	}
+	pub fn emit_flat_goto(&mut self, position: usize, src_index: usize) {
+		self.emit(Op::goto(position), src_index);
+	}
 
 	pub fn ops(&self) -> &[Op] {
 		&self.operations
@@ -132,12 +139,16 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 	fn new_label(&mut self, _lexer: &Lexer<'s>, _state: &mut FuncState<'_, 's>, _label: IdentKey, _label_pos: usize) -> Result<(), Error<'s>> {
 		unreachable!()
 	}
-	fn find_label(&mut self, _label: IdentKey, _pos: usize) -> usize { unreachable!() }
-	fn label_exists(&mut self, _label: IdentKey) -> bool { false }
-
-	fn merge_missing_labels(&mut self, _other: &mut Vec<(IdentKey, usize)>) {
+	
+	fn emit_goto(&mut self, _state: &mut FuncState<'_, 's>, _label: IdentKey, _span: usize, _closed_base: Option<u8>) -> Result<(), Error<'s>> {
 		unreachable!()
 	}
+
+	fn merge_missing_labels(&mut self, _other: Vec<(IdentKey, usize, Option<u8>)>) {
+		unreachable!()
+	}
+
+	fn label_exists(&mut self, _label: IdentKey) -> bool { false }
 
 	fn emit_break(&mut self, _state: &mut FuncState<'_, 's>, _span: usize) -> Result<(), Error<'s>> {
 		Err("Break statement not within a loop".into())
@@ -170,7 +181,7 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 		})
 	}
 
-	fn local_count(&mut self) -> u8 { 0 }
+	fn total_locals(&mut self) -> u8 { 0 }
 }
 
 pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>, state: &mut FuncState<'_, 's>, name: Option<super::IdentKey>, span: usize) -> Result<ParsedFunction, Error<'s>> {
@@ -199,12 +210,6 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 			tok => Err(format!("Expected ',' or ')', found {tok:?}"))?,
 		}
 	}
-
-	//TODO: Temp printing.
-	let print = lexer.get_ident("print");
-	assert_eq!(closure_scope.new_local(lexer, &mut closure_state, print)?, params);
-	let libs = lexer.get_ident("lib");
-	assert_eq!(closure_scope.new_local(lexer, &mut closure_state, libs)?, params + 1);
 
 	loop {
 		let tok = lexer.next_must()?;
