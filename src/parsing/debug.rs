@@ -1,4 +1,4 @@
-use crate::debug::SrcMap;
+use crate::vm::debug::SrcMap;
 
 #[derive(Debug, Clone, Default)]
 pub struct InfoCollector {

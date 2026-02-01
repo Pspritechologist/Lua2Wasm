@@ -1,8 +1,5 @@
-use crate::{
-	Luant,
-	types::Num,
-	gc::{Trace, Gc},
-};
+use super::Num;
+use crate::{gc::{Trace, Gc}, Luant};
 use bstr::BStr;
 use std::ops::Deref;
 

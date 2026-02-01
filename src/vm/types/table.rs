@@ -1,5 +1,5 @@
+use super::Value;
 use crate::gc::Gc;
-use crate::types::Value;
 use dumpster::{Trace, TraceWith, Visitor};
 use hashbrown::HashTable;
 use std::iter;

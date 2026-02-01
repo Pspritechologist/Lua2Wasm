@@ -1,4 +1,4 @@
-use crate::debug::{DebugInfo, SrcMap};
+use crate::vm::debug::{DebugInfo, SrcMap};
 use super::{debug::InfoCollector, VariableScope, ParseScope, Named, LexerExt, Error, Op, expect_tok};
 use luant_lexer::{Lexer, Token, IdentKey};
 use bstr::BStr;
@@ -244,7 +244,7 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 		unsafe { buf.assume_init() }
 	};
 
-	let debug = crate::debug::DebugInfo::new_closure(
+	let debug = DebugInfo::new_closure(
 		closure_state.debug_info.into_map(),
 		name.map(|i| lexer.resolve_ident(i)),
 		span,

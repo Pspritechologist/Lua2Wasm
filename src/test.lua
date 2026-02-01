@@ -1,8 +1,0 @@
-print(20 + 22 * 30)
-print(20 * 22 + 30)
-print(not true)
-print(not not true)
-print(not not true == false)
-print(-5 - 6)
-print(-(5 - 6))
-print(-5 - 6 * 20 % 5)

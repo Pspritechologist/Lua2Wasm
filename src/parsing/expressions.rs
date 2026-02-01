@@ -1,6 +1,6 @@
 use super::{Error, ParseScope, Named, LexerExt, Op, IdentKey, expect_tok};
 use super::functions::FuncState;
-use bstr::BStr;
+use crate::{BStr, vm::Num};
 use luant_lexer::{Lexer, Token};
 
 mod postfix_ops;
@@ -11,7 +11,7 @@ pub use prefix::{PlaceExpr, IdentExpr};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Const<'s> {
-	Number(crate::types::Num),
+	Number(Num),
 	String(&'s BStr),
 	Bool(bool),
 	Nil,

@@ -1,4 +1,4 @@
-use crate::types::Value;
+use super::Value;
 use crate::gc::{Gc, Trace};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -33,18 +33,18 @@ impl Closure {
 
 #[derive(Clone)]
 pub struct UpvalueSlot {
-	inner: Rc<Cell<Upvalue>>,
+	inner: Rc<Cell<UpvalueRef>>,
 }
 impl UpvalueSlot {
-	pub fn new(upvalue: Upvalue) -> Self {
+	pub fn new(upvalue: UpvalueRef) -> Self {
 		Self { inner: Cell::new(upvalue).into() }
 	}
 
-	pub fn get(&self) -> Upvalue {
+	pub fn get(&self) -> UpvalueRef {
 		self.inner.get_cloned().into_inner()
 	}
 
-	pub fn set(&self, upvalue: Upvalue) {
+	pub fn set(&self, upvalue: UpvalueRef) {
 		self.inner.set(upvalue);
 	}
 
@@ -52,8 +52,8 @@ impl UpvalueSlot {
 		// SAFETY: No references escape from this function.
 		let upval = unsafe { self.inner.as_ptr().as_ref().unwrap_unchecked() };
 		match upval {
-			&Upvalue::Open(idx) => stack[idx].clone(),
-			Upvalue::Closed(inner) => inner.get(),
+			&UpvalueRef::Open(idx) => stack[idx].clone(),
+			UpvalueRef::Closed(inner) => inner.get(),
 		}
 	}
 
@@ -61,8 +61,8 @@ impl UpvalueSlot {
 		// SAFETY: No references escape from this function.
 		let upval = unsafe { self.inner.as_ptr().as_ref().unwrap_unchecked() };
 		match upval {
-			&Upvalue::Open(idx) => return Some((idx, value)),
-			Upvalue::Closed(inner) => inner.set(value),
+			&UpvalueRef::Open(idx) => return Some((idx, value)),
+			UpvalueRef::Closed(inner) => inner.set(value),
 		}
 
 		None
@@ -71,10 +71,10 @@ impl UpvalueSlot {
 	pub fn close_if_above(&self, stack: &[Option<Value>], base: usize) -> bool {
 		// SAFETY: No references escape from this function.
 		let upval = unsafe { self.inner.as_ptr().as_mut().unwrap_unchecked() };
-		if let &mut Upvalue::Open(idx) = upval && idx >= base {
+		if let &mut UpvalueRef::Open(idx) = upval && idx >= base {
 			let value = stack[idx].clone();
 			let closed = ClosedUpvalueInner::new(value);
-			*upval = Upvalue::Closed(Gc::new(closed));
+			*upval = UpvalueRef::Closed(Gc::new(closed));
 
 			return true;
 		}
@@ -85,7 +85,7 @@ impl UpvalueSlot {
 	pub fn open_idx(&self) -> Option<usize> {
 		// SAFETY: No references escape from this function.
 		let upval = unsafe { self.inner.as_ptr().as_ref().unwrap_unchecked() };
-		if let &Upvalue::Open(idx) = upval {
+		if let &UpvalueRef::Open(idx) = upval {
 			Some(idx)
 		} else {
 			None
@@ -101,12 +101,12 @@ unsafe impl<V: dumpster::Visitor> dumpster::TraceWith<V> for UpvalueSlot {
 }
 
 #[derive(Debug, Clone, Trace)]
-pub enum Upvalue {
+pub enum UpvalueRef {
 	Open(usize),
 	Closed(Gc<ClosedUpvalueInner>),
 }
 
-unsafe impl std::cell::CloneFromCell for Upvalue { }
+unsafe impl std::cell::CloneFromCell for UpvalueRef { }
 
 pub struct ClosedUpvalueInner {
 	inner: Cell<Option<Value>>,

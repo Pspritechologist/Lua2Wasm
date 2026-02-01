@@ -1,4 +1,4 @@
-use crate::types::*;
+use super::types::{Value, Table};
 
 impl crate::Luant {
 	pub fn fill_globals(&mut self) {

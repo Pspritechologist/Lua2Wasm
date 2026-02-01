@@ -1,4 +1,5 @@
-use crate::Operation as Op;
+use crate::vm::bytecode::Operation as Op;
+use crate::vm::debug::DebugInfo;
 use luant_lexer::{IdentKey, Lexer, Token};
 
 use functions::FuncState;
@@ -55,7 +56,7 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 
 	let (ops, src_map, used_regs) = state.into_inner();
 
-	let debug = crate::debug::DebugInfo::new_file(
+	let debug = DebugInfo::new_file(
 		src_map,
 		None::<&str>,
 	);
@@ -110,7 +111,7 @@ macro_rules! expect_tok {
 }
 use expect_tok;
 
-type Error<'s> = Box<dyn std::error::Error + 's>;
+pub type Error<'s> = Box<dyn std::error::Error + 's>;
 
 fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
 	match head {
@@ -346,13 +347,4 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 		.for_each(|pos| state.ops_mut()[pos].update_goto_target(end_jump_pos));
 
 	Ok(())
-}
-
-#[test]
-fn test() {
-	let src = include_str!("../test.lua");
-	// for tok in luant_lexer::lexer(src) {
-	// 	println!("{:?}", tok.unwrap());
-	// }
-	println!("{:?}", parse(src).unwrap());
 }

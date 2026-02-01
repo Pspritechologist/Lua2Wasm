@@ -1,4 +1,4 @@
-use crate::Operation;
+use super::Op;
 
 pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 	let mut ops = Vec::new();
@@ -43,7 +43,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 					#[allow(unused_parens)]
 					let (a $(${ignore($b)}, b $(${ignore($c)}, c)?)?) = args!($a$(, $b$(, $c)?)?);
 					max_reg = max_reg.max(a);
-					Operation::$name(a $(${ignore($b)}, b $(${ignore($c)}, c)?)?)
+					Op::$name(a $(${ignore($b)}, b $(${ignore($c)}, c)?)?)
 				}
 			};
 		}
@@ -62,7 +62,7 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 					idx
 				});
 
-				Operation::LoadNum(reg, index as u16)
+				Op::LoadNum(reg, index as u16)
 			},
 			"loadstr" => simple_op!(LoadStr u8, u16),
 			"loadtab" => simple_op!(LoadTab u8),
@@ -97,24 +97,24 @@ pub fn parse_asm(src: &str) -> super::Parsed<'_> {
 			"skpif" => {
 				let cond = args!(u8);
 				max_reg = max_reg.max(cond);
-				Operation::SkpIf(cond)
+				Op::SkpIf(cond)
 			},
 			"skpifnot" => {
 				let cond = args!(u8);
 				max_reg = max_reg.max(cond);
-				Operation::SkpIfNot(cond)
+				Op::SkpIfNot(cond)
 			},
 			"goto" => {
 				let offset = args!(isize);
 				let position = ops.len().strict_add_signed(offset);
-				Operation::goto(position)
+				Op::goto(position)
 			},
 			"getupval" => simple_op!(GetUpVal u8, u8),
 			"setupval" => simple_op!(SetUpVal u8, u8),
 			"getuptab" => simple_op!(GetUpTab u8, u16),
 			"setuptab" => {
 				let (idx, src) = args!(u16, u8);
-				Operation::SetUpTab(idx, src)
+				Op::SetUpTab(idx, src)
 			},
 			"close" => simple_op!(Close u8),
 			op => panic!("Unknown operation: {op}"),
@@ -164,55 +164,55 @@ pub fn fmt_asm(mut buf: impl std::fmt::Write, parsed: &super::Parsed) -> Result<
 		// Print all operations
 		for (idx, op) in closure.operations.iter().enumerate() {
 			match op {
-				Operation::LoadNil(dst, cnt) => writeln!(buf, "\tloadnull {dst} {cnt}")?,
-				Operation::LoadBool(dst, val) => writeln!(buf, "\tloadbool {dst} {val}")?,
-				Operation::LoadNum(dst, num_idx) => {
+				Op::LoadNil(dst, cnt) => writeln!(buf, "\tloadnull {dst} {cnt}")?,
+				Op::LoadBool(dst, val) => writeln!(buf, "\tloadbool {dst} {val}")?,
+				Op::LoadNum(dst, num_idx) => {
 					let num = numbers.get(*num_idx as usize).unwrap_or(&0.0);
 					writeln!(buf, "\tloadnum {dst} {num}")?
 				},
-				Operation::LoadStr(dst, str_idx) => writeln!(buf, "\tloadstr {dst} {str_idx}")?,
-				Operation::LoadTab(dst) => writeln!(buf, "\tloadtab {dst}")?,
-				Operation::LoadClosure(dst, idx) => writeln!(buf, "\tloadclosure {dst} {idx}")?,
-				Operation::Set(tab, key, val) => writeln!(buf, "\tset {tab} {key} {val}")?,
-				Operation::Get(dst, tab, key) => writeln!(buf, "\tget {dst} {tab} {key}")?,
-				Operation::Copy(dst, src) => writeln!(buf, "\tcopy {dst} {src}")?,
-				Operation::Add(dst, a, b) => writeln!(buf, "\tadd {dst} {a} {b}")?,
-				Operation::Sub(dst, a, b) => writeln!(buf, "\tsub {dst} {a} {b}")?,
-				Operation::Mul(dst, a, b) => writeln!(buf, "\tmul {dst} {a} {b}")?,
-				Operation::Div(dst, a, b) => writeln!(buf, "\tdiv {dst} {a} {b}")?,
-				Operation::Mod(dst, a, b) => writeln!(buf, "\tmod {dst} {a} {b}")?,
-				Operation::Pow(dst, a, b) => writeln!(buf, "\tpow {dst} {a} {b}")?,
-				Operation::Neg(dst, src) => writeln!(buf, "\tneg {dst} {src}")?,
-				Operation::Eq(dst, a, b) => writeln!(buf, "\teq {dst} {a} {b}")?,
-				Operation::Neq(dst, a, b) => writeln!(buf, "\tneq {dst} {a} {b}")?,
-				Operation::Lt(dst, a, b) => writeln!(buf, "\tlt {dst} {a} {b}")?,
-				Operation::Lte(dst, a, b) => writeln!(buf, "\tlte {dst} {a} {b}")?,
-				Operation::Gt(dst, a, b) => writeln!(buf, "\tgt {dst} {a} {b}")?,
-				Operation::Gte(dst, a, b) => writeln!(buf, "\tgte {dst} {a} {b}")?,
-				Operation::Not(dst, src) => writeln!(buf, "\tnot {dst} {src}")?,
-				Operation::BitAnd(dst, a, b) => writeln!(buf, "\tband {dst} {a} {b}")?,
-				Operation::BitOr(dst, a, b) => writeln!(buf, "\tbor {dst} {a} {b}")?,
-				Operation::BitXor(dst, a, b) => writeln!(buf, "\tbxor {dst} {a} {b}")?,
-				Operation::BitShL(dst, a, b) => writeln!(buf, "\tshl {dst} {a} {b}")?,
-				Operation::BitShR(dst, a, b) => writeln!(buf, "\tshr {dst} {a} {b}")?,
-				Operation::BitNot(dst, src) => writeln!(buf, "\tbnot {dst} {src}")?,
-				Operation::Concat(dst, a, b) => writeln!(buf, "\tconcat {dst} {a} {b}")?,
-				Operation::Len(dst, src) => writeln!(buf, "\tlen {dst} {src}")?,
-				Operation::Call(dst, func, arg_cnt) => writeln!(buf, "\tcall {dst} {func} {arg_cnt}")?,
-				Operation::Ret(dst, ret_cnt) => writeln!(buf, "\tret {dst} {ret_cnt}")?,
-				Operation::SkpIf(cond) => writeln!(buf, "\tskpif {cond}")?,
-				Operation::SkpIfNot(cond) => writeln!(buf, "\tskpifnot {cond}")?,
-				Operation::GoTo(encoded) => {
+				Op::LoadStr(dst, str_idx) => writeln!(buf, "\tloadstr {dst} {str_idx}")?,
+				Op::LoadTab(dst) => writeln!(buf, "\tloadtab {dst}")?,
+				Op::LoadClosure(dst, idx) => writeln!(buf, "\tloadclosure {dst} {idx}")?,
+				Op::Set(tab, key, val) => writeln!(buf, "\tset {tab} {key} {val}")?,
+				Op::Get(dst, tab, key) => writeln!(buf, "\tget {dst} {tab} {key}")?,
+				Op::Copy(dst, src) => writeln!(buf, "\tcopy {dst} {src}")?,
+				Op::Add(dst, a, b) => writeln!(buf, "\tadd {dst} {a} {b}")?,
+				Op::Sub(dst, a, b) => writeln!(buf, "\tsub {dst} {a} {b}")?,
+				Op::Mul(dst, a, b) => writeln!(buf, "\tmul {dst} {a} {b}")?,
+				Op::Div(dst, a, b) => writeln!(buf, "\tdiv {dst} {a} {b}")?,
+				Op::Mod(dst, a, b) => writeln!(buf, "\tmod {dst} {a} {b}")?,
+				Op::Pow(dst, a, b) => writeln!(buf, "\tpow {dst} {a} {b}")?,
+				Op::Neg(dst, src) => writeln!(buf, "\tneg {dst} {src}")?,
+				Op::Eq(dst, a, b) => writeln!(buf, "\teq {dst} {a} {b}")?,
+				Op::Neq(dst, a, b) => writeln!(buf, "\tneq {dst} {a} {b}")?,
+				Op::Lt(dst, a, b) => writeln!(buf, "\tlt {dst} {a} {b}")?,
+				Op::Lte(dst, a, b) => writeln!(buf, "\tlte {dst} {a} {b}")?,
+				Op::Gt(dst, a, b) => writeln!(buf, "\tgt {dst} {a} {b}")?,
+				Op::Gte(dst, a, b) => writeln!(buf, "\tgte {dst} {a} {b}")?,
+				Op::Not(dst, src) => writeln!(buf, "\tnot {dst} {src}")?,
+				Op::BitAnd(dst, a, b) => writeln!(buf, "\tband {dst} {a} {b}")?,
+				Op::BitOr(dst, a, b) => writeln!(buf, "\tbor {dst} {a} {b}")?,
+				Op::BitXor(dst, a, b) => writeln!(buf, "\tbxor {dst} {a} {b}")?,
+				Op::BitShL(dst, a, b) => writeln!(buf, "\tshl {dst} {a} {b}")?,
+				Op::BitShR(dst, a, b) => writeln!(buf, "\tshr {dst} {a} {b}")?,
+				Op::BitNot(dst, src) => writeln!(buf, "\tbnot {dst} {src}")?,
+				Op::Concat(dst, a, b) => writeln!(buf, "\tconcat {dst} {a} {b}")?,
+				Op::Len(dst, src) => writeln!(buf, "\tlen {dst} {src}")?,
+				Op::Call(dst, func, arg_cnt) => writeln!(buf, "\tcall {dst} {func} {arg_cnt}")?,
+				Op::Ret(dst, ret_cnt) => writeln!(buf, "\tret {dst} {ret_cnt}")?,
+				Op::SkpIf(cond) => writeln!(buf, "\tskpif {cond}")?,
+				Op::SkpIfNot(cond) => writeln!(buf, "\tskpifnot {cond}")?,
+				Op::GoTo(encoded) => {
 					// Convert absolute position back to relative offset
-					let position = Operation::decode_goto(*encoded);
+					let position = Op::decode_goto(*encoded);
 					let offset = position as isize - idx as isize;
 					writeln!(buf, "\tgoto {offset}")?
 				},
-				Operation::GetUpVal(dst, idx) => writeln!(buf, "\tgetupval {dst} {idx}")?,
-				Operation::SetUpVal(idx, src) => writeln!(buf, "\tsetupval {idx} {src}")?,
-				Operation::GetUpTab(dst, key) => writeln!(buf, "\tgetuptab {dst} {key}")?,
-				Operation::SetUpTab(tab, key) => writeln!(buf, "\tsetuptab {tab} {key}")?,
-				Operation::Close(base) => writeln!(buf, "\tclose {base}")?,
+				Op::GetUpVal(dst, idx) => writeln!(buf, "\tgetupval {dst} {idx}")?,
+				Op::SetUpVal(idx, src) => writeln!(buf, "\tsetupval {idx} {src}")?,
+				Op::GetUpTab(dst, key) => writeln!(buf, "\tgetuptab {dst} {key}")?,
+				Op::SetUpTab(tab, key) => writeln!(buf, "\tsetuptab {tab} {key}")?,
+				Op::Close(base) => writeln!(buf, "\tclose {base}")?,
 			}
 		}
 

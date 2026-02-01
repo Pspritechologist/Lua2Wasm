@@ -1,4 +1,4 @@
-use super::Luant;
+use crate::Luant;
 
 mod num;
 mod table;
@@ -10,7 +10,7 @@ pub use num::Num;
 pub use table::Table;
 pub use string::LString;
 pub use hasher::Hasher;
-pub use func::{Closure, Upvalue, UpvalueSlot};
+pub use func::{Closure, UpvalueRef, UpvalueSlot};
 
 #[derive(Debug, Clone)]
 pub enum Value {
