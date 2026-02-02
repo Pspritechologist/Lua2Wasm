@@ -1,5 +1,5 @@
 use crate::parsing::LexerExt;
-use crate::vm::Num;
+use crate::vm::types::Num;
 use super::{Error, ParseScope, Op, IdentKey, expect_tok};
 use super::{Expr, Const, FuncState, parse_table_init};
 use super::postfix_ops::{CallType, IndexType};

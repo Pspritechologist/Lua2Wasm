@@ -1,6 +1,6 @@
 use super::{Error, ParseScope, Named, LexerExt, Op, IdentKey, expect_tok};
 use super::functions::FuncState;
-use crate::{BStr, vm::Num};
+use crate::{BStr, vm::types::Num};
 use luant_lexer::{Lexer, Token};
 
 mod postfix_ops;

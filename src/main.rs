@@ -1,5 +1,4 @@
-use luant::{parsing, call_func, Luant, BStr};
-use std::rc::Rc;
+use luant::Luant;
 
 fn main() -> std::process::ExitCode {
 	if let Err(e) = try_main() {
@@ -13,17 +12,11 @@ fn main() -> std::process::ExitCode {
 fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 	let src = include_str!("../test.lua");
 
-	// let parsed = parsing::parse_asm(src);
-	let parsed = parsing::parse(src)?;
-	let mut buf = String::new();
-	parsing::fmt_asm(&mut buf, &parsed)?;
-	std::fs::write("out.asm", buf)?;
-
-	let luant = luant::new_luant();
+	let luant = Luant::new();
 	
-	let main_func = luant::load_closure(&luant, src)?;
+	let main_func = luant.load(src)?;
 
-	let stack = match call_func(main_func, &luant) {
+	let stack = match main_func.run()? {
 		Ok(stack) => stack,
 		Err((op_idx, e)) => {
 			let span = luant.constants.closures[0].debug.as_ref()

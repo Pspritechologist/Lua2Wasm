@@ -86,7 +86,7 @@ impl Table {
 		Default::default()
 	}
 
-	pub fn from_iter<I, K, V>(state: &crate::Luant, iter: I) -> Self
+	pub fn from_iter<I, K, V>(state: &super::LuantState, iter: I) -> Self
 	where
 		I: IntoIterator<Item = (K, V)>,
 		K: super::ToValue,

@@ -1,5 +1,5 @@
 use super::Num;
-use crate::{gc::{Trace, Gc}, Luant};
+use crate::gc::{Trace, Gc};
 use bstr::BStr;
 use std::ops::Deref;
 
@@ -16,7 +16,7 @@ struct LStringInner {
 }
 
 impl LString {
-	pub fn new(state: &Luant, data: impl AsRef<[u8]>) -> Self {
+	pub fn new(state: &super::LuantState, data: impl AsRef<[u8]>) -> Self {
 		let mut buf = state.vm_state.gc_buf.take();
 
 		let data = data.as_ref();

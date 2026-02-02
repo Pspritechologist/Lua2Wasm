@@ -1,20 +1,21 @@
+use super::{LuantState, ThroughState};
 use super::types::{Value, Table};
 
-impl crate::Luant {
-	pub fn fill_globals(&mut self) {
-		let print_fn = Value::Func(print);
-		let assert_fn = Value::Func(assert);
-		let assert_eq_fn = Value::Func(assert_eq);
+pub fn fill_globals(luant: &mut LuantState) {
+	let print_fn = Value::Func(print);
+	let assert_fn = Value::Func(assert);
+	let assert_eq_fn = Value::Func(assert_eq);
 
-		self.global_table = Table::from_iter(self, [
-			("print", print_fn),
-			("assert", assert_fn),
-			("assert_eq", assert_eq_fn),
-		]);
-	}
+	luant.global_table = Table::from_iter(luant, [
+		("print", print_fn),
+		("assert", assert_fn),
+		("assert_eq", assert_eq_fn),
+	]);
 }
 
-fn print(args: &[Option<Value>]) -> Result<Vec<Option<Value>>, Box<dyn std::error::Error>> {
+fn print(state: ThroughState, arg_range: std::ops::Range<usize>) -> Result<Vec<Option<Value>>, Box<dyn std::error::Error>> {
+	let args = state.get_slots(arg_range);
+
 	let mut values = args.iter();
 
 	if let Some(v) = values.next() {
@@ -36,7 +37,9 @@ fn print(args: &[Option<Value>]) -> Result<Vec<Option<Value>>, Box<dyn std::erro
 	Ok(vec![])
 }
 
-fn assert(args: &[Option<Value>]) -> Result<Vec<Option<Value>>, Box<dyn std::error::Error>> {
+fn assert(state: ThroughState, arg_range: std::ops::Range<usize>) -> Result<Vec<Option<Value>>, Box<dyn std::error::Error>> {
+	let args = state.get_slots(arg_range);
+
 	let condition = &args[0];
 	let msg = args.get(1);
 
@@ -51,7 +54,9 @@ fn assert(args: &[Option<Value>]) -> Result<Vec<Option<Value>>, Box<dyn std::err
 	Ok(vec![])
 }
 
-fn assert_eq(args: &[Option<Value>]) -> Result<Vec<Option<Value>>, Box<dyn std::error::Error>> {
+fn assert_eq(state: ThroughState, arg_range: std::ops::Range<usize>) -> Result<Vec<Option<Value>>, Box<dyn std::error::Error>> {
+	let args = state.get_slots(arg_range);
+
 	let a = &args[0];
 	let b = &args[1];
 	let msg = args.get(2);

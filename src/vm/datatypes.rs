@@ -93,20 +93,20 @@ pub(crate) struct VmState {
 	pub gc_buf: std::cell::Cell<Vec<u8>>,
 }
 
-pub struct Luant {
+pub struct LuantState {
 	pub(crate) vm_state: VmState,
 	pub(crate) constants: Constants,
 	pub(crate) global_table: Table,
 }
 
-impl Luant {
-	pub fn new() -> Self {
+impl LuantState {
+	pub(crate) fn new() -> Self {
 		let mut inst = Self {
 			vm_state: Default::default(),
 			constants: Default::default(),
 			global_table: Default::default(),
 		};
-		inst.fill_globals();
+		super::globals::fill_globals(&mut inst);
 		inst
 	}
 }
