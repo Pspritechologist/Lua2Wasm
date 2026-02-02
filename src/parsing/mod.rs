@@ -6,14 +6,12 @@ use functions::FuncState;
 use scopes::{ParseScope, Named, RootScope, VariableScope};
 use expressions::*;
 
-mod asm;
 mod functions;
 mod scopes;
 mod expressions;
 mod loops;
 mod debug;
 
-pub use asm::{parse_asm, fmt_asm};
 pub use functions::Upvalue;
 
 #[derive(Debug)]

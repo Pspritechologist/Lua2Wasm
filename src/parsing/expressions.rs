@@ -1,7 +1,9 @@
 use super::{Error, ParseScope, Named, LexerExt, Op, IdentKey, expect_tok};
 use super::functions::FuncState;
-use crate::{BStr, vm::types::Num};
+use crate::BStr;
 use luant_lexer::{Lexer, Token};
+
+type Num = real_float::Finite<f64>;
 
 mod postfix_ops;
 mod prefix;

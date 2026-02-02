@@ -1,9 +1,10 @@
 use crate::parsing::LexerExt;
-use crate::vm::types::Num;
-use super::{Error, ParseScope, Op, IdentKey, expect_tok};
+use super::{Error, ParseScope, Op, expect_tok};
 use super::{Expr, Const, FuncState, parse_table_init};
 use super::postfix_ops::{CallType, IndexType};
 use luant_lexer::{Lexer, Token};
+
+type Num = real_float::Finite<f64>;
 
 pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, prec: u8) -> Result<Expr<'s>, Error<'s>> {
 	// If the matches in this list are modified, be sure to update `super::can_start_expr` as well.
@@ -20,7 +21,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl 
 			},
 			Token::VarArgs => todo!(),
 			Token::Function => todo!(),
-			Token::Number(n) => Expr::Constant(Const::Number(Num::new(n))),
+			Token::Number(n) => Expr::Constant(Const::Number(n)),
 			Token::Identifier(ident) => Expr::from_named(scope.resolve_name(state, ident, false)?),
 			Token::String(s) => Expr::Constant(Const::String(s)),
 			Token::True => Expr::Constant(Const::Bool(true)),
@@ -169,16 +170,16 @@ impl<'s> InfixOp<'s> {
 		})
 	}
 
-	fn fold_const(self, lexer: &mut Lexer<'s>, a: Const<'s>, b: Const<'s>) -> Option<Const<'s>> {
+	fn fold_const(self, _lexer: &mut Lexer<'s>, a: Const<'s>, b: Const<'s>) -> Option<Const<'s>> {
 		use Const::*;
 		Some(match (self, a, b) {
-			(InfixOp::Add, Number(a), Number(b)) => Number(Num::new(a.try_add(*b).ok()?)),
-			(InfixOp::Sub, Number(a), Number(b)) => Number(Num::new(a.try_sub(*b).ok()?)),
-			(InfixOp::Mul, Number(a), Number(b)) => Number(Num::new(a.try_mul(*b).ok()?)),
-			(InfixOp::Div, Number(a), Number(b)) => Number(Num::new(a.try_div(*b).ok()?)),
-			(InfixOp::DivInt, Number(a), Number(b)) => Number(Num::new(a.try_div(*b).ok()?)),
-			(InfixOp::Mod, Number(a), Number(b)) => Number(Num::new(a.try_rem(*b).ok()?)),
-			(InfixOp::Pow, Number(a), Number(b)) => Number(Num::new(a.try_powf(*b).ok()?)),
+			(InfixOp::Add, Number(a), Number(b)) => Number(a.try_add(b).ok()?),
+			(InfixOp::Sub, Number(a), Number(b)) => Number(a.try_sub(b).ok()?),
+			(InfixOp::Mul, Number(a), Number(b)) => Number(a.try_mul(b).ok()?),
+			(InfixOp::Div, Number(a), Number(b)) => Number(a.try_div(b).ok()?),
+			(InfixOp::DivInt, Number(a), Number(b)) => Number(a.try_div(b).ok()?),
+			(InfixOp::Mod, Number(a), Number(b)) => Number(a.try_rem(b).ok()?),
+			(InfixOp::Pow, Number(a), Number(b)) => Number(a.try_powf(b).ok()?),
 			(InfixOp::Eq, a, b) => Bool(a == b),
 			(InfixOp::Neq, a, b) => Bool(a != b),
 			(InfixOp::Lt, Number(a), Number(b)) => Bool(a < b),
@@ -188,11 +189,11 @@ impl<'s> InfixOp<'s> {
 			(InfixOp::Concat, String(_), String(_)) => return None, //TODO: Can't represent dynamic strings yet.
 			(InfixOp::And, a, b) => Bool(a.is_truthy() && b.is_truthy()),
 			(InfixOp::Or, a, b) => Bool(a.is_truthy() || b.is_truthy()),
-			(InfixOp::BitAnd, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? & b.as_i64()?) as f64).ok()?),
-			(InfixOp::BitOr, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? | b.as_i64()?) as f64).ok()?),
-			(InfixOp::BitXor, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? ^ b.as_i64()?) as f64).ok()?),
-			(InfixOp::Shl, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? << b.as_i64()?) as f64).ok()?),
-			(InfixOp::Shr, Number(a), Number(b)) => Number(Num::try_from((a.as_i64()? >> b.as_i64()?) as f64).ok()?),
+			(InfixOp::BitAnd, Number(a), Number(b)) => Number(Num::try_new((num_as_int(a)? & num_as_int(b)?) as f64).ok()?),
+			(InfixOp::BitOr, Number(a), Number(b)) => Number(Num::try_new((num_as_int(a)? | num_as_int(b)?) as f64).ok()?),
+			(InfixOp::BitXor, Number(a), Number(b)) => Number(Num::try_new((num_as_int(a)? ^ num_as_int(b)?) as f64).ok()?),
+			(InfixOp::Shl, Number(a), Number(b)) => Number(Num::try_new((num_as_int(a)? << num_as_int(b)?) as f64).ok()?),
+			(InfixOp::Shr, Number(a), Number(b)) => Number(Num::try_new((num_as_int(a)? >> num_as_int(b)?) as f64).ok()?),
 			_ => return None,
 		})
 	}
@@ -256,10 +257,10 @@ impl PrefixOp {
 	fn fold_const<'s>(self, a: Const<'s>) -> Option<Const<'s>> {
 		use Const::*;
 		Some(match (self, a) {
-			(PrefixOp::Neg, Number(a)) => Number(Num::new(a.try_neg().ok()?)),
+			(PrefixOp::Neg, Number(a)) => Number(a.try_neg().ok()?),
 			(PrefixOp::Not, a) => Bool(!a.is_truthy()),
-			(PrefixOp::Len, String(s)) => Number(Num::from(s.len())),
-			(PrefixOp::BitNot, Number(a)) => Number(Num::try_from((!a.as_i64()?) as f64).ok()?),
+			(PrefixOp::Len, String(s)) => Number(Num::new(s.len() as f64)),
+			(PrefixOp::BitNot, Number(a)) => Number(Num::try_new((!num_as_int(a)?) as f64).ok()?),
 			_ => return None,
 		})
 	}
@@ -267,4 +268,10 @@ impl PrefixOp {
 	fn prec(self) -> u8 {
 		11
 	}
+}
+
+fn num_as_int(num: Num) -> Option<i64> {
+	let num = num.val();
+	let i = num as i64;
+	if i as f64 != num { None } else { Some(i) }
 }
