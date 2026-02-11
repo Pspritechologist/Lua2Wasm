@@ -1,9 +1,9 @@
-use bstr::BStr;
+use bstr::{BStr, ByteSlice};
 use chumsky::{extra::SimpleState, inspector::Inspector, prelude::*};
 use luant_lexer::{Token, IdentKey};
 use real_float::Finite;
 
-type Span = std::ops::Range<usize>;
+type Span = (LineCol, std::ops::Range<usize>);
 type Error<'s> = Rich<'s, Token<'s>, Span>;
 type State<'s> = SimpleState<ParseState<'s>>;
 type Context = ();
@@ -14,7 +14,7 @@ trait ValueInput<'s>: chumsky::input::ValueInput<'s, Token = Token<'s>, Span = S
 impl<'s, T: chumsky::input::ValueInput<'s, Token = Token<'s>, Span = Span>> ValueInput<'s> for T { }
 
 trait LuantParser<'s, I: ValueInput<'s>, O, S: Inspector<'s, I> = State<'s>>: Clone + Parser<'s, I, O, Extra<'s, S>> { }
-impl<'s, I: ValueInput<'s>, O, P: Clone + Parser<'s, I, O, Extra<'s>>> LuantParser<'s, I, O> for P { }
+impl<'s, I: ValueInput<'s>, O, S: Inspector<'s, I>, P: Clone + Parser<'s, I, O, Extra<'s, S>>> LuantParser<'s, I, O, S> for P { }
 
 trait MapExtraExt<'s> {
 	fn parse_state(&mut self) -> &mut ParseState<'s>;
@@ -33,41 +33,49 @@ impl<'s, I: ValueInput<'s>> MapExtraExt<'s> for chumsky::input::MapExtra<'s, '_,
 	}
 }
 
+pub type ExprMap<'s> = slotmap::SlotMap<ExprIdx, Expression<'s>>;
+
+slotmap::new_key_type! {
+	pub struct ExprIdx;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ExprIdx(usize);
-impl ExprIdx {
-	pub fn as_usize(self) -> usize {
-		self.0
+pub struct LineCol(pub usize, pub usize);
+impl std::fmt::Display for LineCol {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}:{}", self.0, self.1)
 	}
-	
-	pub const NIL: Self = Self(0);
-	pub const TRUE: Self = Self(1);
-	pub const FALSE: Self = Self(2);
-	pub const VAR_ARGS: Self = Self(3);
 }
 
 #[derive(Debug, Default)]
 struct ParseState<'s> {
-	expressions: Vec<Expression<'s>>,
+	expressions: ExprMap<'s>,
+	expr_nil: ExprIdx,
+	expr_true: ExprIdx,
+	expr_false: ExprIdx,
+	expr_var_args: ExprIdx,
 	interner: luant_lexer::LexInterner<'s>,
 }
 impl<'s> ParseState<'s> {
 	fn new(interner: luant_lexer::LexInterner<'s>) -> Self {
+		let mut expressions = ExprMap::default();
+		let expr_nil = expressions.insert(Expression::Nil);
+		let expr_true = expressions.insert(Expression::Boolean(true));
+		let expr_false = expressions.insert(Expression::Boolean(false));
+		let expr_var_args = expressions.insert(Expression::VarArgs);
+
 		Self {
-			expressions: vec![
-				Expression::Nil,
-				Expression::Boolean(true),
-				Expression::Boolean(false),
-				Expression::VarArgs,
-			],
+			expressions,
+			expr_nil,
+			expr_true,
+			expr_false,
+			expr_var_args,
 			interner,
 		}
 	}
 
 	fn expr(&mut self, expr: impl Into<Expression<'s>>) -> ExprIdx {
-		let len = self.expressions.len();
-		self.expressions.push(expr.into());
-		ExprIdx(len)
+		self.expressions.insert(expr.into())
 	}
 
 	fn resolve(&self, key: IdentKey) -> &'s str {
@@ -90,10 +98,11 @@ pub enum UnaryOp {
 	Neg, Not, Len, BitNot,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Parsed<'s> {
-	pub expressions: Box<[Expression<'s>]>,
+	pub expressions: ExprMap<'s>,
 	pub statements: Box<[Statement]>,
+	pub interner: luant_lexer::LexInterner<'s>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,7 +164,7 @@ pub enum Statement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElseBranch {
 	pub body: Box<[Statement]>,
-	pub next: Option<(ExprIdx, Option<Box<ElseBranch>>)>,
+	pub cond_next_br: Option<(ExprIdx, Option<Box<ElseBranch>>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,29 +237,56 @@ impl<'s> From<(UnaryOp, ExprIdx)> for Expression<'s> {
 	}
 }
 
-pub fn parse<'s>(src: &'s [u8]) -> Result<Parsed<'s>, Vec<Error<'s>>> {
+pub fn parse<'s>(src: &'s [u8]) -> Result<Parsed<'s>, Error<'s>> {
 	let mut lexer = luant_lexer::lexer(src);
-	let tokens = {
+	let (tokens, eoi) = {
 		let mut tokens = Vec::new();
-		while let Some(tok) = lexer.next().transpose().unwrap() {
+
+		let mut lines = 0;
+		let mut cols = 0;
+		let mut last_end = 0;
+		while let Some(tok) = lexer.next() {
 			let span = lexer.current_span();
-			tokens.push((tok, span));
+			
+			let lc = {
+				let range = last_end..span.end;
+				let (new_lines, last_line) = src[range].lines().enumerate().last().unwrap_or((0, b""));
+				let new_cols = last_line.chars().count();
+
+				lines += new_lines;
+				cols = if new_lines == 0 { cols + new_cols } else { new_cols };
+				last_end = lexer.current_span().end;
+
+				LineCol(lines + 1, cols + 1)
+			};
+
+			match tok {
+				Ok(tok) => tokens.push((tok, (lc, span))),
+				Err(err) => return Err(Rich::custom((lc, span), err.to_string())),
+			}
 		}
-		tokens
+
+		let eoi_span = (LineCol(lines + 1, cols + 1), src.len()..src.len());
+		(tokens, eoi_span)
 	};
 
-	let input = chumsky::input::IterInput::new(tokens.into_iter(), src.len()..src.len());
+	let input = chumsky::input::IterInput::new(tokens.into_iter(), eoi);
 
 	let interner = lexer.into_interner();
 
 	let mut state = ParseState::new(interner).into();
-	let statements = program().parse_with_state(input, &mut state).into_result()?;
+	let statements = program()
+		.parse_with_state(input, &mut state)
+		.into_result()
+		// Only one error will ever be emitted.
+		.map_err(|mut e| e.remove(0))?;
 
-	let expressions = state.0.expressions.into_boxed_slice();
+	let ParseState { expressions, interner, .. } = state.0;
 
 	Ok(Parsed {
 		expressions,
 		statements,
+		interner,
 	})
 }
 
@@ -262,7 +298,7 @@ fn program<'s, I: ValueInput<'s>>() -> impl LuantParser<'s, I, Box<[Statement]>>
 }
 
 fn ident<'s, I: ValueInput<'s>>() -> impl LuantParser<'s, I, IdentKey> {
-	select! { Token::Identifier(name) => name }.labelled("identifier")
+	select! { Token::Identifier(name) => name }
 }
 
 fn statement<'s, I: ValueInput<'s>>(expr: impl LuantParser<'s, I, ExprIdx> + 's) -> impl LuantParser<'s, I, Statement> {
@@ -346,14 +382,14 @@ fn statement<'s, I: ValueInput<'s>>(expr: impl LuantParser<'s, I, ExprIdx> + 's)
 					.then(else_branch)
 					.map(|((cond, body), next): (_, Option<ElseBranch>)| ElseBranch {
 						body,
-						next: Some((cond, next.map(Box::new))),
+						cond_next_br: Some((cond, next.map(Box::new))),
 					})
 					.labelled("elseif branch");
 
 				let else_only = just(Token::Else)
 					.ignore_then(block.clone())
 					.then_ignore(just(Token::End))
-					.map(|body| ElseBranch { body, next: None })
+					.map(|body| ElseBranch { body, cond_next_br: None })
 					.labelled("else branch");
 
 				choice((
@@ -500,7 +536,6 @@ fn block<'s, I: ValueInput<'s>>(stmt: impl LuantParser<'s, I, Statement>, expr: 
 		.labelled("return statement");
 	
 	stmt
-		.padded_by(just(Token::LineTerm).repeated())
 		.repeated()
 		.collect::<Vec<_>>()
 		.then(ret.or_not())
@@ -515,13 +550,13 @@ fn expression<'s, I: ValueInput<'s>>() -> impl LuantParser<'s, I, ExprIdx> {
 	recursive(|expr| {
 		let lits = select! {
 			// These four have fixed indices for efficiency.
-			Token::Nil => ExprIdx(0),
-			Token::True => ExprIdx(1),
-			Token::False => ExprIdx(2),
-			Token::VarArgs => ExprIdx(3),
+			Token::Nil = e => e.parse_state().expr_nil,
+			Token::True = e => e.parse_state().expr_true,
+			Token::False = e => e.parse_state().expr_false,
+			Token::VarArgs = e => e.parse_state().expr_var_args,
 
-			Token::Number(n) = e => e.parse_state().expr(n),
-			Token::String(s) = e => e.parse_state().expr(s),
+			Token::Number(n) = e => e.expr(n),
+			Token::String(s) = e => e.expr(s),
 		};
 
 		let prefix_exp = recursive(|prefix_exp| {
@@ -668,6 +703,38 @@ fn function_def<'s, I: ValueInput<'s>>(stmt: impl LuantParser<'s, I, Statement>,
 }
 
 fn table_constructor<'s, I: ValueInput<'s>>(expr: impl LuantParser<'s, I, ExprIdx>) -> impl LuantParser<'s, I, ExprIdx> {
+	// use std::ptr::NonNull;
+	// struct TabState<'src, 'b> {
+	// 	incr: usize,
+	// 	parse_state: NonNull<State<'src>>,
+	// 	pd: std::marker::PhantomData<&'b ()>,
+	// }
+	// impl<'src, 'b> Clone for TabState<'src, 'b> {
+	// 	fn clone(&self) -> Self {
+	// 		Self { ..*self }
+	// 	}
+	// }
+	// impl<'src, 'b> TabState<'src, 'b> {
+	// 	fn new_state(parse_state: &'b mut State<'src>) -> SimpleState<Self> {
+	// 		Self {
+	// 			incr: 0,
+	// 			parse_state: NonNull::from(parse_state),
+	// 			pd: std::marker::PhantomData,
+	// 		}.into()
+	// 	}
+	// 	fn parse_state(&mut self) -> &mut State<'src> {
+	// 		unsafe { self.parse_state.as_mut() }
+	// 	}
+	// }
+	
+	// just::<'_, _, I, Extra<'_, _>>(Token::And)
+	// 	.map_with(|_, e| {
+	// 		let state: &mut SimpleState<TabState> = e.state();
+	// 		let incr = state.incr;
+	// 		state.parse_state().expr(incr as f64)
+	// 	})
+	// 	.map_state::<Extra<'_, _>, _>(|s| TabState::new_state(s).into())
+	
 	let field_sep = just(Token::Comma).or(just(Token::LineTerm)).labelled("field separator");
 	let val_entry = expr.clone().delimited_by(just(Token::BracketOpen), just(Token::BracketClose))
 		.then_ignore(just(Token::Assign))

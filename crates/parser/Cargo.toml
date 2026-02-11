@@ -9,5 +9,5 @@ real_float = { workspace = true }
 hashbrown = { workspace = true }
 slotmap = { workspace = true }
 bstr = { workspace = true }
-lexical-parse-float = { version = "1.0.6", features = [ "format" ]}
-chumsky = { version = "0.12.0", features = ["pratt"] }
+lexical-parse-float = { version = "1.0.6", features = [ "format" ] }
+chumsky = { version = "0.13.0", features = ["pratt"] }
