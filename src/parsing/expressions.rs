@@ -1,6 +1,6 @@
 use super::{Error, ParseScope, Named, LexerExt, Op, IdentKey, expect_tok};
 use super::functions::FuncState;
-use crate::BStr;
+use bstr::BStr;
 use luant_lexer::{Lexer, Token};
 
 type Num = real_float::Finite<f64>;

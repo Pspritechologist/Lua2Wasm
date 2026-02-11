@@ -1,4 +1,4 @@
-use crate::vm::debug::{DebugInfo, SrcMap};
+use crate::debug::{DebugInfo, SrcMap};
 use super::{debug::InfoCollector, VariableScope, ParseScope, Named, LexerExt, Error, Op, expect_tok};
 use luant_lexer::{Lexer, Token, IdentKey};
 use bstr::BStr;
@@ -7,9 +7,8 @@ use walrus::{FunctionBuilder, LocalId, Module, ValType, ir::BinaryOp};
 #[derive(Debug)]
 pub struct FuncState<'a, 's> {
 	constants: &'a mut super::ConstantMap<'s>,
-	module: &'a mut Module,
-	reg_map: Vec<Option<LocalId>>,
-	builder: FunctionBuilder,
+	
+	operations: Vec<Op>,
 	max_slot_use: u8,
 	cur_slot_use: u8,
 
@@ -102,12 +101,10 @@ impl Value {
 }
 
 impl<'a, 's> FuncState<'a, 's> {
-	pub fn new(module: &'a mut Module, builder: FunctionBuilder, constants: &'a mut super::ConstantMap<'s>) -> Self {
+	pub fn new(constants: &'a mut super::ConstantMap<'s>) -> Self {
 		Self {
 			constants,
-			module,
-			reg_map: Vec::new(),
-			builder,
+			operations: Vec::new(),
 			max_slot_use: 0,
 			cur_slot_use: 0,
 			debug_info: InfoCollector::default(),
@@ -119,109 +116,8 @@ impl<'a, 's> FuncState<'a, 's> {
 		todo!()
 	}
 
-	pub fn emit(&mut self, scope: &mut (impl ParseScope<'s> + ?Sized), op: Op, src_index: usize) {
-		let module = &mut self.module;
-		let reg_map = &mut self.reg_map;
-		let mut builder = self.builder.func_body();
-
-		macro_rules! reg {
-			($val:expr) => { {
-				let r = usize::from($val);
-				reg_map.get(r).copied().flatten().unwrap_or_else(|| {
-					let local = module.locals.add(ValType::I64);
-					reg_map.resize(r + 1, None);
-					reg_map[r] = Some(local);
-					local
-				})
-			} };
-		}
-
-		macro_rules! bin_op {
-			($dst:ident, $lhs:ident, $rhs:ident, $op:ident) => { {
-				let (dst, lhs, rhs) = (reg!($dst), reg!($lhs), reg!($rhs));
-				builder.local_get(lhs).local_get(rhs).binop(BinaryOp::$op).local_set(dst);
-			} }
-		}
-
-		match op {
-			Op::LoadNil(dst, len) => {
-				for i in dst..dst + len {
-					builder.i64_const(Value::nil().as_i64()).local_set(reg!(i)); // Nil is represented as 0.
-				}
-			},
-			Op::LoadBool(dst, b) => {
-				builder.i64_const(Value::bool(b).as_i64()).local_set(reg!(dst));
-			},
-			Op::LoadNum(dst, idx) => {
-				let n = self.constants.numbers[idx as usize];
-				builder.i64_const(Value::float(n).as_i64()).local_set(reg!(dst));
-			},
-			Op::LoadStr(dst, idx) => todo!(),
-			Op::LoadTab(_) => todo!(),
-			Op::LoadClosure(_, _) => todo!(),
-			Op::Set(_, _, _) => todo!(),
-			Op::Get(_, _, _) => todo!(),
-			Op::Add(d, a, b) => bin_op!(d, a, b, I64Add),
-			Op::Sub(d, a, b) => bin_op!(d, a, b, I64Sub),
-			Op::Mul(d, a, b) => bin_op!(d, a, b, I64Mul),
-			Op::Div(d, a, b) => bin_op!(d, a, b, I64DivS),
-			Op::Mod(d, a, b) => bin_op!(d, a, b, I64RemS),
-			Op::Pow(d, a, b) => todo!(),
-			// Integer negation is represented as `0 - x`
-			Op::Neg(d, a) => { builder.i64_const(0).local_get(reg!(a)).binop(BinaryOp::I64Sub).local_set(reg!(d)); },
-			Op::Eq(d, a, b) | Op::Neq(d, a, b) => {
-				let (dst, lhs, rhs) = (reg!(d), reg!(a), reg!(b));
-				builder
-					// First determine the type tag of the LHS.
-					.local_get(lhs)
-					.local_get(rhs)
-					.binop(BinaryOp::I64Eq)
-					// Do a trivial equality check.
-					.if_else(ValType::I64, |then| { then.i64_const(Value::bool(true).as_i64()); }, |el| {
-						el.local_get(lhs)
-							.i64_const(0x0F)
-							.binop(BinaryOp::I64And)
-							// Check if the type is of String as that's the only type that doesn't use bitwise comparison.
-							.i64_const(ValueTag::String.as_u8().into())
-							.binop(BinaryOp::I64Eq)
-							.if_else(ValType::I64, |then| {
-								//TODO: String comparison.
-							}, |el| { el.i64_const(Value::bool(false).as_i64()); });
-					});
-				
-				if matches!(op, Op::Neq(_, _, _)) {
-					// Invert the result for Neq.
-					builder.binop(BinaryOp::I64Eq);
-				}
-
-				builder.local_set(dst);
-			},
-			Op::Lt(_, _, _) => todo!(),
-			Op::Lte(_, _, _) => todo!(),
-			Op::Gt(_, _, _) => todo!(),
-			Op::Gte(_, _, _) => todo!(),
-			Op::Not(_, _) => todo!(),
-			Op::BitAnd(_, _, _) => todo!(),
-			Op::BitOr(_, _, _) => todo!(),
-			Op::BitXor(_, _, _) => todo!(),
-			Op::BitShL(_, _, _) => todo!(),
-			Op::BitShR(_, _, _) => todo!(),
-			Op::BitNot(_, _) => todo!(),
-			Op::Concat(_, _, _) => todo!(),
-			Op::Len(_, _) => todo!(),
-			Op::Call(_, _, _) => todo!(),
-			Op::Ret(_, _) => todo!(),
-			Op::GoTo(_) => todo!(),
-			Op::SkpIf(_) => todo!(),
-			Op::SkpIfNot(_) => todo!(),
-			Op::Copy(_, _) => todo!(),
-			Op::GetUpVal(_, _) => todo!(),
-			Op::SetUpVal(_, _) => todo!(),
-			Op::GetUpTab(_, _) => todo!(),
-			Op::SetUpTab(_, _) => todo!(),
-			Op::Close(_) => todo!(),
-		}
-		
+	pub fn emit(&mut self, _scope: &mut (impl ParseScope<'s> + ?Sized), op: Op, src_index: usize) {
+		self.operations.push(op);
 		self.debug_info.emit(src_index);
 	}
 	pub fn emit_closing_goto(&mut self, scope: &mut (impl ParseScope<'s> + ?Sized), base: u8, position: usize, src_index: usize) {
@@ -370,10 +266,7 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 }
 
 pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>, state: &mut FuncState<'_, 's>, name: Option<super::IdentKey>, span: usize) -> Result<ParsedFunction, Error<'s>> {
-	let mut builder = FunctionBuilder::new(&mut state.module.types, &[ValType::I32, ValType::I32], &[ValType::I32]);
-	builder.name("owo".into());
-
-	let mut closure_state = FuncState::new(state.module, builder, state.constants);
+	let mut closure_state = FuncState::new(state.constants);
 	let mut closure_scope = VariableScope::new(ClosureScope::new(&mut scope, lexer));
 
 	expect_tok!(lexer, Token::ParenOpen)?;
@@ -440,8 +333,7 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 
 	let parsed = ParsedFunction {
 		param_count: params,
-		// operations: closure_state.operations.into_boxed_slice(),
-		operations: todo!(),
+		operations: closure_state.operations.into_boxed_slice(),
 		debug: Some(debug),
 		frame_size: closure_state.max_slot_use,
 		upvalues,

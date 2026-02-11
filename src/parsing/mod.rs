@@ -1,5 +1,5 @@
-use crate::vm::bytecode::Operation as Op;
-use crate::vm::debug::DebugInfo;
+use crate::bytecode::Operation as Op;
+use crate::debug::DebugInfo;
 use luant_lexer::{IdentKey, Lexer, Token};
 
 use functions::FuncState;
