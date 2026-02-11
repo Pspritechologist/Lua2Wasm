@@ -18,26 +18,26 @@ impl<'s> PlaceExpr<'s> {
 		match self {
 			PlaceExpr::Name(ident) => {
 				match scope.resolve_name(state, ident, false)? {
-					Named::Local(slot) => expr.set_to_slot(lexer, state, slot)?,
+					Named::Local(slot) => expr.set_to_slot(lexer, scope, state, slot)?,
 					Named::UpValue(idx) => {
-						let src = expr.to_slot(lexer, state)?;
-						state.emit(Op::SetUpVal(idx, src), lexer.src_index())
+						let src = expr.to_slot(lexer, scope, state)?;
+						state.emit(scope, Op::SetUpVal(idx, src), lexer.src_index())
 					},
 					Named::Global(name) => {
-						let src = expr.to_slot(lexer, state)?;
+						let src = expr.to_slot(lexer, scope, state)?;
 						let idx = state.string_idx(lexer.resolve_ident(name).as_bytes());
-						state.emit(Op::SetUpTab(idx, src), lexer.src_index())
+						state.emit(scope, Op::SetUpTab(idx, src), lexer.src_index())
 					},
 				}
 
 				Ok(())
 			},
 			PlaceExpr::Index { target, index, span } => {
-				let table_slot = target.to_slot(lexer, state)?;
-				let index_slot = index.to_slot(lexer, state)?;
-				let value_slot = expr.to_slot(lexer, state)?;
+				let table_slot = target.to_slot(lexer, scope, state)?;
+				let index_slot = index.to_slot(lexer, scope, state)?;
+				let value_slot = expr.to_slot(lexer, scope, state)?;
 
-				state.emit(Op::Set(table_slot, index_slot, value_slot), span);
+				state.emit(scope, Op::Set(table_slot, index_slot, value_slot), span);
 
 				Ok(())
 			},
@@ -93,7 +93,7 @@ impl<'s> IdentExpr<'s> {
 					let span = lexer.src_index();
 					next_op = match lexer.next_if_map(TrailingOp::from_token)? {
 						Some(next_op) => {
-							expr = index.handle_index(lexer, state, expr)?;
+							expr = index.handle_index(lexer, scope, state, expr)?;
 							next_op
 						},
 						None => return Ok(IdentExpr::Place(PlaceExpr::Index {

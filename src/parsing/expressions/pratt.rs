@@ -64,7 +64,7 @@ impl<'s> InfixOp<'s> {
 
 			let initial_slots_used = state.slots_used();
 
-			let lhs = left.to_slot(lexer, state)?;
+			let lhs = left.to_slot(lexer, scope, state)?;
 
 			let pre_rhs_slots_used = state.slots_used();
 			let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
@@ -75,13 +75,13 @@ impl<'s> InfixOp<'s> {
 				return Ok(Expr::Constant(res));
 			}
 
-			let rhs = right.to_slot(lexer, state)?;
+			let rhs = right.to_slot(lexer, scope, state)?;
 
 			state.set_slots_used(initial_slots_used);
 
 			let dst = state.reserve_slot();
 			
-			state.emit(make_op(dst, lhs, rhs), span);
+			state.emit(scope, make_op(dst, lhs, rhs), span);
 
 			Ok(Expr::Temp(dst))
 		};
@@ -107,17 +107,17 @@ impl<'s> InfixOp<'s> {
 			InfixOp::Shl => std_infix(Op::BitShL),
 			InfixOp::Shr => std_infix(Op::BitShR),
 			InfixOp::Call(call) => call.parse_call_args(lexer, scope, state, left)?.handle_call(lexer, scope, state, 1),
-			InfixOp::Index(index) => index.parse_index(lexer, scope, state)?.handle_index(lexer, state, left),
+			InfixOp::Index(index) => index.parse_index(lexer, scope, state)?.handle_index(lexer, scope, state, left),
 			//TODO: Fold consts here.
 			InfixOp::And => {
-				let dst = left.to_temp(lexer, state)?;
+				let dst = left.to_temp(lexer, scope, state)?;
 
-				state.emit(Op::SkpIf(dst), lexer.src_index());
+				state.emit(scope, Op::SkpIf(dst), lexer.src_index());
 				let goto_pos = state.ops().len();
-				state.emit(Op::tmp_goto(), lexer.src_index()); // Placeholder
+				state.emit(scope, Op::tmp_goto(), lexer.src_index()); // Placeholder
 				
 				let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
-				right.set_to_slot(lexer, state, dst)?;
+				right.set_to_slot(lexer, scope, state, dst)?;
 
 				let end_pos = state.ops().len();
 				state.ops_mut()[goto_pos] = Op::goto(end_pos);
@@ -125,14 +125,14 @@ impl<'s> InfixOp<'s> {
 				Ok(Expr::Temp(dst))
 			},
 			InfixOp::Or => {
-				let dst = left.to_temp(lexer, state)?;
+				let dst = left.to_temp(lexer, scope, state)?;
 
-				state.emit(Op::SkpIfNot(dst), lexer.src_index());
+				state.emit(scope, Op::SkpIfNot(dst), lexer.src_index());
 				let goto_pos = state.ops().len();
-				state.emit(Op::tmp_goto(), lexer.src_index()); // Placeholder
+				state.emit(scope, Op::tmp_goto(), lexer.src_index()); // Placeholder
 				
 				let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
-				right.set_to_slot(lexer, state, dst)?;
+				right.set_to_slot(lexer, scope, state, dst)?;
 
 				let end_pos = state.ops().len();
 				state.ops_mut()[goto_pos] = Op::goto(end_pos);
@@ -231,13 +231,13 @@ impl PrefixOp {
 			return Ok(Expr::Constant(res));
 		}
 
-		let dst = right.to_temp(lexer, state)?;
+		let dst = right.to_temp(lexer, scope, state)?;
 
 		match self {
-			PrefixOp::Neg => state.emit(Op::Neg(dst, dst), span),
-			PrefixOp::BitNot => state.emit(Op::BitNot(dst, dst), span),
-			PrefixOp::Len => state.emit(Op::Len(dst, dst), span),
-			PrefixOp::Not => state.emit(Op::Not(dst, dst), span),
+			PrefixOp::Neg => state.emit(scope, Op::Neg(dst, dst), span),
+			PrefixOp::BitNot => state.emit(scope, Op::BitNot(dst, dst), span),
+			PrefixOp::Len => state.emit(scope, Op::Len(dst, dst), span),
+			PrefixOp::Not => state.emit(scope, Op::Not(dst, dst), span),
 		}
 		
 		Ok(Expr::Temp(dst))

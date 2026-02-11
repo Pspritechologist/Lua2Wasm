@@ -31,13 +31,13 @@ impl<'a, 's> ParseScope<'s> for LoopScope<'a, 's> {
 
 	fn emit_break(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> {
 		let break_pos = state.ops().len();
-		state.emit(Op::tmp_goto(), span); // Placeholder
+		state.emit(self, Op::tmp_goto(), span); // Placeholder
 		self.end_jumps.push(break_pos);
 		Ok(())
 	}
 
 	fn emit_continue(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> {
-		state.emit(Op::goto(self.start_pos), span);
+		state.emit(self, Op::goto(self.start_pos), span);
 		Ok(())
 	}
 }
@@ -55,8 +55,8 @@ pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, st
 		Some(false) | //TODO: Don't compile unreachable loops.
 		None => {
 			let span = lexer.src_index();
-			let cond = cond.to_slot(lexer, state)?;
-			state.emit(Op::SkpIf(cond), span);
+			let cond = cond.to_slot(lexer, &mut scope, state)?;
+			state.emit(&mut scope, Op::SkpIf(cond), span);
 			scope.emit_break(state, span)?;
 			
 			state.set_slots_used(initial_slots_used);
@@ -77,7 +77,7 @@ pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, st
 	let mut loop_scope = scope.finalize_scope();
 
 	// Jump back to the start of the loop.
-	state.emit(Op::goto(loop_scope.start_pos), lexer.src_index());
+	state.emit(&mut loop_scope.parent, Op::goto(loop_scope.start_pos), lexer.src_index());
 
 	// Patch in jumps to the end of the loop (breaks).
 	loop_scope.patch_end_jumps(state);

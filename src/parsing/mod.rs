@@ -131,7 +131,7 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 				let closure = functions::parse_function(lexer, &mut *scope, state, Some(name), span)?;
 				let idx = state.push_closure(closure);
 
-				state.emit(Op::LoadClosure(dst, idx), span);
+				state.emit(scope, Op::LoadClosure(dst, idx), span);
 			} else {
 				//TODO: This uses two Vecs in the worst case and just isn't very shwifty.
 				//TODO: Globals/Upvalues.
@@ -173,7 +173,7 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 		},
 		Token::Return => {
 			if lexer.peek()?.is_none_or(|tok| !expressions::can_start_expr(tok)) {
-				state.emit(Op::Ret(0, 0), lexer.src_index());
+				state.emit(scope, Op::Ret(0, 0), lexer.src_index());
 			} else {
 				let start_reg = scope.total_locals();
 
@@ -182,7 +182,7 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 					ret_count += 1;
 					
 					let expr = parse_expr(lexer.next_must()?, lexer, scope, state)?;
-					expr.set_to_slot(lexer, state, start_reg + ret_count - 1)?;
+					expr.set_to_slot(lexer, scope, state, start_reg + ret_count - 1)?;
 					
 					if lexer.next_if(Token::Comma)?.is_none() {
 						break;
@@ -192,7 +192,7 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 				state.update_max_slots_used(start_reg + ret_count);
 				
 				let ret = Op::Ret(start_reg, ret_count);
-				state.emit(ret, lexer.src_index());
+				state.emit(scope, ret, lexer.src_index());
 			}
 		},
 		Token::Do => parse_do_block(lexer, scope, state)?,
@@ -265,7 +265,7 @@ fn parse_do_block<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, sta
 
 	if scope.needs_closing() {
 		let base = scope.local_base();
-		state.emit(Op::Close(base), lexer.src_index());
+		state.emit(&mut scope, Op::Close(base), lexer.src_index());
 	}
 
 	scope.finalize_scope();
@@ -278,10 +278,10 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 
 	'outer: loop {
 		let span = lexer.src_index();
-		let cond = parse_expr(lexer.next_must()?, lexer, outer_scope, state)?.to_slot(lexer, state)?;
-		state.emit(Op::SkpIf(cond), span);
+		let cond = parse_expr(lexer.next_must()?, lexer, outer_scope, state)?.to_slot(lexer, outer_scope, state)?;
+		state.emit(outer_scope, Op::SkpIf(cond), span);
 		let next_branch_jump_pos = state.ops().len();
-		state.emit(Op::tmp_goto(), span); // Placeholder
+		state.emit(outer_scope, Op::tmp_goto(), span); // Placeholder
 
 		expect_tok!(lexer, Token::Then)?;
 
@@ -299,14 +299,15 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 		if matches!(end_tok, Token::Else | Token::ElseIf) {
 			// If there are more branches after this if block, compile the required jump and or Close.
 			if_end_jump_positions.push(state.ops().len());
+			let base = if_scope.local_base();
 			match if_scope.needs_closing() {
-				true => state.emit_closing_goto(if_scope.local_base(), 0, lexer.src_index()), // Placeholder
-				false => state.emit_flat_goto(0, lexer.src_index()), // Placeholder
+				true => state.emit_closing_goto(&mut if_scope, base, 0, lexer.src_index()), // Placeholder
+				false => state.emit_flat_goto(&mut if_scope, 0, lexer.src_index()), // Placeholder
 			}
 		} else if if_scope.needs_closing() {
 			// Otherwise, emit a closing operation for the If block if needed.
 			let base = if_scope.local_base();
-			state.emit(Op::Close(base), lexer.src_index());
+			state.emit(&mut if_scope, Op::Close(base), lexer.src_index());
 		}
 
 		let end_pos = state.ops().len();
@@ -324,7 +325,7 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 						if else_scope.needs_closing() {
 							let base = else_scope.local_base();
 							// Emit a closing operation for the else block if needed.
-							state.emit(Op::Close(base), lexer.src_index());
+							state.emit(&mut else_scope, Op::Close(base), lexer.src_index());
 						}
 						else_scope.finalize_scope();
 						break 'outer;

@@ -98,6 +98,10 @@ impl<'s> Lexer<'s> {
 
 		(line, col)
 	}
+
+	pub fn into_interner(self) -> LexInterner<'s> {
+		self.inner.extras
+	}
 }
 
 impl<'s> Iterator for Lexer<'s> {
@@ -120,18 +124,17 @@ slotmap::new_key_type! {
 	pub struct IdentKey;
 }
 
-#[doc(hidden)] //? Has to be public for logos extras.
-#[derive(Default)]
-pub struct LexState<'s> {
+#[derive(Debug, Default)]
+pub struct LexInterner<'s> {
 	idents: slotmap::SlotMap<IdentKey, &'s str>,
 	ident_table: hashbrown::HashMap<&'s str, IdentKey>,
 }
-impl<'s> LexState<'s> {
-	fn resolve_ident(&self, key: IdentKey) -> &'s str {
+impl<'s> LexInterner<'s> {
+	pub fn resolve_ident(&self, key: IdentKey) -> &'s str {
 		self.idents.get(key).expect("Invalid Label key")
 	}
 
-	fn intern_ident(&mut self, ident: &'s str) -> IdentKey {
+	pub fn intern_ident(&mut self, ident: &'s str) -> IdentKey {
 		if let Some(&key) = self.ident_table.get(ident) {
 			return key;
 		}
@@ -199,7 +202,7 @@ fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<&'s 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Logos, strum::IntoStaticStr)]
-#[logos(extras = LexState<'s>)]
+#[logos(extras = LexInterner<'s>)]
 #[logos(skip(r"\s+"))]
 #[logos(skip(r"--(\[(=*)\[)?", handle_comment))]
 // #[logos(skip(r"--\[=*\[", handle_block_comment))]
@@ -243,6 +246,7 @@ pub enum Token<'s> {
 
 	#[token("function")] Function,
 	#[token("local")] Local,
+	#[token("global")] Global,
 	#[token("return")] Return,
 
 	#[token("and")] And,

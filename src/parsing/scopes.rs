@@ -219,12 +219,12 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 			if self.has_captured_locals && let Some(label_locals) = self.local_count.checked_sub(local_count_at_label).and_then(NonZero::new) {
 				// Since captures have occurred and this implicit scope owns locals, we need to conservatively close them.
 				let base = self.local_base() + label_locals.get();
-				state.emit_closing_goto(base, position, src_index);
+				state.emit_closing_goto(self, base, position, src_index);
 			} else {
 				// Otherwise, if we weren't told by the parent to close any locals, we know this is a naive goto.
 				match closed_base {
-					None => state.emit_flat_goto(position, src_index),
-					Some(base) => state.emit_closing_goto(base, position, src_index),
+					None => state.emit_flat_goto(self, position, src_index),
+					Some(base) => state.emit_closing_goto(self, base, position, src_index),
 				}
 			}
 			Ok(())
@@ -239,8 +239,8 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 			let base = self.has_captured_locals.then(|| self.local_base());
 			let goto_op_pos = state.ops().len();
 			self.missing_labels.push((label, goto_op_pos, base));
-			state.emit(Op::goto(0), src_index); // Placeholder.
-			state.emit(Op::Close(u8::MAX), src_index); // Meaningless for now.
+			state.emit(self, Op::goto(0), src_index); // Placeholder.
+			state.emit(self, Op::Close(u8::MAX), src_index); // Meaningless for now.
 			Ok(())
 		}
 	}
