@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::bytecode::Operation as Op;
 use crate::debug::DebugInfo;
 use luant_lexer::{IdentKey, Lexer, Token};
@@ -17,8 +19,7 @@ pub use functions::Upvalue;
 #[derive(Debug)]
 pub struct Parsed<'s> {
 	pub parsed_func: functions::ParsedFunction,
-	pub numbers: Box<[f64]>,
-	pub strings: Box<[&'s bstr::BStr]>,
+	pub strings: Box<[Cow<'s, bstr::BStr>]>,
 	pub closures: Box<[functions::ParsedFunction]>,
 }
 
@@ -70,7 +71,6 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 
 	Ok(Parsed {
 		parsed_func,
-		numbers: constants.numbers.into_boxed_slice(),
 		strings: constants.strings.into_boxed_slice(),
 		closures: constants.closures.into_boxed_slice(),
 	})
@@ -78,9 +78,8 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 
 #[derive(Debug, Clone, Default)]
 pub struct ConstantMap<'s> {
-	numbers: Vec<f64>,
-	string_indexes: hashbrown::HashMap<&'s bstr::BStr, usize>,
-	strings: Vec<&'s bstr::BStr>,
+	string_indexes: hashbrown::HashMap<Cow<'s, bstr::BStr>, usize>,
+	strings: Vec<Cow<'s, bstr::BStr>>,
 	closures: Vec<functions::ParsedFunction>,
 }
 

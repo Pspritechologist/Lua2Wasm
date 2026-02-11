@@ -6,7 +6,7 @@ use luant_lexer::{Lexer, Token};
 
 type Num = real_float::Finite<f64>;
 
-pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, prec: u8) -> Result<Expr<'s>, Error<'s>> {
+pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, prec: u8) -> Result<Expr, Error<'s>> {
 	// If the matches in this list are modified, be sure to update `super::can_start_expr` as well.
 	let expr = match PrefixOp::from_token(head) {
 		// Handle prefix operators.
@@ -23,7 +23,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl 
 			Token::Function => todo!(),
 			Token::Number(n) => Expr::Constant(Const::Number(n)),
 			Token::Identifier(ident) => Expr::from_named(scope.resolve_name(state, ident, false)?),
-			Token::String(s) => Expr::Constant(Const::String(s)),
+			Token::String((raw, s)) => Expr::Constant(Const::String(state.string_idx(s, raw)?)),
 			Token::True => Expr::Constant(Const::Bool(true)),
 			Token::False => Expr::Constant(Const::Bool(false)),
 			Token::Nil => Expr::Constant(Const::Nil),
@@ -34,7 +34,9 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl 
 	let mut expr = expr;
 
 	loop {
-		let Some(next_op) = lexer.next_if_map(|tok| InfixOp::from_token(tok).filter(|op| prec < op.prec()))? else {
+		let Some(next_op) = lexer.try_next_if_map(|tok| {
+			InfixOp::from_token(tok, state).map(|o| o.filter(|op| prec < op.prec()))
+		})? else {
 			return Ok(expr);
 		};
 
@@ -43,7 +45,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InfixOp<'s> {
+enum InfixOp {
 	Add, Sub,
 	Mul, Div, DivInt,
 	Mod, Pow,
@@ -54,11 +56,11 @@ enum InfixOp<'s> {
 	And, Or,
 	BitAnd, BitOr, BitXor,
 	Shl, Shr,
-	Call(CallType<'s>),
+	Call(CallType),
 	Index(IndexType),
 }
-impl<'s> InfixOp<'s> {
-	fn parse_infix(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, left: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
+impl InfixOp {
+	fn parse_infix<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, left: Expr) -> Result<Expr, Error<'s>> {
 		let mut std_infix = |make_op: fn(u8, u8, u8) -> Op| {
 			let span = lexer.src_index();
 
@@ -71,7 +73,7 @@ impl<'s> InfixOp<'s> {
 			state.set_slots_used(pre_rhs_slots_used);
 
 			if let (Expr::Constant(a), Expr::Constant(b)) = (left, right) &&
-				let Some(res) = self.fold_const(lexer, a, b) {
+				let Some(res) = self.fold_const(state, a, b) {
 				return Ok(Expr::Constant(res));
 			}
 
@@ -142,8 +144,8 @@ impl<'s> InfixOp<'s> {
 		}
 	}
 
-	fn from_token(tok: Token<'s>) -> Option<Self> {
-		Some(match tok {
+	fn from_token<'s>(tok: Token<'s>, state: &mut FuncState<'_, 's>) -> Result<Option<Self>, Error<'s>> {
+		Ok(Some(match tok {
 			Token::Plus => InfixOp::Add,
 			Token::Minus => InfixOp::Sub,
 			Token::Mul => InfixOp::Mul,
@@ -165,12 +167,12 @@ impl<'s> InfixOp<'s> {
 			Token::BitNot => InfixOp::BitXor,
 			Token::BitShiftL => InfixOp::Shl,
 			Token::BitShiftR => InfixOp::Shr,
-			tok => CallType::from_token(tok).map(InfixOp::Call)
-				.or_else(|| IndexType::from_token(tok).map(InfixOp::Index))?,
-		})
+			tok => return Ok(CallType::from_token(tok, state)?.map(InfixOp::Call)
+				.or_else(|| IndexType::from_token(tok).map(InfixOp::Index))),
+		}))
 	}
 
-	fn fold_const(self, _lexer: &mut Lexer<'s>, a: Const<'s>, b: Const<'s>) -> Option<Const<'s>> {
+	fn fold_const<'s>(self, state: &mut FuncState<'_, 's>, a: Const, b: Const) -> Option<Const> {
 		use Const::*;
 		Some(match (self, a, b) {
 			(InfixOp::Add, Number(a), Number(b)) => Number(a.try_add(b).ok()?),
@@ -186,7 +188,12 @@ impl<'s> InfixOp<'s> {
 			(InfixOp::Lte, Number(a), Number(b)) => Bool(a <= b),
 			(InfixOp::Gt, Number(a), Number(b)) => Bool(a > b),
 			(InfixOp::Gte, Number(a), Number(b)) => Bool(a >= b),
-			(InfixOp::Concat, String(_), String(_)) => return None, //TODO: Can't represent dynamic strings yet.
+			(InfixOp::Concat, String(a), String(b)) => {
+				let (a, b) = (state.get_string(a), state.get_string(b));
+				let new_string = [&**a, &**b].concat();
+				let idx = state.string_idx_owned(new_string);
+				Const::String(idx)
+			},
 			(InfixOp::And, a, b) => Bool(a.is_truthy() && b.is_truthy()),
 			(InfixOp::Or, a, b) => Bool(a.is_truthy() || b.is_truthy()),
 			(InfixOp::BitAnd, Number(a), Number(b)) => Number(Num::try_new((num_as_int(a)? & num_as_int(b)?) as f64).ok()?),
@@ -222,12 +229,12 @@ enum PrefixOp {
 	Neg, BitNot, Len, Not,
 }
 impl PrefixOp {
-	fn parse_prefix<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr<'s>, Error<'s>> {
+	fn parse_prefix<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr, Error<'s>> {
 		let span = lexer.src_index();
 
 		let right = parse_expr(lexer.next_must()?, lexer, scope, state, self.prec())?;
 
-		if let Expr::Constant(a) = right && let Some(res) = self.fold_const(a) {
+		if let Expr::Constant(a) = right && let Some(res) = self.fold_const(state, a) {
 			return Ok(Expr::Constant(res));
 		}
 
@@ -254,12 +261,12 @@ impl PrefixOp {
 		})
 	}
 
-	fn fold_const<'s>(self, a: Const<'s>) -> Option<Const<'s>> {
+	fn fold_const<'s>(self, state: &mut FuncState<'_, 's>, a: Const) -> Option<Const> {
 		use Const::*;
 		Some(match (self, a) {
 			(PrefixOp::Neg, Number(a)) => Number(a.try_neg().ok()?),
 			(PrefixOp::Not, a) => Bool(!a.is_truthy()),
-			(PrefixOp::Len, String(s)) => Number(Num::new(s.len() as f64)),
+			(PrefixOp::Len, String(s)) => Number(Num::new(state.get_string(s).len() as f64)),
 			(PrefixOp::BitNot, Number(a)) => Number(Num::try_new((!num_as_int(a)?) as f64).ok()?),
 			_ => return None,
 		})

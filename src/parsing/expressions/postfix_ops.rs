@@ -10,7 +10,7 @@ pub struct ParsedCall {
 	pub arg_count: u8,
 }
 impl ParsedCall {
-	pub fn handle_call<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: u8) -> Result<Expr<'s>, Error<'s>> {
+	pub fn handle_call<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: u8) -> Result<Expr, Error<'s>> {
 		state.emit(scope, Op::Call(self.func_reg, self.arg_count, ret_count), self.span);
 		// The first return value is stored over top the first argument.
 		//TODO: Multiple returns.
@@ -19,11 +19,11 @@ impl ParsedCall {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallType<'s> {
-	Args, Method, Table, String(&'s bstr::BStr),
+pub enum CallType {
+	Args, Method, Table, String(usize),
 }
-impl<'s> CallType<'s> {
-	pub fn parse_call_args(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, left: Expr<'s>) -> Result<ParsedCall, Error<'s>> {
+impl CallType {
+	pub fn parse_call_args<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, left: Expr) -> Result<ParsedCall, Error<'s>> {
 		let span = lexer.src_index();
 
 		Ok(match self {
@@ -68,25 +68,25 @@ impl<'s> CallType<'s> {
 		})
 	}
 
-	pub fn from_token(tok: Token<'s>) -> Option<Self> {
-		Some(match tok {
+	pub fn from_token<'s>(tok: Token<'s>, state: &mut FuncState<'_, 's>) -> Result<Option<Self>, Error<'s>> {
+		Ok(Some(match tok {
 			Token::ParenOpen => CallType::Args,
 			Token::Colon => CallType::Method,
 			Token::BraceOpen => CallType::Table,
-			Token::String(s) => CallType::String(s),
-			_ => return None,
-		})
+			Token::String((raw, s)) => CallType::String(state.string_idx(s, raw)?),
+			_ => return Ok(None),
+		}))
 	}
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ParsedIndex<'s> {
-	index_expr: Expr<'s>,
+pub struct ParsedIndex {
+	index_expr: Expr,
 	span: usize,
 }
-impl<'s> ParsedIndex<'s> {
+impl<'s> ParsedIndex {
 	/// Emits the `get` operation for this index operation.
-	pub fn handle_index(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, target: Expr<'s>) -> Result<Expr<'s>, Error<'s>> {
+	pub fn handle_index(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, target: Expr) -> Result<Expr, Error<'s>> {
 		let target_slot = target.to_slot(lexer, scope, state)?;
 		let index_slot = self.index_expr.to_slot(lexer, scope, state)?;
 		let result_reg = state.reserve_slot();
@@ -94,7 +94,7 @@ impl<'s> ParsedIndex<'s> {
 		Ok(Expr::Temp(result_reg))
 	}
 	
-	pub fn to_key(&self) -> Result<Expr<'s>, Error<'s>> {
+	pub fn to_key(&self) -> Result<Expr, Error<'s>> {
 		Ok(self.index_expr)
 	}
 }
@@ -107,7 +107,7 @@ impl IndexType {
 	/// Parses the key expression for the index operation and returns it.
 	/// Use 'handle_index' to emit the `get` operation if desired.\
 	/// Note that this function expects the leading open bracket or dot to have already been consumed.
-	pub fn parse_index<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<ParsedIndex<'s>, Error<'s>> {
+	pub fn parse_index<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<ParsedIndex, Error<'s>> {
 		let span = lexer.src_index();
 
 		let index_expr = match self {
@@ -121,7 +121,7 @@ impl IndexType {
 					return Err("Expected identifier after '.'".into());
 				};
 				let ident_name = lexer.resolve_ident(ident);
-				Expr::Constant(Const::string(ident_name))
+				Expr::Constant(Const::String(state.string_idx(ident_name, true)?))
 			},
 		};
 		

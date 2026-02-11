@@ -1,12 +1,14 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use real_float::Finite;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Operation {
 	// Loads.
 	LoadNil(u8, u8),
 	LoadBool(u8, bool),
-	LoadNum(u8, u16),
-	LoadStr(u8, u16),
+	LoadNum(u8, Finite<f64>),
+	LoadStr(u8, usize),
 	LoadTab(u8),
-	LoadClosure(u8, u16),
+	LoadClosure(u8, usize),
 	// Tables.
 	Set(u8, u8, u8),
 	Get(u8, u8, u8),
@@ -47,8 +49,8 @@ pub enum Operation {
 	Copy(u8, u8),
 	GetUpVal(u8, u8),
 	SetUpVal(u8, u8),
-	GetUpTab(u8, u16),
-	SetUpTab(u16, u8),
+	GetUpTab(u8, usize),
+	SetUpTab(usize, u8),
 	Close(u8),
 }
 

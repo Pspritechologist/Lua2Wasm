@@ -73,6 +73,16 @@ impl<'s> Lexer<'s> {
 		Ok(None)
 	}
 
+	pub fn try_next_if_map<O, E>(&mut self, pat: impl FnOnce(Token<'s>) -> Result<Option<O>, E>) -> Result<Option<O>, E>
+	where E: From<LexError<'s>> {
+		if let Some(tok) = self.peek()? && let Some(out) = pat(tok)? {
+			self.peeked = None;
+			return Ok(Some(out));
+		}
+
+		Ok(None)
+	}
+
 	pub fn get_ident<'a: 's>(&mut self, ident: &'a (impl AsRef<str> + ?Sized)) -> IdentKey {
 		self.inner.extras.intern_ident(ident.as_ref())
 	}
@@ -170,13 +180,13 @@ fn handle_comment<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<logos::Sk
 	Ok(logos::Skip)
 }
 
-fn handle_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> &'s BStr {
+fn handle_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> (bool, &'s BStr) {
 	let slice = lex.slice();
 	let s = &slice[1..slice.len() - 1]; // Remove quotes
-	BStr::new(s)
+	(false, BStr::new(s))
 }
 
-fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<&'s BStr, LexError<'s>> {
+fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<(bool, &'s BStr), LexError<'s>> {
 	// let equals = lex.slice().matches('=').count();
 	let equals = lex.slice().len() - 2; // "[==[".len() == 4
 	let end_pat = format!("]{}]", "=".repeat(equals)); //TODO: Highly inefficient.
@@ -198,7 +208,7 @@ fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<&'s 
 
 	lex.bump(end + end_pat.len());
 	
-	Ok(BStr::new(s))
+	Ok((true, BStr::new(s)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Logos, strum::IntoStaticStr)]
@@ -288,10 +298,10 @@ pub enum Token<'s> {
 	Identifier(IdentKey),
 
 	//TODO: Handle escaping and interning of strings.
-	#[regex(br#""([^"]|\.)*""#, handle_string)]
-	#[regex(br"'([^']|\.)*'", handle_string)]
+	#[regex(br#""([^"]|\\(s:.))*""#, handle_string)]
+	#[regex(br#"'([^']|\\(s:.))*'"#, handle_string)]
 	#[regex(r"\[=*\[", handle_block_string)]
-	String(&'s BStr),
+	String((bool, &'s BStr)),
 
 	#[token("true")] True,
 	#[token("false")] False,
@@ -303,7 +313,7 @@ impl std::fmt::Display for Token<'_> {
 		match self {
 			Token::Number(val) => write!(f, "Number({})", val.val()),
 			Token::Identifier(name) => write!(f, "Identifier({name:?})"),
-			Token::String(s) => write!(f, "String('{s}')"),
+			Token::String((_, s)) => write!(f, "String('{s}')"),
 			_ => write!(f, "{}", self.tok_type()),
 		}
 	}
@@ -372,7 +382,7 @@ mod tests {
 			Token::Local,
 			Token::Identifier(lexer.get_ident("str")),
 			Token::Assign,
-			Token::String(BStr::new(b"Hello, World!")),
+			Token::String((false, BStr::new(b"Hello, World!"))),
 			Token::LineTerm,
 			Token::Label,
 			Token::Identifier(lexer.get_ident("my_label")),
@@ -411,7 +421,7 @@ mod tests {
 			Token::Local,
 			Token::Identifier(lexer.get_ident("s")),
 			Token::Assign,
-			Token::String(BStr::new(b"Hello, \xFF World!")),
+			Token::String((false, BStr::new(b"Hello, \xFF World!"))),
 			Token::LineTerm,
 		];
 

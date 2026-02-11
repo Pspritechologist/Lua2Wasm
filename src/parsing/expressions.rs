@@ -1,6 +1,5 @@
 use super::{Error, ParseScope, Named, LexerExt, Op, IdentKey, expect_tok};
 use super::functions::FuncState;
-use bstr::BStr;
 use luant_lexer::{Lexer, Token};
 
 type Num = real_float::Finite<f64>;
@@ -10,35 +9,32 @@ mod prefix;
 mod pratt;
 
 pub use prefix::{PlaceExpr, IdentExpr};
+use real_float::Finite;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Const<'s> {
+pub enum Const {
 	Number(Num),
-	String(&'s BStr),
+	String(usize),
 	Bool(bool),
 	Nil,
 }
 
-impl<'s> Const<'s> {
-	pub fn string(bytes: &'s (impl AsRef<[u8]> + ?Sized)) -> Self {
-		Const::String(BStr::new(bytes.as_ref()))
-	}
-
+impl Const {
 	pub fn is_truthy(self) -> bool {
 		!matches!(self, Const::Bool(false) | Const::Nil)
 	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Expr<'s> {
-	Constant(Const<'s>),
+pub enum Expr {
+	Constant(Const),
 	Local(u8),
 	UpValue(u8),
 	Global(IdentKey),
 	Temp(u8),
 }
 
-impl<'s> Expr<'s> {
+impl Expr {
 	pub fn from_named(name: Named) -> Self {
 		match name {
 			Named::Local(slot) => Expr::Local(slot),
@@ -47,7 +43,7 @@ impl<'s> Expr<'s> {
 		}
 	}
 
-	pub fn as_const(self) -> Option<Const<'s>> {
+	pub fn as_const(self) -> Option<Const> {
 		match self {
 			Expr::Constant(c) => Some(c),
 			_ => None,
@@ -55,7 +51,7 @@ impl<'s> Expr<'s> {
 	}
 
 	#[inline]
-	pub fn to_temp(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
+	pub fn to_temp<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
 		match self.as_temp() {
 			Some(t) => Ok(t),
 			None => {
@@ -76,14 +72,14 @@ impl<'s> Expr<'s> {
 	}
 
 	#[inline]
-	pub fn to_new_local(self, lexer: &Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
+	pub fn to_new_local<'s>(self, lexer: &Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
 		let local = scope.new_local(lexer, state, name)?;
 		self.set_to_slot(lexer, scope, state, local)?;
 		Ok(local)
 	}
 
 	#[inline]
-	pub fn to_slot(self, lexer: &Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
+	pub fn to_slot<'s>(self, lexer: &Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<u8, Error<'s>> {
 		match self {
 			Expr::Constant(_) |
 			Expr::UpValue(_) |
@@ -98,7 +94,7 @@ impl<'s> Expr<'s> {
 	}
 
 	#[inline]
-	pub fn set_to_slot(self, lexer: &Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, slot: u8) -> Result<(), Error<'s>> {
+	pub fn set_to_slot<'s>(self, lexer: &Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, slot: u8) -> Result<(), Error<'s>> {
 		match self {
 			Expr::Temp(temp) => if temp != slot {
 				state.emit(scope, Op::Copy(slot, temp), lexer.src_index())
@@ -112,16 +108,14 @@ impl<'s> Expr<'s> {
 				state.emit(scope, Op::GetUpVal(slot, ident), lexer.src_index());
 			},
 			Expr::Global(ident) => {
-				let str_idx = state.string_idx(lexer.resolve_ident(ident).as_bytes());
+				let str_idx = state.string_idx(lexer.resolve_ident(ident), true)?;
 				state.emit(scope, Op::GetUpTab(slot, str_idx), lexer.src_index());
 			},
 			Expr::Constant(Const::Number(n)) => {
-				let num_idx = state.number_idx(n.val());
-				state.emit(scope, Op::LoadNum(slot, num_idx), lexer.src_index());
+				state.emit(scope, Op::LoadNum(slot, n), lexer.src_index());
 			},
 			Expr::Constant(Const::String(s)) => {
-				let str_idx = state.string_idx(s);
-				state.emit(scope, Op::LoadStr(slot, str_idx), lexer.src_index());
+				state.emit(scope, Op::LoadStr(slot, s), lexer.src_index());
 			},
 			Expr::Constant(Const::Bool(b)) => state.emit(scope, Op::LoadBool(slot, b), lexer.src_index()),
 			Expr::Constant(Const::Nil) => state.emit(scope, Op::LoadNil(slot, 1), lexer.src_index()),
@@ -139,10 +133,8 @@ pub fn can_start_expr(tok: Token) -> bool {
 	}
 }
 
-pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr<'s>, Error<'s>> {
-	// let slots_used = state.slots_used();
+pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr, Error<'s>> {
 	let expr = pratt::parse_expr(head, lexer, scope, state, 0)?;
-	// state.set_slots_used(slots_used);
 	Ok(expr)
 }
 
@@ -158,11 +150,11 @@ pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut 
 
 	let [key_slot, val_slot] = [state.reserve_slot(), state.reserve_slot()];
 
-	let mut array_index = 0;
+	let mut array_index = 0usize;
 	loop {
-		enum KeyOrArray<'s> {
-			Key(Expr<'s>),
-			Array(Expr<'s>),
+		enum KeyOrArray {
+			Key(Expr),
+			Array(Expr),
 		}
 
 		let span = lexer.src_index();
@@ -170,7 +162,7 @@ pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut 
 		// parse field or array value.
 		let first = match lexer.next_must()? {
 			Token::Identifier(field) => match lexer.next_if(Token::Assign)? {
-				Some(_) => KeyOrArray::Key(Expr::Constant(Const::string(lexer.resolve_ident(field)))),
+				Some(_) => KeyOrArray::Key(Expr::Constant(Const::String(state.string_idx(lexer.resolve_ident(field), true)?))),
 				None => KeyOrArray::Array(parse_expr(head, lexer, scope, state)?),
 			},
 			Token::BracketOpen => {
@@ -193,14 +185,13 @@ pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut 
 
 				entry.set_to_slot(lexer, scope, state, val_slot)?;
 
-				let num_idx = state.number_idx(array_index as f64);
-				state.emit(scope, Op::LoadNum(key_slot, num_idx), span);
+				state.emit(scope, Op::LoadNum(key_slot, Finite::new(array_index as f64)), span);
 
 				state.emit(scope, Op::Set(tab_slot, key_slot, val_slot), span);
 			},
 		}
 
-		if lexer.next_if(Token::Comma)?.is_none() {
+		if lexer.next_if([Token::Comma, Token::LineTerm])?.is_none() {
 			expect_tok!(lexer, Token::BraceClose)?;
 			break;
 		}

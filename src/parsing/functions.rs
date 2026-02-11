@@ -2,7 +2,6 @@ use crate::debug::{DebugInfo, SrcMap};
 use super::{debug::InfoCollector, VariableScope, ParseScope, Named, LexerExt, Error, Op, expect_tok};
 use luant_lexer::{Lexer, Token, IdentKey};
 use bstr::BStr;
-use walrus::{FunctionBuilder, LocalId, Module, ValType, ir::BinaryOp};
 
 #[derive(Debug)]
 pub struct FuncState<'a, 's> {
@@ -112,8 +111,7 @@ impl<'a, 's> FuncState<'a, 's> {
 	}
 
 	pub fn into_inner(self) -> (Vec<Op>, SrcMap, u8) {
-		// (self.operations, self.debug_info.into_map(), self.max_slot_use)
-		todo!()
+		(self.operations, self.debug_info.into_map(), self.max_slot_use)
 	}
 
 	pub fn emit(&mut self, _scope: &mut (impl ParseScope<'s> + ?Sized), op: Op, src_index: usize) {
@@ -129,13 +127,11 @@ impl<'a, 's> FuncState<'a, 's> {
 	}
 
 	pub fn ops(&self) -> &[Op] {
-		// &self.operations
-		todo!()
+		&self.operations
 	}
 
 	pub fn ops_mut(&mut self) -> &mut [Op] {
-		// &mut self.operations
-		todo!()
+		&mut self.operations
 	}
 
 	pub fn reserve_slot(&mut self) -> u8 {
@@ -159,35 +155,147 @@ impl<'a, 's> FuncState<'a, 's> {
 	pub fn update_max_slots_used(&mut self, used: u8) {
 		self.max_slot_use = self.max_slot_use.max(used);
 	}
-	
-	pub fn number_idx(&mut self, n: f64) -> u16 {
-		if let Some(idx) = self.constants.numbers.iter().position(|&num| num == n) {
-			idx
+
+	pub fn string_idx(&mut self, s: &'s (impl AsRef<[u8]> + ?Sized), raw: bool) -> Result<usize, Error<'s>> {
+		let s = BStr::new(s);
+
+		//TODO:
+		// Technically I think I'm meant to replace any newline-style char within long-form strings with raw newlines?
+		// Seems like a lot of work...
+
+		let s = if raw || !s.contains(&b'\\') { s.into() } else {
+			let mut unescaped = bstr::BString::default();
+			let mut chars = s.iter().cloned().peekable();
+			while let Some(c) = chars.next() {
+				if c == b'\\' {
+					// It's technically impossible for a non-raw string to end with a single backslash.
+					match chars.next().ok_or("Trailing backslash in string")? {
+						b'a' => unescaped.push(b'a'),   // bell.
+						b'b' => unescaped.push(b'a'),   // back space.
+						b'f' => unescaped.push(b'a'),   // form feed.
+						b'n' => unescaped.push(b'\n'),  // newline.
+						b'r' => unescaped.push(b'\r'),  // carriage return.
+						b't' => unescaped.push(b'\t'),  // horizontal tab.
+						b'v' => unescaped.push(b'a'),   // vertical tab.
+						b'\\' => unescaped.push(b'\\'), // backslash.
+						b'"' => unescaped.push(b'"'),   // double quote.
+						b'\'' => unescaped.push(b'\''), // single quote.
+						b'\n' => unescaped.push(b'\n'), // line continuation ('Short strings' can span multiple lines if each line ends with a backslash).
+						b'z' => while chars.next_if(|c| c.is_ascii_whitespace()).is_some() { }, // skip following whitespace.
+						b'x' => { // hex byte sequences.
+							let hi = chars.next().ok_or("Unexpected end of string in hex escape")?.to_ascii_lowercase();
+							let lo = chars.next().ok_or("Unexpected end of string in hex escape")?.to_ascii_lowercase();
+							if !hi.is_ascii_hexdigit() || !lo.is_ascii_hexdigit() {
+								return Err(format!("Invalid hex escape sequence: \\x{}{}", hi as char, lo as char).into());
+							}
+
+							let hi = hi - if hi.is_ascii_digit() { b'0' } else { b'a' - 10 };
+							let lo = lo - if lo.is_ascii_digit() { b'0' } else { b'a' - 10 };
+							let byte = hi * 16 + lo;
+
+							unescaped.push(byte);
+						},
+						digit if digit.is_ascii_digit() => { // decimal byte sequences.
+							let (a, b, c) = (
+								digit,
+								chars.next().ok_or("Unexpected end of string in decimal escape")?,
+								chars.next().ok_or("Unexpected end of string in decimal escape")?,
+							);
+
+							if !b.is_ascii_digit() || !c.is_ascii_digit() {
+								return Err(format!("Invalid decimal escape sequence: \\{}{}{}", a as char, b as char, c as char).into());
+							}
+
+							let a = a - b'0';
+							let b = b - b'0';
+							let c = c - b'0';
+							let byte = a * 100 + b * 10 + c;
+
+							unescaped.push(byte);
+						},
+						b'u' => { // Unicode code points.
+							if chars.next() != Some(b'{') {
+								return Err("Expected '{' after \\u in Unicode escape".into());
+							}
+
+							let mut codepoint = 0u32;
+
+							let mut next_digit = || {
+								let c = chars.next().ok_or("Unexpected end of string in Unicode escape")?.to_ascii_lowercase();
+								if c == b'}' {
+									return Ok::<_, Error>(false);
+								}
+
+								if !c.is_ascii_hexdigit() {
+									return Err(format!("Invalid character '{}' in Unicode escape", c as char).into());
+								}
+
+								let digit = (c - if c.is_ascii_digit() { b'0' } else { b'a' - 10 }) as u32;
+								codepoint = codepoint * 16 + digit;
+
+								Ok(true)
+							};
+
+							// A limit of three hex digits.
+							if next_digit()? && next_digit()? && next_digit()? {
+								return Err("Too many hex digits in Unicode escape".into());
+							}
+
+							// Lua allows codepoints less than 2^31
+							if codepoint >= 2^31 {
+								return Err(format!("Unicode code point out of range: U+{codepoint:X}").into());
+							}
+
+							let ch = char::from_u32(codepoint).ok_or(format!("Invalid Unicode code point: U+{codepoint:X}"))?;
+
+							unescaped.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes());
+						},
+						other => return Err(format!("Invalid escape sequence: \\{}", other as char).into()),
+					}
+				} else {
+					if c == b'\n' {
+						return Err("Unescaped newline in string".into());
+					}
+
+					unescaped.push(c);
+				}
+			}
+
+			std::borrow::Cow::Owned(unescaped)
+		};
+
+		if let Some(&idx) = self.constants.string_indexes.get(&s) {
+			Ok(idx)
 		} else {
-			let idx = self.constants.numbers.len();
-			self.constants.numbers.push(n);
-			idx
-		}.try_into().expect("Too many numbers consts :(")
+			let idx = self.constants.strings.len();
+			self.constants.strings.push(s.clone());
+			self.constants.string_indexes.insert(s, idx);
+			Ok(idx)
+		}
 	}
 
-	pub fn string_idx(&mut self, s: &'s [u8]) -> u16 {
-		let s = BStr::new(s);
-		if let Some(&idx) = self.constants.string_indexes.get(s) {
+	pub fn string_idx_owned(&mut self, s: impl Into<Vec<u8>>) -> usize {
+		let s = std::borrow::Cow::Owned(bstr::BString::new(s.into()));
+		if let Some(&idx) = self.constants.string_indexes.get(&s) {
 			idx
 		} else {
 			let idx = self.constants.strings.len();
-			self.constants.strings.push(s);
+			self.constants.strings.push(s.clone());
 			self.constants.string_indexes.insert(s, idx);
 			idx
-		}.try_into().expect("Too many string consts :(")
+		}
 	}
 
-	pub fn push_closure(&mut self, func: ParsedFunction) -> u16 {
+	pub fn get_string(&self, idx: usize) -> &BStr {
+		self.constants.strings.get(idx).expect("Invalid string index")
+	}
+
+	pub fn push_closure(&mut self, func: ParsedFunction) -> usize {
 		let idx = self.constants.closures.len();
 		self.constants.closures.push(func);
 		// This is + 1 because 0 is the 'main' function and unnameable.
 		//TODO: This assumes the main function will always be at index 0. Is that fine?
-		(idx + 1).try_into().expect("Too many closures :(")
+		idx + 1
 	}
 }
 

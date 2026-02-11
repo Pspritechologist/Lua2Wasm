@@ -4,17 +4,17 @@ use super::postfix_ops::{CallType, IndexType, ParsedCall};
 use luant_lexer::{Lexer, Token};
 
 #[derive(Debug, Clone, Copy)]
-pub enum PlaceExpr<'s> {
+pub enum PlaceExpr {
 	Name(IdentKey),
 	Index {
 		span: usize,
-		target: Expr<'s>,
-		index: Expr<'s>,
+		target: Expr,
+		index: Expr,
 	},
 }
 
-impl<'s> PlaceExpr<'s> {
-	pub fn set_expr(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, expr: Expr<'s>) -> Result<(), Error<'s>> {
+impl<'s> PlaceExpr {
+	pub fn set_expr(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, expr: Expr) -> Result<(), Error<'s>> {
 		match self {
 			PlaceExpr::Name(ident) => {
 				match scope.resolve_name(state, ident, false)? {
@@ -25,7 +25,7 @@ impl<'s> PlaceExpr<'s> {
 					},
 					Named::Global(name) => {
 						let src = expr.to_slot(lexer, scope, state)?;
-						let idx = state.string_idx(lexer.resolve_ident(name).as_bytes());
+						let idx = state.string_idx(lexer.resolve_ident(name), true)?;
 						state.emit(scope, Op::SetUpTab(idx, src), lexer.src_index())
 					},
 				}
@@ -46,13 +46,13 @@ impl<'s> PlaceExpr<'s> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum IdentExpr<'s> {
-	Place(PlaceExpr<'s>),
+pub enum IdentExpr {
+	Place(PlaceExpr),
 	Call(ParsedCall),
 }
 
-impl<'s> IdentExpr<'s> {
-	pub fn parse(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<IdentExpr<'s>, Error<'s>> {
+impl IdentExpr {
+	pub fn parse<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<IdentExpr, Error<'s>> {
 		let expr = match head {
 			Token::ParenOpen => {
 				let expr = super::parse_expr(lexer.next_must()?, lexer, scope, state)?;
@@ -67,7 +67,7 @@ impl<'s> IdentExpr<'s> {
 			tok => return Err(format!("Expected expression, found {tok:?}").into()),
 		};
 	
-		let Some(mut next_op) = lexer.next_if_map(TrailingOp::from_token)? else {
+		let Some(mut next_op) = lexer.try_next_if_map(|t| TrailingOp::from_token(t, state))? else {
 			return match head {
 				Token::Identifier(ident) => Ok(IdentExpr::Place(PlaceExpr::Name(ident))),
 				_ => Err("Expected place expression".into()),
@@ -80,7 +80,7 @@ impl<'s> IdentExpr<'s> {
 			match next_op {
 				TrailingOp::Call(call_type) => {
 					let parsed_call = call_type.parse_call_args(lexer, scope, state, expr)?;
-					match lexer.next_if_map(TrailingOp::from_token)? {
+					match lexer.try_next_if_map(|t| TrailingOp::from_token(t, state))? {
 						Some(found_op) => {
 							next_op = found_op;
 							expr = parsed_call.handle_call(lexer, scope, state, 1)?;
@@ -91,7 +91,7 @@ impl<'s> IdentExpr<'s> {
 				TrailingOp::Index(index_type) => {
 					let index = index_type.parse_index(lexer, scope, state)?;
 					let span = lexer.src_index();
-					next_op = match lexer.next_if_map(TrailingOp::from_token)? {
+					next_op = match lexer.try_next_if_map(|t| TrailingOp::from_token(t, state))? {
 						Some(next_op) => {
 							expr = index.handle_index(lexer, scope, state, expr)?;
 							next_op
@@ -109,13 +109,14 @@ impl<'s> IdentExpr<'s> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TrailingOp<'s> {
-	Call(CallType<'s>),
+enum TrailingOp {
+	Call(CallType),
 	Index(IndexType),
 }
-impl<'s> TrailingOp<'s> {
-	fn from_token(tok: Token<'s>) -> Option<Self> {
-		CallType::from_token(tok).map(TrailingOp::Call)
-			.or_else(|| IndexType::from_token(tok).map(TrailingOp::Index))
+impl TrailingOp {
+	fn from_token<'s>(tok: Token<'s>, state: &mut FuncState<'_, 's>) -> Result<Option<Self>, Error<'s>> {
+		Ok(CallType::from_token(tok, state)?
+			.map(TrailingOp::Call)
+			.or_else(|| IndexType::from_token(tok).map(TrailingOp::Index)))
 	}
 }
