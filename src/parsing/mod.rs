@@ -10,7 +10,7 @@ use expressions::*;
 
 mod functions;
 mod scopes;
-mod expressions;
+pub mod expressions;
 mod loops;
 mod debug;
 
@@ -181,7 +181,8 @@ fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl Parse
 					ret_count += 1;
 					
 					let expr = parse_expr(lexer.next_must()?, lexer, scope, state)?;
-					expr.set_to_slot(lexer, scope, state, start_reg + ret_count - 1)?;
+					//TODO!
+					// expr.set_to_slot(lexer, scope, state, start_reg + ret_count - 1)?;
 					
 					if lexer.next_if(Token::Comma)?.is_none() {
 						break;

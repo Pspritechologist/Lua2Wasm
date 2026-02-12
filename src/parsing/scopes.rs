@@ -1,3 +1,5 @@
+use crate::bytecode::Loc;
+
 use super::{Error, Op, functions::FuncState};
 use luant_lexer::{IdentKey, Lexer};
 use slotmap::SparseSecondaryMap;
@@ -15,7 +17,7 @@ pub trait ParseScope<'s> {
 	fn emit_break(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> { self.parent().emit_break(state, span) }
 	fn emit_continue(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> { self.parent().emit_continue(state, span) }
 
-	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> { self.parent().new_local(lexer, state, name) }
+	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Loc, Error<'s>> { self.parent().new_local(lexer, state, name) }
 	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> { self.parent().resolve_name(state, name, is_capturing) }
 	fn total_locals(&mut self) -> u8 { self.parent().total_locals() }
 	fn needs_closing(&mut self) -> bool { self.parent().needs_closing() }
@@ -63,7 +65,7 @@ impl<'s> ParseScope<'s> for RootScope {
 		Err("Continue statement not within a loop".into())
 	}
 
-	fn new_local(&mut self, _lexer: &Lexer<'s>, _state: &mut FuncState<'_, 's>, _name: IdentKey) -> Result<u8, Error<'s>> {
+	fn new_local(&mut self, _lexer: &Lexer<'s>, _state: &mut FuncState<'_, 's>, _name: IdentKey) -> Result<Loc, Error<'s>> {
 		unreachable!()
 	}
 
@@ -148,7 +150,7 @@ impl<'s, P: ParseScope<'s>> VariableScope<'s, P> {
 
 impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 	fn parent(&mut self) -> &mut dyn ParseScope<'s> { &mut self.parent }
-	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<u8, Error<'s>> {
+	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Loc, Error<'s>> {
 		if self.locals.contains_key(name) {
 			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
 		}
@@ -161,7 +163,7 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 			state.reserve_slot();
 		}
 
-		Ok(reg)
+		Ok(Loc::Local(reg))
 	}
 
 	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> {

@@ -1,3 +1,4 @@
+use crate::bytecode::Loc;
 use crate::parsing::LexerExt;
 use super::{Error, ParseScope, Op, expect_tok};
 use super::{Expr, Const, FuncState};
@@ -6,15 +7,16 @@ use luant_lexer::{Lexer, Token};
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedCall {
 	pub span: usize,
-	pub func_reg: u8,
+	pub func_reg: Loc,
 	pub arg_count: u8,
 }
 impl ParsedCall {
-	pub fn handle_call<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: u8) -> Result<Expr, Error<'s>> {
+	pub fn handle_call<'s>(self, _lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: u8) -> Result<Expr, Error<'s>> {
 		state.emit(scope, Op::Call(self.func_reg, self.arg_count, ret_count), self.span);
 		// The first return value is stored over top the first argument.
 		//TODO: Multiple returns.
-		Ok(Expr::Temp(self.func_reg + 1))
+		// Ok(Expr::Temp(self.func_reg + 1))
+		todo!()
 	}
 }
 
@@ -30,7 +32,8 @@ impl CallType {
 			CallType::Args => {
 				let mut head = lexer.next_must()?;
 
-				let func_reg = state.reserve_slot();
+				let func_reg_u8 = state.reserve_slot_u8();
+				let func_reg = Loc::Temp(func_reg_u8);
 				left.set_to_slot(lexer, scope, state, func_reg)?;
 
 				// Special case zero arg calls.
@@ -51,7 +54,7 @@ impl CallType {
 					state.set_slots_used(initial_slots_used + arg_count);
 
 					let arg_expr = super::parse_expr(head, lexer, scope, state)?;
-					arg_expr.set_to_slot(lexer, scope, state, func_reg + arg_count)?;
+					arg_expr.set_to_slot(lexer, scope, state, Loc::Temp(func_reg_u8 + arg_count))?;
 					
 					match lexer.next_must()? {
 						Token::Comma => head = lexer.next_must()?,
@@ -90,8 +93,8 @@ impl<'s> ParsedIndex {
 		let target_slot = target.to_slot(lexer, scope, state)?;
 		let index_slot = self.index_expr.to_slot(lexer, scope, state)?;
 		let result_reg = state.reserve_slot();
-		state.emit(scope, Op::Get(result_reg, target_slot, index_slot), self.span);
-		Ok(Expr::Temp(result_reg))
+		state.emit(scope, Op::Get(result_reg, target_slot.into(), index_slot.into()), self.span);
+		Ok(result_reg.into())
 	}
 	
 	pub fn to_key(&self) -> Result<Expr, Error<'s>> {

@@ -1,3 +1,5 @@
+use crate::bytecode::Loc;
+
 use super::{LexerExt, Error, ParseScope, Named, IdentKey, Op, expect_tok};
 use super::{Expr, FuncState};
 use super::postfix_ops::{CallType, IndexType, ParsedCall};
@@ -18,27 +20,15 @@ impl<'s> PlaceExpr {
 		match self {
 			PlaceExpr::Name(ident) => {
 				match scope.resolve_name(state, ident, false)? {
-					Named::Local(slot) => expr.set_to_slot(lexer, scope, state, slot)?,
-					Named::UpValue(idx) => {
-						let src = expr.to_slot(lexer, scope, state)?;
-						state.emit(scope, Op::SetUpVal(idx, src), lexer.src_index())
-					},
-					Named::Global(name) => {
-						let src = expr.to_slot(lexer, scope, state)?;
-						let idx = state.string_idx(lexer.resolve_ident(name), true)?;
-						state.emit(scope, Op::SetUpTab(idx, src), lexer.src_index())
-					},
+					Named::Local(slot) => expr.set_to_slot(lexer, scope, state, Loc::Local(slot))?,
+					Named::UpValue(idx) => expr.set_to_slot(lexer, scope, state, Loc::UpValue(idx))?,
+					Named::Global(name) => expr.set_to_slot(lexer, scope, state, Loc::Global(name))?,
 				}
 
 				Ok(())
 			},
 			PlaceExpr::Index { target, index, span } => {
-				let table_slot = target.to_slot(lexer, scope, state)?;
-				let index_slot = index.to_slot(lexer, scope, state)?;
-				let value_slot = expr.to_slot(lexer, scope, state)?;
-
-				state.emit(scope, Op::Set(table_slot, index_slot, value_slot), span);
-
+				state.emit(scope, Op::Set(target, index, expr), span);
 				Ok(())
 			},
 		}

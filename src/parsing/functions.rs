@@ -1,4 +1,4 @@
-use crate::debug::{DebugInfo, SrcMap};
+use crate::{bytecode::Loc, debug::{DebugInfo, SrcMap}};
 use super::{debug::InfoCollector, VariableScope, ParseScope, Named, LexerExt, Error, Op, expect_tok};
 use luant_lexer::{Lexer, Token, IdentKey};
 use bstr::BStr;
@@ -134,7 +134,16 @@ impl<'a, 's> FuncState<'a, 's> {
 		&mut self.operations
 	}
 
-	pub fn reserve_slot(&mut self) -> u8 {
+	pub fn reserve_slot(&mut self) -> Loc {
+		let reg = self.cur_slot_use;
+		self.cur_slot_use += 1;
+
+		self.max_slot_use = self.max_slot_use.max(self.cur_slot_use);
+
+		Loc::Temp(reg)
+	}
+
+	pub fn reserve_slot_u8(&mut self) -> u8 {
 		let reg = self.cur_slot_use;
 		self.cur_slot_use += 1;
 
@@ -346,7 +355,7 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 		Err("Continue statement not within a loop".into())
 	}
 
-	fn new_local(&mut self, _lexer: &Lexer<'s>, _state: &mut FuncState<'_, 's>, _name: IdentKey) -> Result<u8, Error<'s>> {
+	fn new_local(&mut self, _lexer: &Lexer<'s>, _state: &mut FuncState<'_, 's>, _name: IdentKey) -> Result<Loc, Error<'s>> {
 		unreachable!()
 	}
 
