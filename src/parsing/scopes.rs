@@ -184,67 +184,73 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 	}
 
 	fn new_label(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, label: IdentKey, label_pos: usize) -> Result<(), Error<'s>> {
-		if self.label_exists(label) {
-			return Err(format!("Label '{}' already defined", lexer.resolve_ident(label)).into());
-		}
-		self.labels.insert(label, LabelData::new(label_pos, self.local_count));
+		//TODO!
 
-		let mut missing_labels = std::mem::take(&mut self.missing_labels);
-		missing_labels.retain(|&(missing, op_pos, base)| {
-			if missing == label {
-				match base {
-					// The base is Some, so we need to swap the placeholder GoTo and Close.
-					//TODO: The logic here is kinda roundabout.
-					Some(base) => {
-						state.ops_mut().swap(op_pos, op_pos + 1);
-						let close_pos = op_pos;
-						let goto_pos = op_pos + 1;
+		// if self.label_exists(label) {
+		// 	return Err(format!("Label '{}' already defined", lexer.resolve_ident(label)).into());
+		// }
+		// self.labels.insert(label, LabelData::new(label_pos, self.local_count));
 
-						state.ops_mut()[close_pos] = Op::Close(base);
-						state.ops_mut()[goto_pos].update_goto_target(label_pos);
-					},
-					// Since the base is None, we know this is actually a naive goto.
-					None => state.ops_mut()[op_pos].update_goto_target(label_pos),
-				}
-				false
-			} else { true }
-		});
-		self.missing_labels = missing_labels;
+		// let mut missing_labels = std::mem::take(&mut self.missing_labels);
+		// missing_labels.retain(|&(missing, op_pos, base)| {
+		// 	if missing == label {
+		// 		match base {
+		// 			// The base is Some, so we need to swap the placeholder GoTo and Close.
+		// 			//TODO: The logic here is kinda roundabout.
+		// 			Some(base) => {
+		// 				state.ops_mut().swap(op_pos, op_pos + 1);
+		// 				let close_pos = op_pos;
+		// 				let goto_pos = op_pos + 1;
+
+		// 				state.ops_mut()[close_pos] = Op::Close(base);
+		// 				state.ops_mut()[goto_pos].update_goto_target(label_pos);
+		// 			},
+		// 			// Since the base is None, we know this is actually a naive goto.
+		// 			None => state.ops_mut()[op_pos].update_goto_target(label_pos),
+		// 		}
+		// 		false
+		// 	} else { true }
+		// });
+		// self.missing_labels = missing_labels;
 
 		Ok(())
 	}
 
 	fn emit_goto(&mut self, state: &mut FuncState<'_, 's>, label: IdentKey, src_index: usize, closed_base: Option<u8>) -> Result<(), Error<'s>> {
-		if let Some(&LabelData { position, local_count_at_label }) = self.labels.get(label) {
-			// Label is handled within this scope.
-			// If captures have occurred, check if any locals have been declared within the implicit scope of the label.
-			if self.has_captured_locals && let Some(label_locals) = self.local_count.checked_sub(local_count_at_label).and_then(NonZero::new) {
-				// Since captures have occurred and this implicit scope owns locals, we need to conservatively close them.
-				let base = self.local_base() + label_locals.get();
-				state.emit_closing_goto(self, base, position, src_index);
-			} else {
-				// Otherwise, if we weren't told by the parent to close any locals, we know this is a naive goto.
-				match closed_base {
-					None => state.emit_flat_goto(self, position, src_index),
-					Some(base) => state.emit_closing_goto(self, base, position, src_index),
-				}
-			}
-			Ok(())
-		} else if self.parent.label_exists(label) { //TODO: Extremely inefficient to recheck this at every level.
-			// Pass it upwards. If this scope requires closing when exited, pass its base. Otherwise, just pass up what we were given from the previous scope.
-			let closed_base = self.has_captured_locals.then(|| self.local_base()).or(closed_base);
-			self.parent.emit_goto(state, label, src_index, closed_base)
-		} else {
-			// We don't yet know if this goto requires closing variables since we don't know where it goes.
-			// We instead compile the goto followed by an unreachable closing statement. If we later determine that
-			// we do need to close locals, we switch the order of them.
-			let base = self.has_captured_locals.then(|| self.local_base());
-			let goto_op_pos = state.ops().len();
-			self.missing_labels.push((label, goto_op_pos, base));
-			state.emit(self, Op::goto(0), src_index); // Placeholder.
-			state.emit(self, Op::Close(u8::MAX), src_index); // Meaningless for now.
-			Ok(())
-		}
+		//TODO!
+
+		// if let Some(&LabelData { position, local_count_at_label }) = self.labels.get(label) {
+		// 	// Label is handled within this scope.
+		// 	// If captures have occurred, check if any locals have been declared within the implicit scope of the label.
+		// 	if self.has_captured_locals && let Some(label_locals) = self.local_count.checked_sub(local_count_at_label).and_then(NonZero::new) {
+		// 		// Since captures have occurred and this implicit scope owns locals, we need to conservatively close them.
+		// 		let base = self.local_base() + label_locals.get();
+		// 		state.emit_closing_goto(self, base, position, src_index);
+		// 	} else {
+		// 		// Otherwise, if we weren't told by the parent to close any locals, we know this is a naive goto.
+		// 		match closed_base {
+		// 			None => state.emit_flat_goto(self, position, src_index),
+		// 			Some(base) => state.emit_closing_goto(self, base, position, src_index),
+		// 		}
+		// 	}
+		// 	Ok(())
+		// } else if self.parent.label_exists(label) { //TODO: Extremely inefficient to recheck this at every level.
+		// 	// Pass it upwards. If this scope requires closing when exited, pass its base. Otherwise, just pass up what we were given from the previous scope.
+		// 	let closed_base = self.has_captured_locals.then(|| self.local_base()).or(closed_base);
+		// 	self.parent.emit_goto(state, label, src_index, closed_base)
+		// } else {
+		// 	// We don't yet know if this goto requires closing variables since we don't know where it goes.
+		// 	// We instead compile the goto followed by an unreachable closing statement. If we later determine that
+		// 	// we do need to close locals, we switch the order of them.
+		// 	let base = self.has_captured_locals.then(|| self.local_base());
+		// 	let goto_op_pos = state.ops().len();
+		// 	self.missing_labels.push((label, goto_op_pos, base));
+		// 	state.emit(self, Op::goto(0), src_index); // Placeholder.
+		// 	state.emit(self, Op::Close(u8::MAX), src_index); // Meaningless for now.
+		// 	Ok(())
+		// }
+
+		Ok(())
 	}
 
 	fn label_exists(&mut self, label: IdentKey) -> bool {

@@ -13,10 +13,7 @@ pub struct ParsedCall {
 impl ParsedCall {
 	pub fn handle_call<'s>(self, _lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: u8) -> Result<Expr, Error<'s>> {
 		state.emit(scope, Op::Call(self.func_reg, self.arg_count, ret_count), self.span);
-		// The first return value is stored over top the first argument.
-		//TODO: Multiple returns.
-		// Ok(Expr::Temp(self.func_reg + 1))
-		todo!()
+		Ok(Expr::CallRet)
 	}
 }
 

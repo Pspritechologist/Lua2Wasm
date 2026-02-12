@@ -22,10 +22,6 @@ impl Loc {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Operation {
 	// Loads.
-	LoadNil(Loc, u8),
-	LoadBool(Loc, bool),
-	LoadNum(Loc, Finite<f64>),
-	LoadStr(Loc, usize),
 	LoadTab(Loc),
 	LoadClosure(Loc, usize),
 	// Tables.
@@ -61,10 +57,12 @@ pub enum Operation {
 	Call(Loc, u8, u8),
 	Ret(u8, u8),
 	// Control.
-	StartIf(Loc),
+	StartIf(Expr),
+	ElseIf(Expr),
 	Else,
 	EndIf,
 	// Meta.
 	Copy(Loc, Expr),
 	Close(u8),
+	MaybeClose(u8, bool),
 }

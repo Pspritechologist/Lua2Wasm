@@ -118,13 +118,6 @@ impl<'a, 's> FuncState<'a, 's> {
 		self.operations.push(op);
 		self.debug_info.emit(src_index);
 	}
-	pub fn emit_closing_goto(&mut self, scope: &mut (impl ParseScope<'s> + ?Sized), base: u8, position: usize, src_index: usize) {
-		self.emit(scope, Op::Close(base), src_index);
-		self.emit(scope, Op::goto(position), src_index);
-	}
-	pub fn emit_flat_goto(&mut self, scope: &mut (impl ParseScope<'s> + ?Sized), position: usize, src_index: usize) {
-		self.emit(scope, Op::goto(position), src_index);
-	}
 
 	pub fn ops(&self) -> &[Op] {
 		&self.operations

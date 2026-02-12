@@ -17,70 +17,75 @@ impl<'a, 's> LoopScope<'a, 's> {
 	}
 
 	fn patch_end_jumps(&mut self, state: &mut FuncState<'_, 's>) {
-		let end_op = Op::goto(state.ops().len());
-		let ops = state.ops_mut();
+		//TODO!
+		// let end_op = Op::goto(state.ops().len());
+		// let ops = state.ops_mut();
 
-		for &jump_pos in &self.end_jumps {
-			debug_assert!(matches!(ops[jump_pos], Op::GoTo(_)), "Expected GoTo at position {jump_pos}, found {:?}", ops[jump_pos]);
-			ops[jump_pos] = end_op;
-		}
+		// for &jump_pos in &self.end_jumps {
+		// 	debug_assert!(matches!(ops[jump_pos], Op::GoTo(_)), "Expected GoTo at position {jump_pos}, found {:?}", ops[jump_pos]);
+		// 	ops[jump_pos] = end_op;
+		// }
 	}
 }
 impl<'a, 's> ParseScope<'s> for LoopScope<'a, 's> {
 	fn parent(&mut self) -> &mut dyn ParseScope<'s> { self.parent }
 
 	fn emit_break(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> {
-		let break_pos = state.ops().len();
-		state.emit(self, Op::tmp_goto(), span); // Placeholder
-		self.end_jumps.push(break_pos);
+		//TODO!
+		// let break_pos = state.ops().len();
+		// state.emit(self, Op::tmp_goto(), span); // Placeholder
+		// self.end_jumps.push(break_pos);
 		Ok(())
 	}
 
 	fn emit_continue(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> {
-		state.emit(self, Op::goto(self.start_pos), span);
+		//TODO!
+		// state.emit(self, Op::goto(self.start_pos), span);
 		Ok(())
 	}
 }
 
 pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
-	let start = state.ops().len();
+	//TODO!
+
+	// let start = state.ops().len();
 	
-	let initial_slots_used = state.slots_used();
-	let cond = super::parse_expr(lexer.next_must()?, lexer, scope, state)?;
+	// let initial_slots_used = state.slots_used();
+	// let cond = super::parse_expr(lexer.next_must()?, lexer, scope, state)?;
 
-	let mut scope = VariableScope::new(LoopScope::new(scope, start));
+	// let mut scope = VariableScope::new(LoopScope::new(scope, start));
 
-	match cond.as_const().map(|c| c.is_truthy()) {
-		Some(true) => (), // This is an infinite loop and no check need be compiled.
-		Some(false) | //TODO: Don't compile unreachable loops.
-		None => {
-			let span = lexer.src_index();
-			let cond = cond.to_slot(lexer, &mut scope, state)?;
-			state.emit(&mut scope, Op::SkpIf(cond), span);
-			scope.emit_break(state, span)?;
+	// match cond.as_const().map(|c| c.is_truthy()) {
+	// 	Some(true) => (), // This is an infinite loop and no check need be compiled.
+	// 	Some(false) | //TODO: Don't compile unreachable loops.
+	// 	None => {
+	// 		let span = lexer.src_index();
+	// 		let cond = cond.to_slot(lexer, &mut scope, state)?;
+	// 		state.emit(&mut scope, Op::SkpIf(cond), span);
+	// 		scope.emit_break(state, span)?;
 			
-			state.set_slots_used(initial_slots_used);
-		}
-	}
+	// 		state.set_slots_used(initial_slots_used);
+	// 	}
+	// }
 
-	expect_tok!(lexer, Token::Do)?;
+	// expect_tok!(lexer, Token::Do)?;
 
-	loop {
-		let tok = lexer.next_must()?;
-		if matches!(tok, Token::End) {
-			break;
-		}
+	// loop {
+	// 	let tok = lexer.next_must()?;
+	// 	if matches!(tok, Token::End) {
+	// 		break;
+	// 	}
 
-		super::parse_stmt(tok, lexer, &mut scope, state)?;
-	}
+	// 	super::parse_stmt(tok, lexer, &mut scope, state)?;
+	// }
 
-	let mut loop_scope = scope.finalize_scope();
+	// let mut loop_scope = scope.finalize_scope();
 
-	// Jump back to the start of the loop.
-	state.emit(&mut loop_scope.parent, Op::goto(loop_scope.start_pos), lexer.src_index());
+	// // Jump back to the start of the loop.
+	// state.emit(&mut loop_scope.parent, Op::goto(loop_scope.start_pos), lexer.src_index());
 
-	// Patch in jumps to the end of the loop (breaks).
-	loop_scope.patch_end_jumps(state);
+	// // Patch in jumps to the end of the loop (breaks).
+	// loop_scope.patch_end_jumps(state);
 
 	Ok(())
 }

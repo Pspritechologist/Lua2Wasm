@@ -274,15 +274,13 @@ fn parse_do_block<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, sta
 }
 
 fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
-	let mut if_end_jump_positions = Vec::new();
+	let if_span = lexer.src_index();
+	let if_cond = parse_expr(lexer.next_must()?, lexer, outer_scope, state)?;
+
+	// Start the if instruction block.
+	state.emit(outer_scope, Op::StartIf(if_cond), if_span);
 
 	'outer: loop {
-		let span = lexer.src_index();
-		let cond = parse_expr(lexer.next_must()?, lexer, outer_scope, state)?.to_slot(lexer, outer_scope, state)?;
-		state.emit(outer_scope, Op::SkpIf(cond), span);
-		let next_branch_jump_pos = state.ops().len();
-		state.emit(outer_scope, Op::tmp_goto(), span); // Placeholder
-
 		expect_tok!(lexer, Token::Then)?;
 
 		let mut if_scope = VariableScope::new(&mut *outer_scope);
@@ -296,28 +294,19 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 			parse_stmt(tok, lexer, &mut if_scope, state)?;
 		};
 
-		if matches!(end_tok, Token::Else | Token::ElseIf) {
-			// If there are more branches after this if block, compile the required jump and or Close.
-			if_end_jump_positions.push(state.ops().len());
-			let base = if_scope.local_base();
-			match if_scope.needs_closing() {
-				true => state.emit_closing_goto(&mut if_scope, base, 0, lexer.src_index()), // Placeholder
-				false => state.emit_flat_goto(&mut if_scope, 0, lexer.src_index()), // Placeholder
-			}
-		} else if if_scope.needs_closing() {
+		if if_scope.needs_closing() {
 			// Otherwise, emit a closing operation for the If block if needed.
 			let base = if_scope.local_base();
 			state.emit(&mut if_scope, Op::Close(base), lexer.src_index());
 		}
 
-		let end_pos = state.ops().len();
-		// Skipping the If block doesn't close any locals.
-		state.ops_mut()[next_branch_jump_pos] = Op::goto(end_pos);
-
 		let outer_scope = if_scope.finalize_scope();
 
 		match end_tok {
 			Token::Else => {
+				// Start the else instruction block.
+				state.emit(outer_scope, Op::Else, lexer.src_index());
+
 				let mut else_scope = VariableScope::new(&mut *outer_scope);
 				loop {
 					let tok = lexer.next_must()?;
@@ -334,16 +323,19 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 					parse_stmt(tok, lexer, &mut else_scope, state)?;
 				}
 			},
-			Token::ElseIf => continue 'outer,
+			Token::ElseIf => {
+				let elif_span = lexer.src_index();
+				let elif_cond = parse_expr(lexer.next_must()?, lexer, outer_scope, state)?;
+				state.emit(outer_scope, Op::ElseIf(elif_cond), elif_span);
+				continue 'outer
+			},
 			Token::End => break 'outer,
 			_ => unreachable!(),
 		}
 	}
 
-	// Leaving the scope of the If closes the If's locals.
-	let end_jump_pos = state.ops().len();
-	if_end_jump_positions.into_iter()
-		.for_each(|pos| state.ops_mut()[pos].update_goto_target(end_jump_pos));
+	// End the if instruction block.
+	state.emit(outer_scope, Op::EndIf, lexer.src_index());
 
 	Ok(())
 }

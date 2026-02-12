@@ -20,7 +20,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl 
 				expect_tok!(lexer, Token::ParenClose)?;
 				expr
 			},
-			Token::VarArgs => todo!(),
+			Token::VarArgs => Expr::VarArgs,
 			Token::Function => todo!(),
 			Token::Number(n) => Expr::Constant(Const::Number(n)),
 			Token::Identifier(ident) => Expr::from_named(scope.resolve_name(state, ident, false)?),
