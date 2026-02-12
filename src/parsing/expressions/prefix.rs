@@ -20,7 +20,7 @@ impl<'s> PlaceExpr {
 		match self {
 			PlaceExpr::Name(ident) => {
 				match scope.resolve_name(state, ident, false)? {
-					Named::Local(slot) => expr.set_to_slot(lexer, scope, state, Loc::Local(slot))?,
+					Named::Local(slot) => expr.set_to_slot(lexer, scope, state, Loc::Slot(slot))?,
 					Named::UpValue(idx) => expr.set_to_slot(lexer, scope, state, Loc::UpValue(idx))?,
 					Named::Global(name) => expr.set_to_slot(lexer, scope, state, Loc::Global(name))?,
 				}
@@ -50,7 +50,7 @@ impl IdentExpr {
 				expr
 			},
 			Token::Identifier(ident) => match scope.resolve_name(state, ident, false)? {
-				Named::Local(slot) => Expr::Local(slot),
+				Named::Local(slot) => Expr::Slot(slot),
 				Named::UpValue(idx) => Expr::UpValue(idx),
 				Named::Global(name) => Expr::Global(name),
 			},

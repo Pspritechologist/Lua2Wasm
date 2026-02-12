@@ -163,7 +163,7 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 			state.reserve_slot();
 		}
 
-		Ok(Loc::Local(reg))
+		Ok(Loc::Slot(reg))
 	}
 
 	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> {

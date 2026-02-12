@@ -107,7 +107,6 @@ impl InfixOp {
 			InfixOp::Shr => std_infix(Op::BitShR),
 			InfixOp::Call(call) => call.parse_call_args(lexer, scope, state, left)?.handle_call(lexer, scope, state, 1),
 			InfixOp::Index(index) => index.parse_index(lexer, scope, state)?.handle_index(lexer, scope, state, left),
-			//TODO: Fold consts here.
 			
 			InfixOp::And | InfixOp::Or => todo!(),
 			// InfixOp::And => {
@@ -237,7 +236,7 @@ impl PrefixOp {
 			return Ok(Expr::Constant(res));
 		}
 
-		let dst = right.as_temp().unwrap_or_else(|| state.reserve_slot());
+		let dst = state.reserve_slot();
 
 		match self {
 			PrefixOp::Neg => state.emit(scope, Op::Neg(dst, right), span),

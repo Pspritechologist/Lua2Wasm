@@ -1,20 +1,25 @@
 use crate::parsing::expressions::Expr;
 use luant_lexer::IdentKey;
-use real_float::Finite;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Loc {
-	Local(u8),
+	Slot(u8),
 	UpValue(u8),
 	Global(IdentKey),
-	Temp(u8),
 }
 impl Loc {
 	pub fn as_slot(self) -> Option<u8> {
 		match self {
-			Loc::Local(slot) => Some(slot),
-			Loc::Temp(temp) => Some(temp),
+			Loc::Slot(slot) => Some(slot),
 			Loc::UpValue(_) | Loc::Global(_) => None,
+		}
+	}
+
+	pub fn is_same_slot(self, other: Loc) -> bool {
+		match (self, other) {
+			(Loc::Slot(slot1), Loc::Slot(slot2)) => slot1 == slot2,
+			(Loc::UpValue(up1), Loc::UpValue(up2)) => up1 == up2,
+			_ => false,
 		}
 	}
 }

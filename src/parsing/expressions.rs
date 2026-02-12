@@ -30,10 +30,9 @@ impl Const {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Expr {
 	Constant(Const),
-	Local(u8),
+	Slot(u8),
 	UpValue(u8),
 	Global(IdentKey),
-	Temp(u8),
 	CallRet,
 	VarArgs,
 }
@@ -52,19 +51,17 @@ impl Expr {
 
 	pub fn from_loc(loc: Loc) -> Self {
 		match loc {
-			Loc::Local(slot) => Expr::Local(slot),
+			Loc::Slot(slot) => Expr::Slot(slot),
 			Loc::UpValue(idx) => Expr::UpValue(idx),
 			Loc::Global(ident) => Expr::Global(ident),
-			Loc::Temp(temp) => Expr::Temp(temp),
 		}
 	}
 	
 	pub fn as_loc(self) -> Option<Loc> {
 		Some(match self {
-			Expr::Local(slot) => Loc::Local(slot),
+			Expr::Slot(slot) => Loc::Slot(slot),
 			Expr::UpValue(idx) => Loc::UpValue(idx),
 			Expr::Global(ident) => Loc::Global(ident),
-			Expr::Temp(temp) => Loc::Temp(temp),
 			Expr::Constant(_) | Expr::CallRet |
 			Expr::VarArgs => return None,
 		})
@@ -80,7 +77,7 @@ impl Expr {
 
 	pub fn from_named(name: Named) -> Self {
 		match name {
-			Named::Local(slot) => Expr::Local(slot),
+			Named::Local(slot) => Expr::Slot(slot),
 			Named::UpValue(idx) => Expr::UpValue(idx),
 			Named::Global(ident) => Expr::Global(ident),
 		}
@@ -90,28 +87,6 @@ impl Expr {
 		match self {
 			Expr::Constant(c) => Some(c),
 			_ => None,
-		}
-	}
-
-	#[inline]
-	pub fn to_temp<'s>(self, lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Loc, Error<'s>> {
-		match self.as_temp() {
-			Some(t) => Ok(t),
-			None => {
-				let temp = state.reserve_slot();
-				self.set_to_slot(lexer, scope, state, temp)?;
-				Ok(temp)
-			},
-		}
-	}
-
-	#[inline]
-	pub fn as_temp(self) -> Option<Loc> {
-		match self {
-			Expr::Temp(t) => Some(Loc::Temp(t)),
-			Expr::Local(_) | Expr::UpValue(_) |
-			Expr::Global(_) | Expr::Constant(_) |
-			Expr::CallRet | Expr::VarArgs => None,
 		}
 	}
 
@@ -134,14 +109,15 @@ impl Expr {
 				self.set_to_slot(lexer, scope, state, temp)?;
 				Ok(temp)
 			},
-			Expr::Local(_) |
-			Expr::Temp(_) => Ok(self.to_loc()),
+			Expr::Slot(_) => Ok(self.to_loc()),
 		}
 	}
 
 	#[inline]
 	pub fn set_to_slot<'s>(self, lexer: &Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, slot: Loc) -> Result<(), Error<'s>> {
-		state.emit(scope, Op::Copy(slot, self), lexer.src_index());
+		if self.as_loc().is_none_or(|s| !s.is_same_slot(slot)) {
+			state.emit(scope, Op::Copy(slot, self), lexer.src_index());
+		}
 		Ok(())
 	}
 }

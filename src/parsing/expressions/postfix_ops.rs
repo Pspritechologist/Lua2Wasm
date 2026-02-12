@@ -30,7 +30,7 @@ impl CallType {
 				let mut head = lexer.next_must()?;
 
 				let func_reg_u8 = state.reserve_slot_u8();
-				let func_reg = Loc::Temp(func_reg_u8);
+				let func_reg = Loc::Slot(func_reg_u8);
 				left.set_to_slot(lexer, scope, state, func_reg)?;
 
 				// Special case zero arg calls.
@@ -51,7 +51,7 @@ impl CallType {
 					state.set_slots_used(initial_slots_used + arg_count);
 
 					let arg_expr = super::parse_expr(head, lexer, scope, state)?;
-					arg_expr.set_to_slot(lexer, scope, state, Loc::Temp(func_reg_u8 + arg_count))?;
+					arg_expr.set_to_slot(lexer, scope, state, Loc::Slot(func_reg_u8 + arg_count))?;
 					
 					match lexer.next_must()? {
 						Token::Comma => head = lexer.next_must()?,

@@ -133,7 +133,7 @@ impl<'a, 's> FuncState<'a, 's> {
 
 		self.max_slot_use = self.max_slot_use.max(self.cur_slot_use);
 
-		Loc::Temp(reg)
+		Loc::Slot(reg)
 	}
 
 	pub fn reserve_slot_u8(&mut self) -> u8 {
