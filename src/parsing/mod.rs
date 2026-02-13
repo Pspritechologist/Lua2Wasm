@@ -40,8 +40,8 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 	let mut root_scope = RootScope::new_root(&mut lexer);
 
 	let mut parse = || {
-		while let Some(tok) = lexer.next().transpose()? {
-			parse_stmt(tok, &mut lexer, &mut root_scope, &mut state)?;
+		while let Some((tok, trivia)) = lexer.next_with_trivia().transpose()? {
+			parse_stmt(trivia, tok, &mut lexer, &mut root_scope, &mut state)?;
 		}
 		Ok::<_, Error>(())
 	};
@@ -85,10 +85,15 @@ pub struct ConstantMap<'s> {
 
 trait LexerExt<'s> {
 	fn next_must(&mut self) -> Result<Token<'s>, Error<'s>>;
+	fn next_must_with_trivia(&mut self) -> Result<(Token<'s>, Vec<&'s [u8]>), Error<'s>>;
 }
 impl<'s> LexerExt<'s> for Lexer<'s> {
 	fn next_must(&mut self) -> Result<Token<'s>, Error<'s>> {
 		self.next().transpose()?.ok_or_else(|| "Unexpected end of input".into())
+	}
+
+	fn next_must_with_trivia(&mut self) -> Result<(Token<'s>, Vec<&'s [u8]>), Error<'s>> {
+		self.next_with_trivia().transpose()?.ok_or_else(|| "Unexpected end of input".into())
 	}
 }
 
@@ -110,7 +115,7 @@ use expect_tok;
 
 pub type Error<'s> = Box<dyn std::error::Error + 's>;
 
-fn parse_stmt<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
+fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
 	match head {
 		Token::LineTerm => (),
 		Token::Label => {
@@ -255,12 +260,12 @@ fn parse_do_block<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, sta
 	let mut scope = VariableScope::new(scope);
 
 	loop {
-		let tok = lexer.next_must()?;
+		let (tok, trivia) = lexer.next_must_with_trivia()?;
 		if tok == Token::End {
 			break;
 		}
 
-		parse_stmt(tok, lexer, &mut scope, state)?;
+		parse_stmt(trivia, tok, lexer, &mut scope, state)?;
 	}
 
 	if scope.needs_closing() {
@@ -286,12 +291,12 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 		let mut if_scope = VariableScope::new(&mut *outer_scope);
 
 		let end_tok = loop {
-			let tok = lexer.next_must()?;
+			let (tok, trivia) = lexer.next_must_with_trivia()?;
 			if matches!(tok, Token::Else | Token::ElseIf | Token::End) {
 				break tok;
 			}
 
-			parse_stmt(tok, lexer, &mut if_scope, state)?;
+			parse_stmt(trivia, tok, lexer, &mut if_scope, state)?;
 		};
 
 		if if_scope.needs_closing() {
@@ -309,7 +314,7 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 
 				let mut else_scope = VariableScope::new(&mut *outer_scope);
 				loop {
-					let tok = lexer.next_must()?;
+					let (tok, trivia) = lexer.next_must_with_trivia()?;
 					if tok == Token::End {
 						if else_scope.needs_closing() {
 							let base = else_scope.local_base();
@@ -320,7 +325,7 @@ fn parse_if_statement<'s>(lexer: &mut Lexer<'s>, outer_scope: &mut dyn ParseScop
 						break 'outer;
 					}
 
-					parse_stmt(tok, lexer, &mut else_scope, state)?;
+					parse_stmt(trivia, tok, lexer, &mut else_scope, state)?;
 				}
 			},
 			Token::ElseIf => {

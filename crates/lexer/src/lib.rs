@@ -1,4 +1,4 @@
-use logos::Logos;
+use logos::{FilterResult, Logos};
 use bstr::{ByteSlice, BStr};
 use lexical_parse_float::FromLexicalWithOptions;
 
@@ -42,17 +42,33 @@ impl<'s, F: FnOnce(Token<'s>) -> bool> TokPat<'s> for F {
 
 pub struct Lexer<'s> {
 	inner: logos::Lexer<'s, Token<'s>>,
-	peeked: Option<(Token<'s>, std::ops::Range<usize>)>,
+	peeked: Option<(Token<'s>, std::ops::Range<usize>, Vec<&'s [u8]>)>,
 }
 
 impl<'s> Lexer<'s> {
+	pub fn next_with_trivia(&mut self) -> Option<Result<(Token<'s>, Vec<&'s [u8]>), LexError<'s>>> {
+		if let Some((tok, _, trivia)) = self.peeked.take() {
+			return Some(Ok((tok, trivia)));
+		}
+		
+		let mut trivia = Vec::new();
+		loop {
+			match self.inner.next() {
+				Some(Ok(Token::DocComment(comment))) => trivia.push(comment),
+				Some(Ok(tok)) => return Some(Ok((tok, trivia))),
+				Some(Err(e)) => return Some(Err(e)),
+				None => return None,
+			}
+		}
+	}
+
 	pub fn peek(&mut self) -> Result<Option<Token<'s>>, LexError<'s>> {
 		if self.peeked.is_none() {
 			let span = self.current_span();
-			self.peeked = self.inner.next().transpose()?.map(|tok| (tok, span));
+			self.peeked = self.next_with_trivia().transpose()?.map(|(tok, trivia)| (tok, span, trivia));
 		}
 
-		Ok(self.peeked.as_ref().map(|(tok, _)| *tok))
+		Ok(self.peeked.as_ref().map(|(tok, _, _)| *tok))
 	}
 
 	pub fn next_if(&mut self, pat: impl TokPat<'s>) -> Result<Option<Token<'s>>, LexError<'s>> {
@@ -92,7 +108,7 @@ impl<'s> Lexer<'s> {
 	}
 
 	pub fn current_span(&self) -> std::ops::Range<usize> {
-		self.peeked.as_ref().map(|(_, span)| span.clone()).unwrap_or_else(|| self.inner.span())
+		self.peeked.as_ref().map(|(_, span, _)| span.clone()).unwrap_or_else(|| self.inner.span())
 	}
 
 	pub fn src_index(&self) -> usize {
@@ -118,8 +134,8 @@ impl<'s> Iterator for Lexer<'s> {
 	type Item = Result<Token<'s>, LexError<'s>>;
 	fn next(&mut self) -> Option<Self::Item> {
 		self.peeked.take()
-			.map(|(tok, _)| Ok(tok))
-			.or_else(|| self.inner.next())
+			.map(|(tok, _, _)| Ok(tok))
+			.or_else(|| self.inner.by_ref().find(|t| !matches!(t, Ok(Token::DocComment(_)))))
 	}
 }
 
@@ -162,22 +178,29 @@ impl<'s> LexInterner<'s> {
 	}
 }
 
-fn handle_comment<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<logos::Skip, LexError<'s>> {
-	if !lex.slice().starts_with(b"--[") {
-		// Single-line comment
-		// let end = lex.remainder().find(b"\n").unwrap_or(lex.remainder().len());
-		let end = lex.remainder().lines().next().map(|l| l.len()).unwrap_or(lex.remainder().len());
-		lex.bump(end);
-		return Ok(logos::Skip);
+fn handle_comment<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> FilterResult<&'s [u8], LexError<'s>> {
+	// We need to determine if it's a block comment or not.
+	let blk_comment_filler = lex.slice()
+		.strip_prefix(b"--[")
+		.and_then(|s| s.strip_suffix(b"["));
+
+	if let Some(equals) = blk_comment_filler {
+		// A multi-line block comment, we need special rules to determine the end.
+		let end_pat = [b"]", equals, b"]"].concat();
+		let Some(end) = lex.remainder().find(&end_pat) else {
+			return FilterResult::Error(LexError::UnmatchedBlockComment);
+		};
+
+		lex.bump(end + end_pat.len());
+
+		return FilterResult::Skip;
 	}
 
-	// let equals = lex.slice().matches('=').count();
-	let equals = lex.slice().len() - 4; // "--[==[".len() == 6
-	let end_pat = format!("]{}]", "=".repeat(equals)); //TODO: Highly inefficient.
-	let end = lex.remainder().find(&end_pat).ok_or(LexError::UnmatchedBlockComment)?;
-	lex.bump(end + end_pat.len());
-
-	Ok(logos::Skip)
+	// A single-line comment, the token rules have already matched the entire thing.
+	match lex.slice().strip_prefix(b"---@") {
+		Some(contents) => FilterResult::Emit(contents),
+		None => FilterResult::Skip,
+	}
 }
 
 fn handle_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> (bool, &'s BStr) {
@@ -214,12 +237,14 @@ fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<(boo
 #[derive(Debug, Clone, Copy, PartialEq, Logos, strum::IntoStaticStr)]
 #[logos(extras = LexInterner<'s>)]
 #[logos(skip(r"\s+"))]
-#[logos(skip(r"--(\[(=*)\[)?", handle_comment))]
-// #[logos(skip(r"--\[=*\[", handle_block_comment))]
-// #[logos(skip(r"--[^\n]*"))]
 #[logos(error(LexError<'s>, |lex| LexError::InvalidToken(BStr::new(lex.slice()))))]
 #[logos(utf8 = false)]
 pub enum Token<'s> {
+	#[regex(r"---@.*", handle_comment, allow_greedy=true)]
+	#[regex(r"--.*", handle_comment, allow_greedy=true)]
+	#[regex(r"--\[=*\[", handle_comment)]
+	DocComment(&'s [u8]),
+
 	#[token(";")] LineTerm,
 	#[token("[")] BracketOpen,
 	#[token("]")] BracketClose,

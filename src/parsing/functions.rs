@@ -403,9 +403,9 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 	}
 
 	loop {
-		let tok = lexer.next_must()?;
+		let (tok, trivia) = lexer.next_must_with_trivia()?;
 		if tok == Token::End { break; }
-		super::parse_stmt(tok, lexer, &mut closure_scope, &mut closure_state)?;
+		super::parse_stmt(trivia, tok, lexer, &mut closure_scope, &mut closure_state)?;
 	}
 
 	// Ensure the function ends with a return.
