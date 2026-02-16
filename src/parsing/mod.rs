@@ -53,11 +53,10 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 
 	root_scope.finalize(&mut state, &lexer)?;
 
-	let (ops, src_map, used_regs) = state.into_inner();
+	let (ops, debug, used_regs) = state.into_inner();
 
-	let debug = DebugInfo::new_file(
-		src_map,
-		None::<&str>,
+	let debug = debug.into_debug_info(
+		lexer.interner(), None::<&str>, 0, false
 	);
 
 	let parsed_func = functions::ParsedFunction {

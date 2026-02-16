@@ -155,15 +155,17 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 			return Err(format!("Local variable '{}' already defined", lexer.resolve_ident(name)).into());
 		}
 		//TODO: Feels like this should be cached.
-		let reg = self.total_locals();
-		self.locals.insert(name, reg);
+		let slot = self.total_locals();
+		self.locals.insert(name, slot);
 		self.local_count += 1;
+		
+		state.declare_local(name);
 
-		if state.slots_used() <= reg {
+		if state.slots_used() <= slot {
 			state.reserve_slot();
 		}
 
-		Ok(Loc::Slot(reg))
+		Ok(Loc::Slot(slot))
 	}
 
 	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> {

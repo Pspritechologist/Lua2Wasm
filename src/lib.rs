@@ -30,6 +30,8 @@ struct ExternFns {
 	mul: FunctionId,
 	div: FunctionId,
 	eq: FunctionId,
+	call: FunctionId,
+	get_truthy: FunctionId,
 }
 
 trait ValueExt {
@@ -44,7 +46,7 @@ impl ValueExt for Value {
 impl Loc {
 	fn push_get(self, state: &mut State, seq: &mut InstrSeqBuilder) {
 		match self {
-			Loc::Slot(idx) => seq.local_set(state.locals[&idx]),
+			Loc::Slot(idx) => seq.local_get(state.locals[&idx]),
 			Loc::UpValue(idx) => todo!(),
 			Loc::Global(ident_key) => todo!(),
 		};
@@ -60,10 +62,17 @@ impl Loc {
 }
 
 pub fn lower(parsed: parsing::Parsed) -> Result<Vec<u8>> {
-	let mut module = {
-		let mut config = walrus::ModuleConfig::default();
-		config.parse(include_bytes!("../target/wasm32-unknown-unknown/release/wasm_scratch.wasm"))?
-	};
+	let mut module = walrus::ModuleConfig::default()
+		.parse(include_bytes!("../target/wasm32-unknown-unknown/release/wasm_scratch.wasm"))?;
+
+	let mut skipped = 0;
+	while let Some(e) = { module.exports.iter().nth(skipped) } {
+		if e.name.starts_with("__luant") {
+			module.exports.delete(e.id());
+		} else {
+			skipped += 1;
+		}
+	}
 
 	let main_fn = parsed.parsed_func;
 
@@ -97,6 +106,8 @@ pub fn lower(parsed: parsing::Parsed) -> Result<Vec<u8>> {
 		mul: extern_mod::__luant_mul(I64, I64) -> I64;
 		div: extern_mod::__luant_div(I64, I64) -> I64;
 		eq: extern_mod::__luant_eq(I64, I64) -> I64;
+		call: extern_mod::__luant_call(i32, i32) -> i32;
+		get_truthy: extern_mod::__luant_get_truthy(i64) -> i32;
 	};
 
 	let mut offset = 0xFFF000;
@@ -121,7 +132,13 @@ pub fn lower(parsed: parsing::Parsed) -> Result<Vec<u8>> {
 
 	let seq = &mut builder.func_body();
 	
-	(0..main_fn.frame_size).for_each(|slot| { state.locals.insert(slot, state.module.locals.add(ValType::I64)); });
+	(0..main_fn.frame_size).for_each(|slot| {
+		let local = state.module.locals.add(ValType::I64);
+		state.locals.insert(slot, local);
+		if let Some(debug) = main_fn.debug.as_ref() && let Some(name) = debug.get_local_name(slot) {
+			state.module.locals.get_mut(local).name = Some(name.to_string());
+		}
+	});
 
 	while let Some(op) = operations.next() {
 		compile_op(&mut state, &mut operations, seq, op);
@@ -142,11 +159,14 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		Op::Eq(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.eq); dst.push_set(state, seq); },
 		Op::Copy(dst, val) => { val.push(state, seq); dst.push_set(state, seq); },
 		Op::StartIf(cond) => compile_if(state, ops, seq, cond),
+		// Op::Call(dst, , )
 		_ => todo!("{op:?}"),
 	}
 }
 
 fn compile_if(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut InstrSeqBuilder, cond: Expr) {
+	cond.push(state, seq);
+	seq.call(state.extern_fns.get_truthy);
 	let (consequent, next) = {
 		let mut seq = seq.dangling_instr_seq(None);
 		let next = loop {

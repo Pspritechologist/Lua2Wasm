@@ -11,6 +11,7 @@ pub enum ValueTag {
 	String = 3,
 	Table = 4,
 	Closure = 5,
+	Function = 6,
 }
 impl ValueTag {
 	pub fn try_from_u8(n: u8) -> Option<Self> {
@@ -21,6 +22,7 @@ impl ValueTag {
 			3 => Some(ValueTag::String),
 			4 => Some(ValueTag::Table),
 			5 => Some(ValueTag::Closure),
+			6 => Some(ValueTag::Function),
 			_ => None,
 		}
 	}
@@ -80,9 +82,15 @@ impl Value {
 		v
 	}
 	pub fn string(addr: i32, len: i32) -> Self {
-		let bytes = (addr as i64) | ((len as i64) << 32);
+		let bytes = ((addr as i64) << 32) | (len as i64);
 		let mut v = Self::from_i64(bytes);
 		v.set_tag(ValueTag::String);
+		v
+	}
+	pub fn function(addr: i32) -> Self {
+		let bytes = (addr as i64) << 32;
+		let mut v = Self::from_i64(bytes);
+		v.set_tag(ValueTag::Function);
 		v
 	}
 
@@ -101,9 +109,15 @@ impl Value {
 	}
 	pub fn to_str(&self) -> &ByteStr {
 		let bytes = self.meaningful_bits();
-		let ptr = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as *const u8;
-		let len = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+		let ptr = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as *const u8;
+		let len = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
 		let data = unsafe { core::slice::from_raw_parts(ptr, len) };
 		ByteStr::new(data)
+	}
+	pub fn to_function(self) -> extern "C" fn(*const i64, usize) -> usize {
+		let bytes = self.meaningful_bits();
+		let ptr = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+		let ptr = ptr as *const u8;
+		unsafe { core::mem::transmute(ptr) }
 	}
 }

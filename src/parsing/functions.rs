@@ -34,13 +34,17 @@ impl<'a, 's> FuncState<'a, 's> {
 		}
 	}
 
-	pub fn into_inner(self) -> (Vec<Op>, SrcMap, u8) {
-		(self.operations, self.debug_info.into_map(), self.max_slot_use)
+	pub fn into_inner(self) -> (Vec<Op>, InfoCollector, u8) {
+		(self.operations, self.debug_info, self.max_slot_use)
 	}
 
 	pub fn emit(&mut self, _scope: &mut (impl ParseScope<'s> + ?Sized), op: Op, src_index: usize) {
 		self.operations.push(op);
 		self.debug_info.emit(src_index);
+	}
+
+	pub fn declare_local(&mut self, name: IdentKey) {
+		self.debug_info.add_local(name);
 	}
 
 	pub fn ops(&self) -> &[Op] {
@@ -359,10 +363,9 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 		unsafe { buf.assume_init() }
 	};
 
-	let debug = DebugInfo::new_closure(
-		closure_state.debug_info.into_map(),
-		name.map(|i| lexer.resolve_ident(i)),
-		span,
+	let name = name.map(|i| lexer.resolve_ident(i));
+	let debug = closure_state.debug_info.into_debug_info(
+		lexer.interner(), name, span, false
 	);
 
 	let parsed = ParsedFunction {

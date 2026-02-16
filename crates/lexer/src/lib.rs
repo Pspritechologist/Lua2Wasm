@@ -125,6 +125,10 @@ impl<'s> Lexer<'s> {
 		(line, col)
 	}
 
+	pub fn interner(&self) -> &LexInterner<'s> {
+		&self.inner.extras
+	}
+
 	pub fn into_interner(self) -> LexInterner<'s> {
 		self.inner.extras
 	}

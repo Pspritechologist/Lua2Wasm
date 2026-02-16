@@ -4,25 +4,18 @@ pub struct DebugInfo {
 	func_span: usize,
 	is_top_level: bool,
 	src_map: SrcMap,
+	locals: Vec<Box<str>>,
 }
 
 impl DebugInfo {
-	pub fn new_file(src_map: SrcMap, name: Option<impl Into<Box<str>>>) -> Self {
-		Self {
-			func_name: name.map(Into::into),
-			func_span: 0,
-			is_top_level: true,
-			src_map,
-		}
-	}
-
-	pub fn new_closure(src_map: SrcMap, func_name: Option<impl Into<Box<str>>>, span: usize) -> Self {
-		Self {
-			func_name: func_name.map(Into::into),
-			func_span: span,
-			is_top_level: false,
-			src_map,
-		}
+	pub fn new(
+		src_map: SrcMap,
+		locals: Vec<Box<str>>,
+		name: Option<impl Into<Box<str>>>,
+		span: usize,
+		is_top_level: bool,
+	) -> Self {
+		Self { func_name: name.map(Into::into), func_span: span, is_top_level, src_map, locals }
 	}
 
 	pub fn func_name(&self) -> Option<&str> {
@@ -35,6 +28,10 @@ impl DebugInfo {
 
 	pub fn src_map(&self) -> &SrcMap {
 		&self.src_map
+	}
+
+	pub fn get_local_name(&self, slot: u8) -> Option<&str> {
+		self.locals.get(slot as usize).map(|s| s.as_ref())
 	}
 }
 
