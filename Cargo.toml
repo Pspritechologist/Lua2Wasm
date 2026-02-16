@@ -7,7 +7,9 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-luant_lexer = { path = "crates/lexer" }
+luant_lexer.path = "crates/lexer"
+value.path = "crates/value"
+
 real_float = "0.3.0"
 slotmap = "1.1.1"
 strum = { version = "0.27.2", features = ["derive"] }
@@ -15,7 +17,8 @@ hashbrown = "0.16.1"
 bstr = "1.12.1"
 
 [dependencies]
-luant_lexer = { workspace = true }
+luant_lexer.workspace = true
+value.workspace = true
 real_float.workspace = true
 slotmap.workspace = true
 strum.workspace = true
@@ -24,4 +27,4 @@ bstr.workspace = true
 
 auto_impl = "1.3.0"
 anyhow = "1.0.101"
-walrus = "0.24.5"
+walrus = "0.25.1"

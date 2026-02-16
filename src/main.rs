@@ -1,3 +1,5 @@
+use std::io::Write;
+
 fn main() -> std::process::ExitCode {
 	if let Err(e) = try_main() {
 		eprintln!("{e}");
@@ -11,7 +13,7 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 	let src = include_str!("../test.lua");
 	
 	let ast = luant::parsing::parse(src)?;
-	println!("{ast:#?}");
+	std::io::stdout().write_all(&luant::lower(ast)?)?;
 
 	Ok(())
 }
