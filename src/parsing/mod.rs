@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 
-use crate::bytecode::Operation as Op;
+use crate::bytecode::{Operation as Op, RetCount};
 use crate::debug::DebugInfo;
-use luant_lexer::{IdentKey, Lexer, Token};
+use luant_lexer::{IdentKey, LexInterner, Lexer, Token};
 
 use functions::FuncState;
 use scopes::{ParseScope, Named, RootScope, VariableScope};
@@ -14,7 +14,7 @@ pub mod expressions;
 mod loops;
 mod debug;
 
-pub use functions::Upvalue;
+pub use functions::{ParsedFunction, Upvalue};
 
 #[derive(Debug)]
 pub struct Parsed<'s> {
@@ -33,7 +33,7 @@ impl ParseSrc for str {
 	fn bytes(&self) -> &[u8] { self.as_bytes() }
 }
 
-pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'s>> {
+pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<(Parsed<'s>, LexInterner<'s>), Error<'s>> {
 	let mut constants = ConstantMap::default();
 	let mut state = functions::FuncState::new(&mut constants);
 	let mut lexer = luant_lexer::lexer(src.bytes());
@@ -68,11 +68,11 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<Parsed<'s>, Error<'
 		upvalues: Box::new([Upvalue::ParentSlot(0)]),
 	};
 
-	Ok(Parsed {
+	Ok((Parsed {
 		parsed_func,
 		strings: constants.strings.into_boxed_slice(),
 		closures: constants.closures.into_boxed_slice(),
-	})
+	}, lexer.into_interner()))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -176,7 +176,7 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 		},
 		Token::Return => {
 			if lexer.peek()?.is_none_or(|tok| !expressions::can_start_expr(tok)) {
-				state.emit(scope, Op::Ret(0, 0), lexer.src_index());
+				state.emit(scope, Op::empty_ret(), lexer.src_index());
 			} else {
 				let start_reg = scope.total_locals();
 
@@ -195,7 +195,7 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 
 				state.update_max_slots_used(start_reg + ret_count);
 				
-				let ret = Op::Ret(start_reg, ret_count);
+				let ret = Op::ret(start_reg, ret_count);
 				state.emit(scope, ret, lexer.src_index());
 			}
 		},
@@ -243,7 +243,7 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 					place_iter.try_for_each(|place| place.set_expr(lexer, scope, state, Expr::Constant(Const::Nil)))?;
 				},
 				IdentExpr::Call(func_slot) => {
-					func_slot.handle_call(lexer, scope, state, 0)?;
+					func_slot.handle_call(lexer, scope, state, RetCount::None)?;
 				},
 			}
 		},

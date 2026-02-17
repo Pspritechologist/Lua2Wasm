@@ -13,12 +13,24 @@ mod pratt;
 pub use prefix::{PlaceExpr, IdentExpr};
 use real_float::Finite;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Const {
 	Number(Num),
 	String(usize),
 	Bool(bool),
 	Nil,
+}
+
+impl std::hash::Hash for Const {
+	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+		std::mem::discriminant(self).hash(state);
+		match self {
+			Const::Number(n) => n.val().to_bits().hash(state),
+			Const::String(idx) => idx.hash(state),
+			Const::Bool(b) => b.hash(state),
+			Const::Nil => {},
+		}
+	}
 }
 
 impl Const {
@@ -27,7 +39,7 @@ impl Const {
 	}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Expr {
 	Constant(Const),
 	Slot(u8),

@@ -1,7 +1,7 @@
 use crate::parsing::expressions::Expr;
 use luant_lexer::IdentKey;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Loc {
 	Slot(u8),
 	UpValue(u8),
@@ -24,7 +24,7 @@ impl Loc {
 	}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Operation {
 	// Loads.
 	LoadTab(Loc),
@@ -59,8 +59,15 @@ pub enum Operation {
 	Concat(Loc, Expr, Expr),
 	Len(Loc, Expr),
 	// Calling.
-	Call(Loc, u8, u8),
-	Ret(u8, u8),
+	Call {
+		func_slot: u8,
+		arg_cnt: u8,
+		ret_cnt: RetCount,
+	},
+	Ret {
+		ret_slot: u8,
+		ret_cnt: u8,
+	},
 	// Control.
 	StartIf(Expr),
 	ElseIf(Expr),
@@ -70,4 +77,21 @@ pub enum Operation {
 	Copy(Loc, Expr),
 	Close(u8),
 	MaybeClose(u8, bool),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RetCount {
+	None,
+	Single,
+	Many,
+}
+
+impl Operation {
+	pub fn empty_ret() -> Self {
+		Operation::Ret { ret_slot: 0, ret_cnt: 0 }
+	}
+
+	pub fn ret(ret_slot: u8, ret_cnt: u8) -> Self {
+		Operation::Ret { ret_slot, ret_cnt }
+	}
 }

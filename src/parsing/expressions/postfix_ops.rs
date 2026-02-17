@@ -1,4 +1,4 @@
-use crate::bytecode::Loc;
+use crate::bytecode::{Loc, RetCount};
 use crate::parsing::LexerExt;
 use super::{Error, ParseScope, Op, expect_tok};
 use super::{Expr, Const, FuncState};
@@ -7,12 +7,16 @@ use luant_lexer::{Lexer, Token};
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedCall {
 	pub span: usize,
-	pub func_reg: Loc,
+	pub func_slot: u8,
 	pub arg_count: u8,
 }
 impl ParsedCall {
-	pub fn handle_call<'s>(self, _lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: u8) -> Result<Expr, Error<'s>> {
-		state.emit(scope, Op::Call(self.func_reg, self.arg_count, ret_count), self.span);
+	pub fn handle_call<'s>(self, _lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: RetCount) -> Result<Expr, Error<'s>> {
+		state.emit(scope, Op::Call {
+			func_slot: self.func_slot,
+			arg_cnt: self.arg_count,
+			ret_cnt: ret_count,
+		}, self.span);
 		Ok(Expr::CallRet)
 	}
 }
@@ -29,14 +33,13 @@ impl CallType {
 			CallType::Args => {
 				let mut head = lexer.next_must()?;
 
-				let func_reg_u8 = state.reserve_slot_u8();
-				let func_reg = Loc::Slot(func_reg_u8);
-				left.set_to_slot(lexer, scope, state, func_reg)?;
+				let func_slot = state.reserve_slot_u8();
+				left.set_to_slot(lexer, scope, state, Loc::Slot(func_slot))?;
 
 				// Special case zero arg calls.
 				if head == Token::ParenClose {
 					return Ok(ParsedCall {
-						func_reg,
+						func_slot,
 						arg_count: 0,
 						span,
 					});
@@ -51,7 +54,7 @@ impl CallType {
 					state.set_slots_used(initial_slots_used + arg_count);
 
 					let arg_expr = super::parse_expr(head, lexer, scope, state)?;
-					arg_expr.set_to_slot(lexer, scope, state, Loc::Slot(func_reg_u8 + arg_count))?;
+					arg_expr.set_to_slot(lexer, scope, state, Loc::Slot(func_slot + arg_count))?;
 					
 					match lexer.next_must()? {
 						Token::Comma => head = lexer.next_must()?,
@@ -60,7 +63,7 @@ impl CallType {
 					}
 				}
 
-				ParsedCall { func_reg, arg_count, span }
+				ParsedCall { func_slot, arg_count, span }
 			},
 			CallType::Method => todo!(),
 			CallType::Table => todo!(),

@@ -21,6 +21,9 @@ impl DebugInfo {
 	pub fn func_name(&self) -> Option<&str> {
 		self.func_name.as_deref()
 	}
+	pub fn set_func_name(&mut self, name: impl Into<Box<str>>) {
+		self.func_name = Some(name.into());
+	}
 
 	pub fn is_top_level(&self) -> bool {
 		self.is_top_level

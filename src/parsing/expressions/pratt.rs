@@ -1,4 +1,4 @@
-use crate::bytecode::Loc;
+use crate::bytecode::{Loc, RetCount};
 use crate::parsing::LexerExt;
 use super::{Error, ParseScope, Op, expect_tok};
 use super::{Expr, Const, FuncState, parse_table_init};
@@ -105,7 +105,7 @@ impl InfixOp {
 			InfixOp::BitXor => std_infix(Op::BitXor),
 			InfixOp::Shl => std_infix(Op::BitShL),
 			InfixOp::Shr => std_infix(Op::BitShR),
-			InfixOp::Call(call) => call.parse_call_args(lexer, scope, state, left)?.handle_call(lexer, scope, state, 1),
+			InfixOp::Call(call) => call.parse_call_args(lexer, scope, state, left)?.handle_call(lexer, scope, state, RetCount::Single),
 			InfixOp::Index(index) => index.parse_index(lexer, scope, state)?.handle_index(lexer, scope, state, left),
 			
 			InfixOp::And | InfixOp::Or => todo!(),

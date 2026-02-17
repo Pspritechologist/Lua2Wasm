@@ -95,17 +95,17 @@ extern "C" fn __luant_call(func: i64, args_ptr: i32, args_len: i32) -> i32 {
 	}
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn __luant_print(value: i64) {
-	let value = Value::from_i64(value);
-	match value.get_tag() {
-		ValueTag::Nil => binds::print("nil"),
-		ValueTag::Bool => binds::print(if value.to_bool() { "true" } else { "false" }),
-		ValueTag::Number => binds::print(zmij::Buffer::new().format(value.to_num())),
-		ValueTag::String => binds::print(value.to_str()),
-		_ => binds::print("<non-printable value>"),
-	}
-}
+// #[unsafe(no_mangle)]
+// extern "C" fn __luant_print(value: i64) {
+// 	let value = Value::from_i64(value);
+// 	match value.get_tag() {
+// 		ValueTag::Nil => binds::print("nil"),
+// 		ValueTag::Bool => binds::print(if value.to_bool() { "true" } else { "false" }),
+// 		ValueTag::Number => binds::print(zmij::Buffer::new().format(value.to_num())),
+// 		ValueTag::String => binds::print(value.to_str()),
+// 		_ => binds::print("<non-printable value>"),
+// 	}
+// }
 
 #[unsafe(no_mangle)]
 extern "C" fn __luant_get_truthy(value: i64) -> i32 {

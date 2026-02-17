@@ -337,8 +337,8 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 	}
 
 	// Ensure the function ends with a return.
-	if !matches!(closure_state.ops().last(), Some(Op::Ret(..))) {
-		closure_state.emit(&mut closure_scope, Op::Ret(0, 0), lexer.src_index());
+	if !matches!(closure_state.ops().last(), Some(Op::Ret {.. })) {
+		closure_state.emit(&mut closure_scope, Op::empty_ret(), lexer.src_index());
 	}
 
 	let upvalues = closure_scope.into_inner(&mut closure_state, lexer)?.upvalues;

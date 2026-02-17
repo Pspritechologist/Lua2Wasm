@@ -12,8 +12,8 @@ fn main() -> std::process::ExitCode {
 fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 	let src = include_str!("../test.lua");
 	
-	let ast = luant::parsing::parse(src)?;
-	std::io::stdout().write_all(&luant::lower(ast)?)?;
+	let (ast, interner) = luant::parsing::parse(src)?;
+	std::io::stdout().write_all(&luant::lower(ast, interner)?)?;
 
 	Ok(())
 }
