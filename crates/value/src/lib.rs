@@ -87,8 +87,8 @@ impl Value {
 		v.set_tag(ValueTag::String);
 		v
 	}
-	pub fn function(addr: i32) -> Self {
-		let bytes = (addr as i64) << 32;
+	pub fn function(idx: usize) -> Self {
+		let bytes = (u32::try_from(idx).expect(":(") as i64) << 32;
 		let mut v = Self::from_i64(bytes);
 		v.set_tag(ValueTag::Function);
 		v
@@ -114,7 +114,7 @@ impl Value {
 		let data = unsafe { core::slice::from_raw_parts(ptr, len) };
 		ByteStr::new(data)
 	}
-	pub fn to_function(self) -> extern "C" fn(*const i64, usize) -> usize {
+	pub fn to_function(self) -> extern "C" fn(usize) -> usize {
 		let bytes = self.meaningful_bits();
 		let ptr = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
 		let ptr = ptr as *const u8;

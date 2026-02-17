@@ -78,15 +78,12 @@ extern "C" fn __luant_eq(a: i64, b: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_call(func: i64, args_ptr: i32, args_len: i32) -> i32 {
+extern "C" fn __luant_get_fn(func: i64) -> extern "C" fn(usize) -> usize {
 	let func = Value::from_i64(func);
 
 	match func.get_tag() {
 		ValueTag::Function => {
-			let func = func.to_function();
-			let ptr = args_ptr as *const i64;
-			let count = args_len as usize;
-			func(ptr, count) as i32
+			func.to_function()
 		},
 		ValueTag::Closure => {
 			binds::error(string("Attempted to call a closure, which is not supported yet").as_i64());
@@ -94,18 +91,6 @@ extern "C" fn __luant_call(func: i64, args_ptr: i32, args_len: i32) -> i32 {
 		_ => binds::error(string("Attempted to call a non-function value").as_i64()),
 	}
 }
-
-// #[unsafe(no_mangle)]
-// extern "C" fn __luant_print(value: i64) {
-// 	let value = Value::from_i64(value);
-// 	match value.get_tag() {
-// 		ValueTag::Nil => binds::print("nil"),
-// 		ValueTag::Bool => binds::print(if value.to_bool() { "true" } else { "false" }),
-// 		ValueTag::Number => binds::print(zmij::Buffer::new().format(value.to_num())),
-// 		ValueTag::String => binds::print(value.to_str()),
-// 		_ => binds::print("<non-printable value>"),
-// 	}
-// }
 
 #[unsafe(no_mangle)]
 extern "C" fn __luant_get_truthy(value: i64) -> i32 {

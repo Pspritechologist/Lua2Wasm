@@ -1,4 +1,4 @@
-use crate::bytecode::{Loc, RetCount};
+use crate::bytecode::{Loc, RetKind};
 use crate::parsing::LexerExt;
 use super::{Error, ParseScope, Op, expect_tok};
 use super::{Expr, Const, FuncState};
@@ -11,13 +11,18 @@ pub struct ParsedCall {
 	pub arg_count: u8,
 }
 impl ParsedCall {
-	pub fn handle_call<'s>(self, _lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: RetCount) -> Result<Expr, Error<'s>> {
+	pub fn handle_call<'s>(self, _lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, ret_count: RetKind) -> Result<Expr, Error<'s>> {
 		state.emit(scope, Op::Call {
 			func_slot: self.func_slot,
 			arg_cnt: self.arg_count,
-			ret_cnt: ret_count,
+			ret_kind: ret_count,
 		}, self.span);
-		Ok(Expr::CallRet)
+
+		Ok(match ret_count {
+			RetKind::None => Expr::Constant(Const::Nil),
+			RetKind::Single(loc) => loc.into(),
+			RetKind::Many => Expr::VarRet,
+		})
 	}
 }
 

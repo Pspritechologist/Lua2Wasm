@@ -62,7 +62,7 @@ pub enum Operation {
 	Call {
 		func_slot: u8,
 		arg_cnt: u8,
-		ret_cnt: RetCount,
+		ret_kind: RetKind,
 	},
 	Ret {
 		ret_slot: u8,
@@ -80,9 +80,9 @@ pub enum Operation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RetCount {
+pub enum RetKind {
 	None,
-	Single,
+	Single(Loc),
 	Many,
 }
 

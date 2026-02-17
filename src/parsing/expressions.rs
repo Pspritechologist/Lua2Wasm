@@ -45,7 +45,7 @@ pub enum Expr {
 	Slot(u8),
 	UpValue(u8),
 	Global(IdentKey),
-	CallRet,
+	VarRet,
 	VarArgs,
 }
 
@@ -58,7 +58,7 @@ impl From<Const> for Expr {
 
 impl Expr {
 	pub fn is_multi_valued(self) -> bool {
-		matches!(self, Expr::CallRet | Expr::VarArgs)
+		matches!(self, Expr::VarRet | Expr::VarArgs)
 	}
 
 	pub fn from_loc(loc: Loc) -> Self {
@@ -74,7 +74,7 @@ impl Expr {
 			Expr::Slot(slot) => Loc::Slot(slot),
 			Expr::UpValue(idx) => Loc::UpValue(idx),
 			Expr::Global(ident) => Loc::Global(ident),
-			Expr::Constant(_) | Expr::CallRet |
+			Expr::Constant(_) | Expr::VarRet |
 			Expr::VarArgs => return None,
 		})
 	}
@@ -115,7 +115,7 @@ impl Expr {
 			Expr::Constant(_) |
 			Expr::UpValue(_) |
 			Expr::Global(_) |
-			Expr::CallRet |
+			Expr::VarRet |
 			Expr::VarArgs => {
 				let temp = state.reserve_slot();
 				self.set_to_slot(lexer, scope, state, temp)?;

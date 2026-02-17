@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::bytecode::{Operation as Op, RetCount};
+use crate::bytecode::{Operation as Op, RetKind};
 use crate::debug::DebugInfo;
 use luant_lexer::{IdentKey, LexInterner, Lexer, Token};
 
@@ -243,7 +243,7 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 					place_iter.try_for_each(|place| place.set_expr(lexer, scope, state, Expr::Constant(Const::Nil)))?;
 				},
 				IdentExpr::Call(func_slot) => {
-					func_slot.handle_call(lexer, scope, state, RetCount::None)?;
+					func_slot.handle_call(lexer, scope, state, RetKind::None)?;
 				},
 			}
 		},

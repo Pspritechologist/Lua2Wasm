@@ -1,4 +1,4 @@
-use crate::bytecode::{Loc, RetCount};
+use crate::bytecode::{Loc, RetKind};
 
 use super::{LexerExt, Error, ParseScope, Named, IdentKey, Op, expect_tok};
 use super::{Expr, FuncState};
@@ -73,7 +73,8 @@ impl IdentExpr {
 					match lexer.try_next_if_map(|t| TrailingOp::from_token(t, state))? {
 						Some(found_op) => {
 							next_op = found_op;
-							expr = parsed_call.handle_call(lexer, scope, state, RetCount::Single)?;
+							let loc = state.reserve_slot();
+							expr = parsed_call.handle_call(lexer, scope, state, RetKind::Single(loc))?;
 						},
 						None => return Ok(IdentExpr::Call(parsed_call)),
 					}

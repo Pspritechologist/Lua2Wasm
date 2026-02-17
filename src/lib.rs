@@ -4,9 +4,9 @@ use anyhow::Result;
 use bytecode::Operation as Op;
 use luant_lexer::LexInterner;
 use value::Value;
-use walrus::{ConstExpr, DataId, DataKind, FunctionBuilder, FunctionId, GlobalId, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, ValType, ir::{BinaryOp, LoadKind, MemArg, StoreKind}};
+use walrus::{ConstExpr, DataId, DataKind, ElementItems, ElementKind, FunctionBuilder, FunctionId, GlobalId, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, ValType, ir::{BinaryOp, LoadKind, MemArg, StoreKind}};
 
-use crate::{bytecode::Loc, parsing::expressions::{Const, Expr}};
+use crate::{bytecode::{Loc, RetKind}, parsing::expressions::{Const, Expr}};
 
 pub mod parsing;
 mod bytecode;
@@ -34,7 +34,7 @@ struct ExternFns {
 	mul: FunctionId,
 	div: FunctionId,
 	eq: FunctionId,
-	call: FunctionId,
+	get_fn: FunctionId,
 	get_truthy: FunctionId,
 }
 
@@ -52,11 +52,9 @@ impl Loc {
 		match self {
 			Loc::Slot(idx) => { seq.local_get(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
-			Loc::Global(ident_key) if state.interner.resolve_ident(ident_key) == "print" => {
-				// let print = state.extern_fns.print;
-				// let value = Value::function(addr);
-				// seq.ref_func(print);
-			},
+			// Loc::Global(ident_key) if state.interner.resolve_ident(ident_key) == "print" => {
+				
+			// },
 			Loc::Global(ident_key) => todo!(),
 		};
 	}
@@ -74,14 +72,14 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	let mut module = walrus::ModuleConfig::default()
 		.parse(include_bytes!("../target/wasm32-unknown-unknown/release/wasm_scratch.wasm"))?;
 
-	// let mut skipped = 0;
-	// while let Some(e) = { module.exports.iter().nth(skipped) } {
-	// 	if e.name.starts_with("__luant") {
-	// 		module.exports.delete(e.id());
-	// 	} else {
-	// 		skipped += 1;
-	// 	}
-	// }
+	let mut skipped = 0;
+	while let Some(e) = { module.exports.iter().nth(skipped) } {
+		if e.name.starts_with("__luant") {
+			module.exports.delete(e.id());
+		} else {
+			skipped += 1;
+		}
+	}
 
 	macro_rules! extern_fn {
 		($ns:ident::$name:ident($($in:ident),*) $(-> $($ret:ident),+)?) => { {
@@ -99,7 +97,8 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 		};
 	}
 
-	let memory = module.memories.add_local(false, false, 0, None, None);
+	// let memory = module.memories.add_local(false, false, 0, None, None);
+	let memory = module.get_memory_id()?;
 
 	let extern_fns = extern_fns! {
 		// print: extern_mod::__luant_print(I64);
@@ -108,15 +107,9 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 		mul: extern_mod::__luant_mul(I64, I64) -> I64;
 		div: extern_mod::__luant_div(I64, I64) -> I64;
 		eq: extern_mod::__luant_eq(I64, I64) -> I64;
-		call: extern_mod::__luant_call(i32, i32) -> i32;
+		get_fn: extern_mod::__luant_get_fn(i64) -> i32;
 		get_truthy: extern_mod::__luant_get_truthy(i64) -> i32;
 	};
-
-	// {
-	// 	let func_tab = module.tables.main_function_table()?.expect("Failed to find function table");
-	// 	let func_tab = module.tables.get_mut(func_tab);
-	// 	func_tab.maximum = None;
-	// }
 
 	let mut offset = 0xFFF700;
 	let strings = parsed.strings.into_iter().map(|s| {
@@ -160,7 +153,20 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	
 	state.module.exports.add("main", main_fn);
 
-	state.module.elements.add(walrus::ElementKind::Declared, walrus::ElementItems::Functions(state.closures.into_iter().map(Option::unwrap).collect()));
+	{
+		let func_tab = state.module.tables.main_function_table()?.unwrap_or_else(|| {
+			state.module.tables.add_local(false, 0, None, RefType::FUNCREF)
+		});
+
+		state.module.elements.add(ElementKind::Active {
+			table: func_tab,
+			offset: ConstExpr::Value(walrus::ir::Value::I32(2)),
+		}, ElementItems::Functions(state.closures.into_iter().map(Option::unwrap).collect()));
+
+		let func_tab = state.module.tables.get_mut(func_tab);
+		func_tab.maximum = None;
+	}
+	// state.module.elements.add(walrus::ElementKind::Declared, walrus::ElementItems::Functions(state.closures.into_iter().map(Option::unwrap).collect()));
 
 	Ok(state.module.emit_wasm())
 }
@@ -175,8 +181,8 @@ fn compile_function(state: &mut State, func: &parsing::ParsedFunction) -> Functi
 
 	let arg_cnt = state.module.locals.add(ValType::I32);
 	state.module.locals.get_mut(arg_cnt).name = Some("__fn_arg_cnt".into());
-	// Without this, the first local seems to not get compiled if it's never used?
-	builder.func_body().local_get(arg_cnt).drop();
+	// // Without this, the first local seems to not get compiled if it's never used?
+	// builder.func_body().local_get(arg_cnt).drop();
 
 	let mut temps = 0;
 	for slot in 0..func.frame_size {
@@ -189,7 +195,7 @@ fn compile_function(state: &mut State, func: &parsing::ParsedFunction) -> Functi
 			});
 		}
 
-		builder.func_body().i64_const(0).local_set(local);
+		// builder.func_body().i64_const(0).local_set(local);
 	}
 
 	if func.param_count > 0 {
@@ -240,7 +246,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		Op::Div(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.div); dst.push_set(state, seq); },
 		Op::Eq(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.eq); dst.push_set(state, seq); },
 		Op::Copy(dst, val) => { val.push(state, seq); dst.push_set(state, seq); },
-		Op::LoadClosure(dst, idx) => { seq.ref_func(state.closures[idx].expect("Unordered functions")); dst.push_set(state, seq); },
+		Op::LoadClosure(dst, idx) => { seq.i64_const(Value::function(idx).as_i64()); dst.push_set(state, seq); },
 		Op::StartIf(cond) => compile_if(state, ops, seq, cond),
 		Op::Ret { ret_slot, ret_cnt } => {
 			for (i, s) in (ret_slot..ret_slot + ret_cnt).enumerate() {
@@ -250,8 +256,27 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 			}
 			seq.i32_const(ret_cnt.into()).return_();
 		},
-		Op::Call { func_slot, arg_cnt, ret_cnt } => {
+		Op::Call { func_slot, arg_cnt, ret_kind: RetKind::None } => {
 			
+		},
+		Op::Call { func_slot, arg_cnt, ret_kind: RetKind::Many } => {
+			todo!()
+		},
+		Op::Call { func_slot, arg_cnt, ret_kind: RetKind::Single(loc) } => {
+			for i in 0..arg_cnt {
+				seq.global_get(state.arg_ptr);
+				Loc::Slot(func_slot + i).push_get(state, seq);
+				seq.store(state.memory, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
+			}
+			seq.i32_const(arg_cnt.into());
+			Loc::Slot(func_slot).push_get(state, seq);
+			seq.call(state.extern_fns.get_fn)
+				.i32_const(0)
+				.binop(BinaryOp::I32Eq)
+				.if_else(ValType::I64, |seq| { seq.i64_const(Value::nil().as_i64()); }, |seq| {
+				seq.global_get(state.arg_ptr)
+					.load(state.memory, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
+			});
 		},
 		_ => todo!("{op:?}"),
 	}
@@ -310,7 +335,7 @@ impl Expr {
 			Expr::Slot(idx) => Loc::Slot(idx).push_get(state, seq),
 			Expr::UpValue(idx) => Loc::UpValue(idx).push_get(state, seq),
 			Expr::Global(ident) => Loc::Global(ident).push_get(state, seq),
-			Expr::CallRet => {
+			Expr::VarRet => {
 				seq.i32_const(0)
 					.binop(BinaryOp::I32Eq)
 					.if_else(ValType::I64, |seq| {
