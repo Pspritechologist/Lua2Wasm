@@ -21,6 +21,7 @@ pub struct ParsedFunction {
 	pub frame_size: u8,
 	pub param_count: u8,
 	pub upvalues: Box<[Upvalue]>,
+	pub exported: Option<(String, bstr::BString)>,
 }
 
 impl<'a, 's> FuncState<'a, 's> {
@@ -374,6 +375,7 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 		debug: Some(debug),
 		frame_size: closure_state.max_slot_use,
 		upvalues,
+		exported: None,
 	};
 
 	Ok(parsed)

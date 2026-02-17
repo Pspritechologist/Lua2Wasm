@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::bytecode::{Operation as Op, RetKind};
+use crate::bytecode::{Loc, Operation as Op, RetKind};
 use crate::debug::DebugInfo;
 use luant_lexer::{IdentKey, LexInterner, Lexer, Token};
 
@@ -66,6 +66,7 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<(Parsed<'s>, LexInt
 		debug: Some(debug),
 		// The global table is always loaded in the very first stack slot.
 		upvalues: Box::new([Upvalue::ParentSlot(0)]),
+		exported: None,
 	};
 
 	Ok((Parsed {
@@ -123,15 +124,39 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 			scope.new_label(lexer, state, label, pos)?;
 			expect_tok!(lexer, Token::Label)?;
 		},
-		Token::Function => todo!(),
+		Token::Function => {
+			use bstr::{ByteSlice, BString};
+
+			let span = lexer.src_index();
+			let name = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
+
+			let mut closure = functions::parse_function(lexer, &mut *scope, state, Some(name), span)?;
+
+			if let Some(attr) = trivia.into_iter().find_map(|s| s.strip_prefix(b"export")) {
+				let name = lexer.resolve_ident(name).to_string();
+				closure.exported = Some((name, BString::from(attr.trim())));
+			}
+
+			let idx = state.push_closure(closure);
+
+			state.emit(scope, Op::LoadClosure(Loc::Global(name), idx), span);
+		},
 		Token::Local => {
 			if lexer.next_if(Token::Function)?.is_some() {
+				use bstr::{ByteSlice, BString};
+
 				let span = lexer.src_index();
 				let name = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
 
 				let dst = scope.new_local(lexer, state, name)?;
 
-				let closure = functions::parse_function(lexer, &mut *scope, state, Some(name), span)?;
+				let mut closure = functions::parse_function(lexer, &mut *scope, state, Some(name), span)?;
+
+				if let Some(attr) = trivia.into_iter().find_map(|s| s.strip_prefix(b"export")) {
+					let name = lexer.resolve_ident(name).to_string();
+					closure.exported = Some((name, BString::from(attr.trim())));
+				}
+
 				let idx = state.push_closure(closure);
 
 				state.emit(scope, Op::LoadClosure(dst, idx), span);

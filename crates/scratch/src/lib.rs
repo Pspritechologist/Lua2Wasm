@@ -15,15 +15,14 @@ pub fn string(s: &'static (impl AsRef<[u8]> + ?Sized)) -> Value {
 }
 
 mod binds {
-	unsafe extern "C" {
-		fn emit_exception(object: i64) -> !;
-		fn put_str(ptr: *const u8, len: usize);
-	}
+	// unsafe extern "C" {
+	// 	fn __luant_exception(object: i64) -> !;
+	// }
 	
-	pub fn error(object: i64) -> ! { unsafe { emit_exception(object); } }
-	pub fn print(s: &(impl AsRef<[u8]> + ?Sized)) {
-		let s = s.as_ref();
-		unsafe { put_str(s.as_ptr(), s.len()); }
+	// pub fn error(object: i64) -> ! { unsafe { __luant_exception(object); } }
+
+	pub fn error(object: i64) -> ! {
+		panic!();
 	}
 }
 
@@ -99,6 +98,42 @@ extern "C" fn __luant_get_truthy(value: i64) -> i32 {
 		ValueTag::Nil => 0,
 		ValueTag::Bool => if value.to_bool() { 1 } else { 0 },
 		_ => 1,
+	}
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __luant_val_to_i64(value: i64) -> i64 {
+	let value = Value::from_i64(value);
+	match value.get_tag() {
+		ValueTag::Number => value.to_num() as i64,
+		_ => binds::error(string("Attempted to convert a non-string, non-number value to a number").as_i64()),
+	}
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __luant_val_to_f64(value: i64) -> f64 {
+	let value = Value::from_i64(value);
+	match value.get_tag() {
+		ValueTag::Number => value.to_num(),
+		_ => binds::error(string("Attempted to convert a non-string, non-number value to a number").as_i64()),
+	}
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __luant_val_to_i32(value: i64) -> i32 {
+	let value = Value::from_i64(value);
+	match value.get_tag() {
+		ValueTag::Number => value.to_num() as i32,
+		_ => binds::error(string("Attempted to convert a non-string, non-number value to a number").as_i64()),
+	}
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __luant_val_to_f32(value: i64) -> f32 {
+	let value = Value::from_i64(value);
+	match value.get_tag() {
+		ValueTag::Number => value.to_num() as f32,
+		_ => binds::error(string("Attempted to convert a non-string, non-number value to a number").as_i64()),
 	}
 }
 

@@ -1,20 +1,31 @@
-use std::{borrow::Cow, collections::BTreeMap};
-
 use anyhow::Result;
+use bstr::ByteSlice;
 use bytecode::Operation as Op;
 use luant_lexer::LexInterner;
 use value::Value;
-use walrus::{ConstExpr, DataId, DataKind, ElementItems, ElementKind, FunctionBuilder, FunctionId, GlobalId, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, ValType, ir::{BinaryOp, LoadKind, MemArg, StoreKind}};
+use walrus::{
+	ir::{BinaryOp, LoadKind, MemArg, StoreKind},
+	ConstExpr,
+	DataKind,
+	ElementItems,
+	ElementKind,
+	FunctionBuilder,
+	FunctionId,
+	GlobalId,
+	InstrSeqBuilder,
+	LocalId,
+	MemoryId,
+	Module,
+	RefType,
+	ValType,
+};
+use std::collections::BTreeMap;
 
 use crate::{bytecode::{Loc, RetKind}, parsing::expressions::{Const, Expr}};
 
 pub mod parsing;
 mod bytecode;
 mod debug;
-
-pub fn compile(src: impl AsRef<[u8]>) {
-	let parsed = parsing::parse(src.as_ref()).unwrap();
-}
 
 pub struct State<'s> {
 	module: Module,
@@ -36,6 +47,10 @@ struct ExternFns {
 	eq: FunctionId,
 	get_fn: FunctionId,
 	get_truthy: FunctionId,
+	val_to_i64: FunctionId,
+	val_to_f64: FunctionId,
+	val_to_i32: FunctionId,
+	val_to_f32: FunctionId,
 }
 
 trait ValueExt {
@@ -52,9 +67,6 @@ impl Loc {
 		match self {
 			Loc::Slot(idx) => { seq.local_get(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
-			// Loc::Global(ident_key) if state.interner.resolve_ident(ident_key) == "print" => {
-				
-			// },
 			Loc::Global(ident_key) => todo!(),
 		};
 	}
@@ -82,17 +94,17 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	}
 
 	macro_rules! extern_fn {
-		($ns:ident::$name:ident($($in:ident),*) $(-> $($ret:ident),+)?) => { {
+		($name:ident($($in:ident),*) $(-> $($ret:ident),+)?) => { {
 			module.funcs.by_name(stringify!($name)).expect(concat!("Failed to find extern fn: ", stringify!($name)))
 		} };
 	}
 
 	macro_rules! extern_fns {
 		($(
-			$field:ident: $ns:ident::$name:ident($($in:ident),*) $(-> $($ret:ident),+)?
+			$field:ident: $name:ident($($in:ident),*) $(-> $($ret:ident),+)?
 		);+ $(;)?) => {
 			ExternFns {
-				$( $field: extern_fn!($ns::$name($($in),*) $(-> $($ret),+)?), )+
+				$( $field: extern_fn!($name($($in),*) $(-> $($ret),+)?), )+
 			}
 		};
 	}
@@ -102,13 +114,17 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 
 	let extern_fns = extern_fns! {
 		// print: extern_mod::__luant_print(I64);
-		add: extern_mod::__luant_add(I64, I64) -> I64;
-		sub: extern_mod::__luant_sub(I64, I64) -> I64;
-		mul: extern_mod::__luant_mul(I64, I64) -> I64;
-		div: extern_mod::__luant_div(I64, I64) -> I64;
-		eq: extern_mod::__luant_eq(I64, I64) -> I64;
-		get_fn: extern_mod::__luant_get_fn(i64) -> i32;
-		get_truthy: extern_mod::__luant_get_truthy(i64) -> i32;
+		add: __luant_add(I64, I64) -> I64;
+		sub: __luant_sub(I64, I64) -> I64;
+		mul: __luant_mul(I64, I64) -> I64;
+		div: __luant_div(I64, I64) -> I64;
+		eq: __luant_eq(I64, I64) -> I64;
+		get_fn: __luant_get_fn(i64) -> i32;
+		get_truthy: __luant_get_truthy(i64) -> i32;
+		val_to_i64: __luant_val_to_i64(i64) -> i64;
+		val_to_f64: __luant_val_to_f64(i64) -> f64;
+		val_to_i32: __luant_val_to_i32(i64) -> i32;
+		val_to_f32: __luant_val_to_f32(i64) -> f32;
 	};
 
 	let mut offset = 0xFFF700;
@@ -140,6 +156,109 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	for (i, func) in parsed.closures.iter().enumerate().rev() {
 		let id = compile_function(&mut state, func);
 		state.closures[i + 1] = Some(id);
+
+		if let Some((name, type_sig)) = &func.exported {
+			let mut type_sig = type_sig.strip_prefix(b"fn(").ok_or_else(|| anyhow::Error::msg("Invalid export attribute format"))?;
+			let mut params = vec![];
+			
+			loop {
+				if let Some(next) = type_sig.strip_prefix(b")") {
+					type_sig = next.trim();
+					break;
+				}
+
+				type_sig = match type_sig {
+					[ b'i', b'6', b'4', r@.. ] => { params.push(ValType::I64); r },
+					[ b'i', b'3', b'2', r@.. ] => { params.push(ValType::I32); r },
+					[ b'f', b'6', b'4', r@.. ] => { params.push(ValType::F64); r },
+					[ b'f', b'3', b'2', r@.. ] => { params.push(ValType::F32); r },
+					_ => return Err(anyhow::Error::msg("Invalid export attribute format")),
+				}.trim();
+				
+				if let Some(next) = type_sig.strip_prefix(b",") {
+					type_sig = next.trim();
+				} else {
+					break;
+				}
+			}
+
+			let mut rets = vec![];
+			if let Some(next) = type_sig.strip_prefix(b"->") {
+				type_sig = next.trim();
+
+				loop {
+					if type_sig.is_empty() {
+						break;
+					}
+
+					type_sig = match type_sig {
+						[ b'i', b'6', b'4', r@.. ] => { rets.push(ValType::I64); r },
+						[ b'i', b'3', b'2', r@.. ] => { rets.push(ValType::I32); r },
+						[ b'f', b'6', b'4', r@.. ] => { rets.push(ValType::F64); r },
+						[ b'f', b'3', b'2', r@.. ] => { rets.push(ValType::F32); r },
+						_ => return Err(anyhow::Error::msg("Invalid export attribute format")),
+					}.trim();
+
+					if let Some(next) = type_sig.strip_prefix(b",") {
+						type_sig = next.trim();
+						continue;
+					} else {
+						break;
+					}
+				}
+			}
+
+			let mut builder = FunctionBuilder::new(&mut state.module.types, &params, &rets);
+			builder.name(["__luant_shim_", name.as_str()].concat());
+			
+			let args = params.iter().enumerate().map(|(i, param)| {
+				let arg = state.module.locals.add(*param);
+				builder.func_body()
+					.global_get(state.arg_ptr)
+					.local_get(arg)
+					.store(state.memory, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
+				arg
+			}).collect();
+
+			// Make the dynamic call...
+			builder.func_body()
+				.i32_const(params.len() as i32)
+				.call(id);
+
+			// Handle the dynamic return values...
+			if rets.is_empty() {
+				builder.func_body().drop();
+			} else {
+				let arg_cnt = state.module.locals.add(ValType::I32);
+				builder.func_body().local_set(arg_cnt);
+
+				builder.func_body().block(None, |seq| {
+					let block_id = seq.id();
+					for (i, r) in rets.iter().enumerate() {
+						seq
+							.local_get(arg_cnt)
+							.i32_const(i as i32)
+							.binop(BinaryOp::I32LeU)
+							.br_if(block_id)
+							.global_get(state.arg_ptr)
+							.load(state.memory, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
+
+						match r {
+							ValType::I32 => seq.call(state.extern_fns.val_to_i32),
+							ValType::I64 => seq.call(state.extern_fns.val_to_i64),
+							ValType::F32 => seq.call(state.extern_fns.val_to_f32),
+							ValType::F64 => seq.call(state.extern_fns.val_to_f64),
+							ValType::V128 => todo!(),
+							ValType::Ref(_) => todo!(),
+						};
+					}
+				});
+
+				builder.func_body().return_();
+			}
+
+			state.module.exports.add(name, builder.finish(args, &mut state.module.funcs));
+		}
 	}
 
 	let mut main_fn = parsed.parsed_func;
@@ -181,8 +300,6 @@ fn compile_function(state: &mut State, func: &parsing::ParsedFunction) -> Functi
 
 	let arg_cnt = state.module.locals.add(ValType::I32);
 	state.module.locals.get_mut(arg_cnt).name = Some("__fn_arg_cnt".into());
-	// // Without this, the first local seems to not get compiled if it's never used?
-	// builder.func_body().local_get(arg_cnt).drop();
 
 	let mut temps = 0;
 	for slot in 0..func.frame_size {
@@ -194,8 +311,6 @@ fn compile_function(state: &mut State, func: &parsing::ParsedFunction) -> Functi
 				None => { temps += 1; format!("temp_{temps}") },
 			});
 		}
-
-		// builder.func_body().i64_const(0).local_set(local);
 	}
 
 	if func.param_count > 0 {
@@ -256,13 +371,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 			}
 			seq.i32_const(ret_cnt.into()).return_();
 		},
-		Op::Call { func_slot, arg_cnt, ret_kind: RetKind::None } => {
-			
-		},
-		Op::Call { func_slot, arg_cnt, ret_kind: RetKind::Many } => {
-			todo!()
-		},
-		Op::Call { func_slot, arg_cnt, ret_kind: RetKind::Single(loc) } => {
+		Op::Call { func_slot, arg_cnt, ret_kind } => {
 			for i in 0..arg_cnt {
 				seq.global_get(state.arg_ptr);
 				Loc::Slot(func_slot + i).push_get(state, seq);
@@ -270,13 +379,21 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 			}
 			seq.i32_const(arg_cnt.into());
 			Loc::Slot(func_slot).push_get(state, seq);
-			seq.call(state.extern_fns.get_fn)
-				.i32_const(0)
-				.binop(BinaryOp::I32Eq)
-				.if_else(ValType::I64, |seq| { seq.i64_const(Value::nil().as_i64()); }, |seq| {
-				seq.global_get(state.arg_ptr)
-					.load(state.memory, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
-			});
+			seq.call(state.extern_fns.get_fn);
+
+			match ret_kind {
+				RetKind::None => { seq.drop(); },
+				RetKind::Single(loc) => {
+					seq.i32_const(0)
+						.binop(BinaryOp::I32Eq)
+						.if_else(ValType::I64, |seq| { seq.i64_const(Value::nil().as_i64()); }, |seq| {
+							seq.global_get(state.arg_ptr)
+								.load(state.memory, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
+							loc.push_set(state, seq);
+						});
+				},
+				RetKind::Many => todo!(),
+			}
 		},
 		_ => todo!("{op:?}"),
 	}
