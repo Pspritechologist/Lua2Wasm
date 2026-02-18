@@ -1,3 +1,4 @@
+#![feature(core_intrinsics)]
 #![no_std]
 
 use value::{Value, ValueTag};
@@ -15,14 +16,34 @@ pub fn string(s: &'static (impl AsRef<[u8]> + ?Sized)) -> Value {
 }
 
 mod binds {
-	// unsafe extern "C" {
-	// 	fn __luant_exception(object: i64) -> !;
-	// }
+	use super::*;
+
+	unsafe extern "C" {
+		// fn __luant_exception(object: i64) -> !;
+		fn put_str(ptr: *const u8, len: usize);
+	}
 	
 	// pub fn error(object: i64) -> ! { unsafe { __luant_exception(object); } }
 
 	pub fn error(object: i64) -> ! {
-		panic!();
+		let object = Value::from_i64(object);
+
+		let s = match object.get_tag() {
+			ValueTag::Nil => "<nil>".as_bytes(),
+			ValueTag::Bool => if object.to_bool() { "true" } else { "false" }.as_bytes(),
+			ValueTag::Number => {
+				let mut s = zmij::Buffer::new();
+				let s = s.format(object.to_num());
+				unsafe { put_str(s.as_ptr(), s.len()) };
+				core::intrinsics::abort();
+			},
+			ValueTag::String => object.to_str(),
+			_ => "<non-printable value>".as_bytes(),
+		};
+
+		unsafe { put_str(s.as_ptr(), s.len()) };
+
+		core::intrinsics::abort();
 	}
 }
 
@@ -111,12 +132,22 @@ extern "C" fn __luant_val_to_i64(value: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn __luant_i64_to_val(value: i64) -> i64 {
+	Value::float(value as f64).as_i64()
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn __luant_val_to_f64(value: i64) -> f64 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num(),
 		_ => binds::error(string("Attempted to convert a non-string, non-number value to a number").as_i64()),
 	}
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __luant_f64_to_val(value: f64) -> i64 {
+	Value::float(value).as_i64()
 }
 
 #[unsafe(no_mangle)]
@@ -129,6 +160,11 @@ extern "C" fn __luant_val_to_i32(value: i64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn __luant_i32_to_val(value: i32) -> i64 {
+	Value::float(value as f64).as_i64()
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn __luant_val_to_f32(value: i64) -> f32 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
@@ -137,7 +173,13 @@ extern "C" fn __luant_val_to_f32(value: i64) -> f32 {
 	}
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn __luant_f32_to_val(value: f32) -> i64 {
+	Value::float(value as f64).as_i64()
+}
+
 #[panic_handler]
 fn on_panic(_info: &core::panic::PanicInfo) -> ! {
+	// core::intrinsics::abort();
 	unsafe { core::hint::unreachable_unchecked() }
 }

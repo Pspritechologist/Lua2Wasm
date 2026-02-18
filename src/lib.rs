@@ -51,6 +51,10 @@ struct ExternFns {
 	val_to_f64: FunctionId,
 	val_to_i32: FunctionId,
 	val_to_f32: FunctionId,
+	i64_to_val: FunctionId,
+	f64_to_val: FunctionId,
+	i32_to_val: FunctionId,
+	f32_to_val: FunctionId,
 }
 
 trait ValueExt {
@@ -125,6 +129,10 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 		val_to_f64: __luant_val_to_f64(i64) -> f64;
 		val_to_i32: __luant_val_to_i32(i64) -> i32;
 		val_to_f32: __luant_val_to_f32(i64) -> f32;
+		i64_to_val: __luant_i64_to_val(i64) -> i64;
+		f64_to_val: __luant_f64_to_val(f64) -> i64;
+		i32_to_val: __luant_i32_to_val(i32) -> i64;
+		f32_to_val: __luant_f32_to_val(f32) -> i64;
 	};
 
 	let mut offset = 0xFFF700;
@@ -139,7 +147,7 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 		(ptr, len)
 	}).collect();
 
-	let arg_ptr = module.globals.add_local(ValType::I32, false, false, ConstExpr::Value(walrus::ir::Value::I32(0xFF0000)));
+	let arg_ptr = module.globals.add_local(ValType::I32, false, false, ConstExpr::Value(walrus::ir::Value::I32(0)));
 	module.globals.get_mut(arg_ptr).name = Some("__var_args_ptr".into());
 
 	let mut state = State {
@@ -168,17 +176,15 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 				}
 
 				type_sig = match type_sig {
-					[ b'i', b'6', b'4', r@.. ] => { params.push(ValType::I64); r },
-					[ b'i', b'3', b'2', r@.. ] => { params.push(ValType::I32); r },
-					[ b'f', b'6', b'4', r@.. ] => { params.push(ValType::F64); r },
-					[ b'f', b'3', b'2', r@.. ] => { params.push(ValType::F32); r },
+					[ b'i',b'6',b'4', r@.. ] => { params.push(ValType::I64); r },
+					[ b'i',b'3',b'2', r@.. ] => { params.push(ValType::I32); r },
+					[ b'f',b'6',b'4', r@.. ] => { params.push(ValType::F64); r },
+					[ b'f',b'3',b'2', r@.. ] => { params.push(ValType::F32); r },
 					_ => return Err(anyhow::Error::msg("Invalid export attribute format")),
 				}.trim();
 				
 				if let Some(next) = type_sig.strip_prefix(b",") {
 					type_sig = next.trim();
-				} else {
-					break;
 				}
 			}
 
@@ -192,51 +198,55 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 					}
 
 					type_sig = match type_sig {
-						[ b'i', b'6', b'4', r@.. ] => { rets.push(ValType::I64); r },
-						[ b'i', b'3', b'2', r@.. ] => { rets.push(ValType::I32); r },
-						[ b'f', b'6', b'4', r@.. ] => { rets.push(ValType::F64); r },
-						[ b'f', b'3', b'2', r@.. ] => { rets.push(ValType::F32); r },
+						[ b'i',b'6',b'4', r@.. ] => { rets.push(ValType::I64); r },
+						[ b'i',b'3',b'2', r@.. ] => { rets.push(ValType::I32); r },
+						[ b'f',b'6',b'4', r@.. ] => { rets.push(ValType::F64); r },
+						[ b'f',b'3',b'2', r@.. ] => { rets.push(ValType::F32); r },
 						_ => return Err(anyhow::Error::msg("Invalid export attribute format")),
 					}.trim();
 
 					if let Some(next) = type_sig.strip_prefix(b",") {
 						type_sig = next.trim();
-						continue;
-					} else {
-						break;
 					}
 				}
 			}
 
 			let mut builder = FunctionBuilder::new(&mut state.module.types, &params, &rets);
 			builder.name(["__luant_shim_", name.as_str()].concat());
+
+			let mut seq = builder.func_body();
 			
 			let args = params.iter().enumerate().map(|(i, param)| {
 				let arg = state.module.locals.add(*param);
-				builder.func_body()
-					.global_get(state.arg_ptr)
-					.local_get(arg)
-					.store(state.memory, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
+				seq.global_get(state.arg_ptr).local_get(arg);
+
+				match param {
+					ValType::I32 => seq.call(state.extern_fns.i32_to_val),
+					ValType::I64 => seq.call(state.extern_fns.i64_to_val),
+					ValType::F32 => seq.call(state.extern_fns.f32_to_val),
+					ValType::F64 => seq.call(state.extern_fns.f64_to_val),
+					ValType::V128 => todo!(),
+					ValType::Ref(_) => todo!(),
+				}.store(state.memory, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
 				arg
 			}).collect();
 
 			// Make the dynamic call...
-			builder.func_body()
+			seq
 				.i32_const(params.len() as i32)
 				.call(id);
 
 			// Handle the dynamic return values...
 			if rets.is_empty() {
-				builder.func_body().drop();
+				seq.drop();
 			} else {
 				let arg_cnt = state.module.locals.add(ValType::I32);
-				builder.func_body().local_set(arg_cnt);
+				seq.local_set(arg_cnt);
 
-				builder.func_body().block(None, |seq| {
+				seq.block(None, |seq| {
 					let block_id = seq.id();
 					for (i, r) in rets.iter().enumerate() {
-						seq
-							.local_get(arg_cnt)
+						seq.local_get(arg_cnt)
 							.i32_const(i as i32)
 							.binop(BinaryOp::I32LeU)
 							.br_if(block_id)
@@ -252,9 +262,11 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 							ValType::Ref(_) => todo!(),
 						};
 					}
+
+					seq.return_();
 				});
 
-				builder.func_body().return_();
+				seq.unreachable(); //TODO: This needs to actually be handled.
 			}
 
 			state.module.exports.add(name, builder.finish(args, &mut state.module.funcs));
@@ -389,8 +401,8 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 						.if_else(ValType::I64, |seq| { seq.i64_const(Value::nil().as_i64()); }, |seq| {
 							seq.global_get(state.arg_ptr)
 								.load(state.memory, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
-							loc.push_set(state, seq);
 						});
+					loc.push_set(state, seq);
 				},
 				RetKind::Many => todo!(),
 			}
