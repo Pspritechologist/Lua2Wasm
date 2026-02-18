@@ -4,20 +4,7 @@ use bytecode::Operation as Op;
 use luant_lexer::LexInterner;
 use value::Value;
 use walrus::{
-	ir::{BinaryOp, LoadKind, MemArg, StoreKind},
-	ConstExpr,
-	DataKind,
-	ElementItems,
-	ElementKind,
-	FunctionBuilder,
-	FunctionId,
-	GlobalId,
-	InstrSeqBuilder,
-	LocalId,
-	MemoryId,
-	Module,
-	RefType,
-	ValType,
+	ConstExpr, DataId, DataKind, ElementItems, ElementKind, FunctionBuilder, FunctionId, GlobalId, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, TableId, ValType, ir::{BinaryOp, LoadKind, MemArg, StoreKind}
 };
 use std::collections::BTreeMap;
 
@@ -27,34 +14,73 @@ pub mod parsing;
 mod bytecode;
 mod debug;
 
+struct Strings {
+	data: DataId,
+	table: TableId,
+	index: Box<[(i32, i32)]>,
+}
+// impl Strings {
+// 	fn init_str(&self, module: &mut Module, idx: usize) -> i32 {
+// 		let (addr, len) = self.index[idx];
+		
+// 		Value::string(addr, len)
+// 	}
+// }
+
 pub struct State<'s> {
 	module: Module,
 	memory: MemoryId,
 	locals: BTreeMap<u8, LocalId>,
 	arg_ptr: GlobalId,
-	strings: Box<[(i32, i32)]>,
+	strings: Strings,
 	closures: Box<[Option<FunctionId>]>,
 	extern_fns: ExternFns,
 	interner: LexInterner<'s>
 }
 
-struct ExternFns {
-	// print: FunctionId,
-	add: FunctionId,
-	sub: FunctionId,
-	mul: FunctionId,
-	div: FunctionId,
-	eq: FunctionId,
-	get_fn: FunctionId,
-	get_truthy: FunctionId,
-	val_to_i64: FunctionId,
-	val_to_f64: FunctionId,
-	val_to_i32: FunctionId,
-	val_to_f32: FunctionId,
-	i64_to_val: FunctionId,
-	f64_to_val: FunctionId,
-	i32_to_val: FunctionId,
-	f32_to_val: FunctionId,
+macro_rules! extern_fns {
+	(struct $StructName:ident {
+			$( $field:ident: $name:ident($($in:ident),*) $(-> $($ret:ident),+)? );+ $(;)?
+	}) => {
+		struct $StructName {
+			$( $field: FunctionId, )+
+		}
+
+		impl $StructName {
+			fn init(module: &Module) -> Self {
+				$(
+					let $field = module.funcs.by_name(stringify!($name)).expect(concat!("Failed to find extern fn: ", stringify!($name)));
+					let ty = module.types.get(module.funcs.get($field).ty());
+					debug_assert_eq!(ty.params(), &[$( ValType::$in ),*]);
+					debug_assert_eq!(ty.results(), &[$( $( ValType::$ret ),* )?]);
+				)+
+
+				Self {
+					$( $field, )+
+				}
+			}
+		}
+	}
+}
+
+extern_fns! {
+	struct ExternFns {
+		add: __luant_add(I64, I64) -> I64;
+		sub: __luant_sub(I64, I64) -> I64;
+		mul: __luant_mul(I64, I64) -> I64;
+		div: __luant_div(I64, I64) -> I64;
+		eq: __luant_eq(I64, I64) -> I64;
+		get_fn: __luant_get_fn(I64) -> I32;
+		get_truthy: __luant_get_truthy(I64) -> I32;
+		val_to_i64: __luant_val_to_i64(I64) -> I64;
+		val_to_f64: __luant_val_to_f64(I64) -> F64;
+		val_to_i32: __luant_val_to_i32(I64) -> I32;
+		val_to_f32: __luant_val_to_f32(I64) -> F32;
+		i64_to_val: __luant_i64_to_val(I64) -> I64;
+		f64_to_val: __luant_f64_to_val(F64) -> I64;
+		i32_to_val: __luant_i32_to_val(I32) -> I64;
+		f32_to_val: __luant_f32_to_val(F32) -> I64;
+	}
 }
 
 trait ValueExt {
@@ -97,55 +123,29 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 		}
 	}
 
-	macro_rules! extern_fn {
-		($name:ident($($in:ident),*) $(-> $($ret:ident),+)?) => { {
-			module.funcs.by_name(stringify!($name)).expect(concat!("Failed to find extern fn: ", stringify!($name)))
-		} };
-	}
-
-	macro_rules! extern_fns {
-		($(
-			$field:ident: $name:ident($($in:ident),*) $(-> $($ret:ident),+)?
-		);+ $(;)?) => {
-			ExternFns {
-				$( $field: extern_fn!($name($($in),*) $(-> $($ret),+)?), )+
-			}
-		};
-	}
-
 	// let memory = module.memories.add_local(false, false, 0, None, None);
 	let memory = module.get_memory_id()?;
 
-	let extern_fns = extern_fns! {
-		// print: extern_mod::__luant_print(I64);
-		add: __luant_add(I64, I64) -> I64;
-		sub: __luant_sub(I64, I64) -> I64;
-		mul: __luant_mul(I64, I64) -> I64;
-		div: __luant_div(I64, I64) -> I64;
-		eq: __luant_eq(I64, I64) -> I64;
-		get_fn: __luant_get_fn(i64) -> i32;
-		get_truthy: __luant_get_truthy(i64) -> i32;
-		val_to_i64: __luant_val_to_i64(i64) -> i64;
-		val_to_f64: __luant_val_to_f64(i64) -> f64;
-		val_to_i32: __luant_val_to_i32(i64) -> i32;
-		val_to_f32: __luant_val_to_f32(i64) -> f32;
-		i64_to_val: __luant_i64_to_val(i64) -> i64;
-		f64_to_val: __luant_f64_to_val(f64) -> i64;
-		i32_to_val: __luant_i32_to_val(i32) -> i64;
-		f32_to_val: __luant_f32_to_val(f32) -> i64;
+	let strings = {
+		let string_table = module.tables.add_local(false, 0, None, RefType::ARRAYREF);
+		module.tables.get_mut(string_table).name = Some("__luant_string_table".into());
+	
+		let mut offset = 0;
+		let strings = parsed.strings.iter().map(|s| {
+			let (ptr, len) = (offset, s.len() as i32);
+			offset += s.len() as i32;
+			(ptr, len)
+		}).collect();
+	
+		let string_data = module.data.add(DataKind::Passive, parsed.strings.iter().flat_map(|s| s.bytes()).collect());
+
+		Strings {
+			data: string_data,
+			table: string_table,
+			index: strings,
+		}
 	};
 
-	let mut offset = 0xFFF700;
-	let strings = parsed.strings.into_iter().map(|s| {
-		let kind = DataKind::Active { memory, offset: ConstExpr::Value(walrus::ir::Value::I32(offset)) };
-
-		let (ptr, len) = (offset, s.len() as i32);
-		offset += s.len() as i32;
-
-		module.data.add(kind, s.into_owned().into());
-
-		(ptr, len)
-	}).collect();
 
 	let arg_ptr = module.globals.add_local(ValType::I32, false, false, ConstExpr::Value(walrus::ir::Value::I32(0)));
 	module.globals.get_mut(arg_ptr).name = Some("__var_args_ptr".into());
@@ -156,7 +156,7 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 		arg_ptr,
 		strings,
 		closures: vec![None; parsed.closures.len() + 1].into_boxed_slice(),
-		extern_fns,
+		extern_fns: ExternFns::init(&module),
 		interner,
 		module,
 	};
@@ -458,8 +458,9 @@ impl Expr {
 			Expr::Constant(Const::Bool(b)) => Value::bool(b).push(seq),
 			Expr::Constant(Const::Number(n)) => Value::float(n.val()).push(seq),
 			Expr::Constant(Const::String(idx)) => {
-				let (addr, len) = state.strings[idx];
-				Value::string(addr, len).push(seq);
+				// let (addr, len) = state.strings[idx];
+				// Value::string(addr, len).push(seq);
+				todo!()
 			},
 			Expr::Slot(idx) => Loc::Slot(idx).push_get(state, seq),
 			Expr::UpValue(idx) => Loc::UpValue(idx).push_get(state, seq),
