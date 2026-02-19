@@ -77,11 +77,11 @@ impl Value {
 		v
 	}
 	pub fn bool(b: bool) -> Self {
-		let mut v = Self::from_i64(if b { 1 } else { 0 });
+		let mut v = Self::from_i64(if b { 0x10 } else { 0 });
 		v.set_tag(ValueTag::Bool);
 		v
 	}
-	pub fn string(addr: i32, len: i32) -> Self {
+	pub fn string(addr: u32, len: u32) -> Self {
 		let bytes = ((addr as i64) << 32) | (len as i64);
 		let mut v = Self::from_i64(bytes);
 		v.set_tag(ValueTag::String);
@@ -105,7 +105,7 @@ impl Value {
 
 	pub fn to_bool(self) -> bool {
 		// Checks if the first non-tag bit is set.
-		self.data[0] & 0x10 != 0
+		(self.data[0] & 0x10) != 0
 	}
 	pub fn to_str(&self) -> &ByteStr {
 		let bytes = self.meaningful_bits();

@@ -7,5 +7,6 @@ edition = "2024"
 crate-type = [ "cdylib" ]
 
 [dependencies]
+hashbrown.workspace = true
 value = { workspace = true }
 zmij = "1.0.14"

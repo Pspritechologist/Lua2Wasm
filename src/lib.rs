@@ -4,7 +4,7 @@ use bytecode::Operation as Op;
 use luant_lexer::LexInterner;
 use value::Value;
 use walrus::{
-	ConstExpr, DataId, DataKind, ElementItems, ElementKind, FunctionBuilder, FunctionId, GlobalId, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, TableId, ValType, ir::{BinaryOp, LoadKind, MemArg, StoreKind}
+	ConstExpr, DataId, DataKind, ElementItems, ElementKind, FunctionBuilder, FunctionId, GlobalId, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, TableId, TypeId, ValType, ir::{BinaryOp, LoadKind, MemArg, StoreKind}
 };
 use std::collections::BTreeMap;
 
@@ -14,25 +14,15 @@ pub mod parsing;
 mod bytecode;
 mod debug;
 
-struct Strings {
-	data: DataId,
-	table: TableId,
-	index: Box<[(i32, i32)]>,
-}
-// impl Strings {
-// 	fn init_str(&self, module: &mut Module, idx: usize) -> i32 {
-// 		let (addr, len) = self.index[idx];
-		
-// 		Value::string(addr, len)
-// 	}
-// }
-
 pub struct State<'s> {
 	module: Module,
-	memory: MemoryId,
+	var_args_mem: MemoryId,
+	dyn_call_ty: TypeId,
+	call_tab: TableId,
 	locals: BTreeMap<u8, LocalId>,
 	arg_ptr: GlobalId,
-	strings: Strings,
+	strings: Box<[(u32, u32)]>,
+	string_mem: MemoryId,
 	closures: Box<[Option<FunctionId>]>,
 	extern_fns: ExternFns,
 	interner: LexInterner<'s>
@@ -40,7 +30,7 @@ pub struct State<'s> {
 
 macro_rules! extern_fns {
 	(struct $StructName:ident {
-			$( $field:ident: $name:ident($($in:ident),*) $(-> $($ret:ident),+)? );+ $(;)?
+			$( $field:ident: $name:ident($($in:expr),*) $(-> $($ret:expr),+)? );+ $(;)?
 	}) => {
 		struct $StructName {
 			$( $field: FunctionId, )+
@@ -48,11 +38,12 @@ macro_rules! extern_fns {
 
 		impl $StructName {
 			fn init(module: &Module) -> Self {
+				use ValType::*;
 				$(
 					let $field = module.funcs.by_name(stringify!($name)).expect(concat!("Failed to find extern fn: ", stringify!($name)));
 					let ty = module.types.get(module.funcs.get($field).ty());
-					debug_assert_eq!(ty.params(), &[$( ValType::$in ),*]);
-					debug_assert_eq!(ty.results(), &[$( $( ValType::$ret ),* )?]);
+					debug_assert_eq!(ty.params(), &[$( $in ),*]);
+					debug_assert_eq!(ty.results(), &[$( $( $ret ),* )?]);
 				)+
 
 				Self {
@@ -116,45 +107,48 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 
 	let mut skipped = 0;
 	while let Some(e) = { module.exports.iter().nth(skipped) } {
-		if e.name.starts_with("__luant") {
+		if e.name.starts_with("__luant") || e.name == "memory" {
 			module.exports.delete(e.id());
 		} else {
 			skipped += 1;
 		}
 	}
 
-	// let memory = module.memories.add_local(false, false, 0, None, None);
-	let memory = module.get_memory_id()?;
+	let var_args_mem = module.memories.add_local(false, false, 256 * 8, Some(256 * 8), None);
+	module.memories.get_mut(var_args_mem).name = Some("__luant_var_args".into());
 
-	let strings = {
-		let string_table = module.tables.add_local(false, 0, None, RefType::ARRAYREF);
-		module.tables.get_mut(string_table).name = Some("__luant_string_table".into());
-	
-		let mut offset = 0;
-		let strings = parsed.strings.iter().map(|s| {
-			let (ptr, len) = (offset, s.len() as i32);
-			offset += s.len() as i32;
-			(ptr, len)
-		}).collect();
-	
-		let string_data = module.data.add(DataKind::Passive, parsed.strings.iter().flat_map(|s| s.bytes()).collect());
+	let mut string_data_size = 0;
+	let strings = parsed.strings.iter().map(|s| {
+		let (ptr, len) = (string_data_size as u32, s.len() as u32);
+		string_data_size += s.len();
+		(ptr, len)
+	}).collect();
 
-		Strings {
-			data: string_data,
-			table: string_table,
-			index: strings,
-		}
-	};
+	let string_mem = module.memories.add_local(false, false, string_data_size as u64, Some(string_data_size as u64), None);
+	module.memories.get_mut(string_mem).name = Some("__luant_strings".into());
+	module.exports.add("memory", string_mem);
 
+	module.data.add(
+		DataKind::Active { memory: string_mem, offset: ConstExpr::Value(walrus::ir::Value::I32(0)) },
+		parsed.strings.iter().flat_map(|s| s.bytes()).collect(),
+	);
 
 	let arg_ptr = module.globals.add_local(ValType::I32, false, false, ConstExpr::Value(walrus::ir::Value::I32(0)));
 	module.globals.get_mut(arg_ptr).name = Some("__var_args_ptr".into());
 
+	let dyn_call_ty = module.types.add(&[ValType::I32], &[ValType::I32]);
+	let call_tab = module.tables.main_function_table()?.unwrap_or_else(|| {
+		module.tables.add_local(false, 0, None, RefType::FUNCREF)
+	});
+
 	let mut state = State {
-		memory,
+		var_args_mem,
+		dyn_call_ty,
+		call_tab,
 		locals: Default::default(),
 		arg_ptr,
 		strings,
+		string_mem,
 		closures: vec![None; parsed.closures.len() + 1].into_boxed_slice(),
 		extern_fns: ExternFns::init(&module),
 		interner,
@@ -227,7 +221,7 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 					ValType::F64 => seq.call(state.extern_fns.f64_to_val),
 					ValType::V128 => todo!(),
 					ValType::Ref(_) => todo!(),
-				}.store(state.memory, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
+				}.store(state.var_args_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
 				arg
 			}).collect();
 
@@ -251,7 +245,7 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 							.binop(BinaryOp::I32LeU)
 							.br_if(block_id)
 							.global_get(state.arg_ptr)
-							.load(state.memory, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
+							.load(state.var_args_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
 
 						match r {
 							ValType::I32 => seq.call(state.extern_fns.val_to_i32),
@@ -284,20 +278,30 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	
 	state.module.exports.add("main", main_fn);
 
-	{
-		let func_tab = state.module.tables.main_function_table()?.unwrap_or_else(|| {
-			state.module.tables.add_local(false, 0, None, RefType::FUNCREF)
-		});
+	let main_fn_shim = {
+		let mut builder = FunctionBuilder::new(&mut state.module.types, &[], &[]);
+		builder.name("__luant_shim_<main>".into())
+			.func_body()
+			.i32_const(0)
+			.call(main_fn)
+			.drop();
+		builder.finish(vec![], &mut state.module.funcs)
+	};
+	state.module.start = Some(main_fn_shim); //FIXME: Probably a bad idea :P
 
+	{
+		let func_tab = state.module.tables.get_mut(state.call_tab);
+		func_tab.name = Some("__luant_call_table".into());
+		func_tab.initial = state.closures.len() as u64;
+		func_tab.maximum = Some(state.closures.len() as u64);
+		
 		state.module.elements.add(ElementKind::Active {
-			table: func_tab,
-			offset: ConstExpr::Value(walrus::ir::Value::I32(2)),
+			table: state.call_tab,
+			offset: ConstExpr::Value(walrus::ir::Value::I32(func_tab.elem_segments.len() as i32)),
 		}, ElementItems::Functions(state.closures.into_iter().map(Option::unwrap).collect()));
 
-		let func_tab = state.module.tables.get_mut(func_tab);
 		func_tab.maximum = None;
 	}
-	// state.module.elements.add(walrus::ElementKind::Declared, walrus::ElementItems::Functions(state.closures.into_iter().map(Option::unwrap).collect()));
 
 	Ok(state.module.emit_wasm())
 }
@@ -350,7 +354,7 @@ fn compile_function(state: &mut State, func: &parsing::ParsedFunction) -> Functi
 					.binop(BinaryOp::I32GtU)
 					.br_if(block_id)
 					.global_get(state.arg_ptr)
-					.load(state.memory, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: u32::from(i) * 8 })
+					.load(state.var_args_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: u32::from(i) * 8 })
 					.local_set(state.locals[&i]);
 			}
 		});
@@ -379,7 +383,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 			for (i, s) in (ret_slot..ret_slot + ret_cnt).enumerate() {
 				seq.global_get(state.arg_ptr);
 				Loc::Slot(s).push_get(state, seq);
-				seq.store(state.memory, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
+				seq.store(state.var_args_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
 			}
 			seq.i32_const(ret_cnt.into()).return_();
 		},
@@ -387,11 +391,12 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 			for i in 0..arg_cnt {
 				seq.global_get(state.arg_ptr);
 				Loc::Slot(func_slot + i).push_get(state, seq);
-				seq.store(state.memory, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
+				seq.store(state.var_args_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
 			}
 			seq.i32_const(arg_cnt.into());
 			Loc::Slot(func_slot).push_get(state, seq);
 			seq.call(state.extern_fns.get_fn);
+			seq.call_indirect(state.dyn_call_ty, state.call_tab);
 
 			match ret_kind {
 				RetKind::None => { seq.drop(); },
@@ -400,7 +405,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 						.binop(BinaryOp::I32Eq)
 						.if_else(ValType::I64, |seq| { seq.i64_const(Value::nil().as_i64()); }, |seq| {
 							seq.global_get(state.arg_ptr)
-								.load(state.memory, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
+								.load(state.var_args_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
 						});
 					loc.push_set(state, seq);
 				},
@@ -458,9 +463,8 @@ impl Expr {
 			Expr::Constant(Const::Bool(b)) => Value::bool(b).push(seq),
 			Expr::Constant(Const::Number(n)) => Value::float(n.val()).push(seq),
 			Expr::Constant(Const::String(idx)) => {
-				// let (addr, len) = state.strings[idx];
-				// Value::string(addr, len).push(seq);
-				todo!()
+				let (addr, len) = state.strings[idx];
+				Value::string(addr, len).push(seq);
 			},
 			Expr::Slot(idx) => Loc::Slot(idx).push_get(state, seq),
 			Expr::UpValue(idx) => Loc::UpValue(idx).push_get(state, seq),
@@ -472,7 +476,7 @@ impl Expr {
 						seq.i64_const(0);
 					}, |seq| {
 						seq.global_get(state.arg_ptr)
-							.load(state.memory, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
+							.load(state.var_args_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
 					});
 			},
 			Expr::VarArgs => todo!(),

@@ -1,18 +1,16 @@
+#![allow(internal_features)] //? `core::intrinsics::abort` is used to compile an 'unreachable' instruction.
 #![feature(core_intrinsics)]
 #![no_std]
 
 use value::{Value, ValueTag};
-
 
 pub fn string(s: &'static (impl AsRef<[u8]> + ?Sized)) -> Value {
 	let s = s.as_ref();
 	
 	let ptr = u32::try_from(s.as_ptr().addr()).expect("infallible");
 	let len = u32::try_from(s.len()).expect("infallible");
-	let bytes = ptr as i64 | ((len as i64) << 32);
-	let mut v = Value::from_i64(bytes);
-	v.set_tag(ValueTag::String);
-	v
+
+	Value::string(ptr, len)
 }
 
 mod binds {
@@ -93,7 +91,7 @@ extern "C" fn __luant_eq(a: i64, b: i64) -> i64 {
 
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() == b.to_str()).as_i64(),
-		(lhs, rhs) => Value::bool(lhs == rhs).as_i64(),
+		_ => Value::bool(a == b).as_i64(),
 	}
 }
 
@@ -180,6 +178,9 @@ extern "C" fn __luant_f32_to_val(value: f32) -> i64 {
 
 #[panic_handler]
 fn on_panic(_info: &core::panic::PanicInfo) -> ! {
-	// core::intrinsics::abort();
-	unsafe { core::hint::unreachable_unchecked() }
+	if cfg!(debug_assertions) {
+		core::intrinsics::abort();
+	} else {
+		unsafe { core::hint::unreachable_unchecked() }
+	}
 }
