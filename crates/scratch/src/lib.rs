@@ -12,7 +12,7 @@
 #[global_allocator]
 static ALLOCATOR: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
-use crate::table::TabValueExt;
+use crate::table::{Table, TabValueExt};
 use value::{Value, ValueTag};
 use core::arch::wasm32;
 
@@ -188,6 +188,11 @@ extern "C" fn __luant_val_to_f32(value: i64) -> f32 {
 #[unsafe(no_mangle)]
 extern "C" fn __luant_f32_to_val(value: f32) -> i64 {
 	Value::float(value as f64).as_i64()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __luant_init_tab() -> i64 {
+	Value::new_table().as_i64()
 }
 
 #[unsafe(no_mangle)]

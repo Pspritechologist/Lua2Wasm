@@ -71,6 +71,9 @@ extern_fns! {
 		f64_to_val: __luant_f64_to_val(F64) -> I64;
 		i32_to_val: __luant_i32_to_val(I32) -> I64;
 		f32_to_val: __luant_f32_to_val(F32) -> I64;
+		table_load: __luant_init_tab() -> I64;
+		table_get: __luant_tab_get(I64, I64) -> I64;
+		table_set: __luant_tab_set(I64, I64, I64);
 	}
 }
 
@@ -116,7 +119,7 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 
 	let memory = module.get_memory_id().expect("Input module must have a memory");
 
-	let shtack_mem = module.memories.add_local(false, false, 256 * 8, Some(256 * 8), None);
+	let shtack_mem = module.memories.add_local(false, false, 1, Some(1), None);
 	module.memories.get_mut(shtack_mem).name = Some("__luant_shtack".into());
 
 	// $.rodata         Name of the data section used to store static strings.
@@ -393,7 +396,7 @@ fn compile_function(state: &mut State, func: &parsing::ParsedFunction) -> Functi
 				seq
 					.local_get(arg_cnt)
 					.i32_const(i.into())
-					.binop(BinaryOp::I32GtU)
+					.binop(BinaryOp::I32LeU)
 					.br_if(block_id)
 					.global_get(state.arg_ptr)
 					.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: u32::from(i) * 8 })
@@ -421,6 +424,9 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		Op::Copy(dst, val) => { val.push(state, seq); dst.push_set(state, seq); },
 		Op::LoadClosure(dst, idx) => { seq.i64_const(Value::function(idx).as_i64()); dst.push_set(state, seq); },
 		Op::StartIf(cond) => compile_if(state, ops, seq, cond),
+		Op::LoadTab(dst) => { seq.call(state.extern_fns.table_load); dst.push_set(state, seq); },
+		Op::Get(dst, tab, key) => { tab.push(state, seq); key.push(state, seq); seq.call(state.extern_fns.table_get); dst.push_set(state, seq); },
+		Op::Set(tab, key, val) => { tab.push(state, seq); key.push(state, seq); val.push(state, seq); seq.call(state.extern_fns.table_set); },
 		Op::Ret { ret_slot, ret_cnt } => {
 			for (i, s) in (ret_slot..ret_slot + ret_cnt).enumerate() {
 				seq.global_get(state.arg_ptr);

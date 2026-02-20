@@ -94,6 +94,13 @@ impl Value {
 		v
 	}
 
+	/// # SAFETY
+	/// The caller must ensure the value is properly tagged after construction.
+	pub unsafe fn idx(idx: usize) -> Self {
+		let bytes = (u32::try_from(idx).unwrap() as i64) << 32;
+		Self::from_i64(bytes)
+	}
+
 	pub fn meaningful_bits(mut self) -> [u8; 8] {
 		self.data[0] &= 0xF0; // Clear the tag bits.
 		self.data

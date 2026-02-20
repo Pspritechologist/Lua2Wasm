@@ -6,12 +6,29 @@ use core::arch::wasm32;
 extern crate alloc;
 
 pub trait TabValueExt {
+	fn to_table(self) -> Table;
 	fn as_table(self) -> Option<Table>;
+	fn table(table: Table) -> Self;
+	fn new_table() -> Self;
 }
 impl TabValueExt for Value {
+	fn to_table(self) -> Table {
+		unsafe { Table::from_raw(self.to_idx() as _) }
+	}
+
 	fn as_table(self) -> Option<Table> {
-		(self.get_tag() == ValueTag::Table)
-			.then(|| unsafe { Table::from_raw(self.to_idx() as _) })
+		(self.get_tag() == ValueTag::Table).then(|| self.to_table())
+	}
+
+	fn table(table: Table) -> Self {
+		let idx = table.get_ptr() as usize;
+		let mut val = unsafe { Value::idx(idx) };
+		val.set_tag(ValueTag::Table);
+		val
+	}
+
+	fn new_table() -> Self {
+		Self::table(Table::new())
 	}
 }
 
@@ -54,8 +71,9 @@ fn hash_impl(value: &Value) -> u64 {
 		ValueTag::Number => value.to_num().to_bits(),
 		ValueTag::String => Hasher::new(0).hash_bytes(value.to_str()),
 		ValueTag::Bool => if value.to_bool() { 1 } else { 0 },
-		ValueTag::Table => 0,
+		ValueTag::Table => value.to_table().get_ptr() as u64,
 		ValueTag::Closure => todo!(),
+		#[allow(clippy::fn_to_numeric_cast)]
 		ValueTag::Function => value.to_function() as u64,
 	}
 }
@@ -102,14 +120,12 @@ struct TableData {
 }
 
 fn as_usize(value: f64) -> Option<usize> {
-	(value == 0.0 || (value.is_sign_positive() && value == wasm32::f64_trunc(value))).then(|| value as usize)
+	(value == 0.0 || (value.is_sign_positive() && value == wasm32::f64_trunc(value))).then_some(value as usize)
 }
 
 fn as_index(value: &Value) -> Option<usize> {
 	value.as_num().and_then(as_usize).and_then(|i| i.checked_sub(1))
 }
-
-pub struct RawTable(());
 
 impl Table {
 	pub fn new() -> Self {
