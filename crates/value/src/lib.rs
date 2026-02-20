@@ -99,10 +99,22 @@ impl Value {
 		self.data
 	}
 
+	pub fn as_num(self) -> Option<f64> {
+		(self.get_tag() == ValueTag::Number).then(|| self.to_num())
+	}
+	pub fn as_bool(self) -> Option<bool> {
+		(self.get_tag() == ValueTag::Bool).then(|| self.to_bool())
+	}
+	pub fn as_str(&self) -> Option<&ByteStr> {
+		(self.get_tag() == ValueTag::String).then(|| self.to_str())
+	}
+	pub fn as_function(self) -> Option<extern "C" fn(usize) -> usize> {
+		(self.get_tag() == ValueTag::Function).then(|| self.to_function())
+	}
+
 	pub fn to_num(self) -> f64 {
 		f64::from_le_bytes(self.meaningful_bits())
 	}
-
 	pub fn to_bool(self) -> bool {
 		// Checks if the first non-tag bit is set.
 		(self.data[0] & 0x10) != 0
@@ -119,5 +131,10 @@ impl Value {
 		let ptr = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
 		let ptr = ptr as *const u8;
 		unsafe { core::mem::transmute(ptr) }
+	}
+	
+	pub fn to_idx(self) -> u32 {
+		let bytes = self.meaningful_bits();
+		u32::from_le_bytes(bytes[4..8].try_into().unwrap())
 	}
 }

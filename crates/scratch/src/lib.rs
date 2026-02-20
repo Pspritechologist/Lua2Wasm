@@ -1,8 +1,11 @@
-#![allow(internal_features)] //? `core::intrinsics::abort` is used to compile an 'unreachable' instruction.
-#![feature(core_intrinsics)]
+#![feature(allocator_api, box_as_ptr, core_float_math)]
 #![no_std]
 
+use crate::table::TabValueExt;
 use value::{Value, ValueTag};
+use core::arch::wasm32;
+
+mod table;
 
 pub fn string(s: &'static (impl AsRef<[u8]> + ?Sized)) -> Value {
 	let s = s.as_ref();
@@ -33,7 +36,7 @@ mod binds {
 				let mut s = zmij::Buffer::new();
 				let s = s.format(object.to_num());
 				unsafe { put_str(s.as_ptr(), s.len()) };
-				core::intrinsics::abort();
+				wasm32::unreachable();
 			},
 			ValueTag::String => object.to_str(),
 			_ => "<non-printable value>".as_bytes(),
@@ -41,7 +44,7 @@ mod binds {
 
 		unsafe { put_str(s.as_ptr(), s.len()) };
 
-		core::intrinsics::abort();
+		wasm32::unreachable();
 	}
 }
 
@@ -176,10 +179,39 @@ extern "C" fn __luant_f32_to_val(value: f32) -> i64 {
 	Value::float(value as f64).as_i64()
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn __luant_tab_get(table: i64, key: i64) -> i64 {
+	let table = Value::from_i64(table);
+	let key = Value::from_i64(key);
+
+	let Some(table) = table.as_table() else {
+		binds::error(string("Attempted to index into a non-table value").as_i64());
+	};
+
+	table.get(&key).unwrap_or(Value::nil()).as_i64()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __luant_tab_set(table: i64, key: i64, value: i64) {
+	let table = Value::from_i64(table);
+	let key = Value::from_i64(key);
+	let value = Value::from_i64(value);
+
+	let Some(mut table) = table.as_table() else {
+		binds::error(string("Attempted to index into a non-table value").as_i64());
+	};
+
+	if value.get_tag() == ValueTag::Nil {
+		table.remove(&key);
+	} else {
+		table.set(key, value);
+	}
+}
+
 #[panic_handler]
 fn on_panic(_info: &core::panic::PanicInfo) -> ! {
 	if cfg!(debug_assertions) {
-		core::intrinsics::abort();
+		wasm32::unreachable();
 	} else {
 		unsafe { core::hint::unreachable_unchecked() }
 	}
