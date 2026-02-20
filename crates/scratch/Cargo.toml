@@ -10,3 +10,7 @@ crate-type = [ "cdylib" ]
 hashbrown.workspace = true
 value = { workspace = true }
 zmij = "1.0.14"
+
+# dlmalloc = { version = "0.2.12", features = ["global"] }
+# lol_alloc = "0.4.1"
+talc = "4.4.3"

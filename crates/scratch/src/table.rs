@@ -1,6 +1,7 @@
 use super::{Value, ValueTag};
 use alloc::vec::Vec;
 use hashbrown::HashTable;
+use core::arch::wasm32;
 
 extern crate alloc;
 
@@ -101,7 +102,7 @@ struct TableData {
 }
 
 fn as_usize(value: f64) -> Option<usize> {
-	(value == 0.0 || (value.is_sign_positive() && value == core::f64::math::trunc(value))).then(|| value as usize)
+	(value == 0.0 || (value.is_sign_positive() && value == wasm32::f64_trunc(value))).then(|| value as usize)
 }
 
 fn as_index(value: &Value) -> Option<usize> {

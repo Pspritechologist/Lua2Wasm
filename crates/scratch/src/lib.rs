@@ -1,5 +1,16 @@
-#![feature(allocator_api, box_as_ptr, core_float_math)]
+#![feature(wasm_numeric_instr)]
 #![no_std]
+
+// #[global_allocator]
+// static ALLOCATOR: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
+
+// #[global_allocator]
+// static ALLOCATOR: lol_alloc::AssumeSingleThreaded<lol_alloc::FreeListAllocator> = unsafe {
+// 	lol_alloc::AssumeSingleThreaded::new(lol_alloc::FreeListAllocator::new())
+// };
+
+#[global_allocator]
+static ALLOCATOR: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
 use crate::table::TabValueExt;
 use value::{Value, ValueTag};
