@@ -1,5 +1,6 @@
 use super::{Value, ValueTag};
 use alloc::vec::Vec;
+use alloc::boxed::Box;
 use hashbrown::HashTable;
 use core::arch::wasm32;
 
@@ -60,7 +61,7 @@ impl Hasher {
 	}
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct Table {
 	inner: *const TableInner,
 }
@@ -116,7 +117,7 @@ impl TableInnerImpl for TableInner {
 struct TableData {
 	meta_table: Option<Table>,
     hash_contents: HashTable<(Value, Value)>,
-	array_contents: Vec<Option<Value>>,
+	array_contents: Vec<Value>,
 }
 
 fn as_usize(value: f64) -> Option<usize> {
@@ -129,7 +130,7 @@ fn as_index(value: &Value) -> Option<usize> {
 
 impl Table {
 	pub fn new() -> Self {
-		Default::default()
+		Self { inner: Box::into_raw(Default::default()) }
 	}
 
 	// pub fn from_iter<I, K, V>(state: &super::LuantState, iter: I) -> Self
@@ -148,9 +149,9 @@ impl Table {
 	pub fn set(&mut self, key: Value, value: Value) {
 		if let Some(index) = as_index(&key) {
 			if self.inner().array_contents.len() == index {
-				self.inner_mut().array_contents.push(Some(value));
+				self.inner_mut().array_contents.push(value);
 			} else {
-				self.inner_mut().array_contents[index] = Some(value);
+				self.inner_mut().array_contents[index] = value;
 			}
 
 			return;
@@ -168,16 +169,16 @@ impl Table {
 
 	pub fn get(&self, key: &Value) -> Option<Value> {
 		if let Some(index) = as_index(key) {
-			return self.inner().array_contents.get(index).cloned().flatten();
+			return self.inner().array_contents.get(index).copied();
 		}
 
 		let hash = hash_impl(key);
-		self.inner().hash_contents.find(hash, |(k, _)| k == key).map(|(_, v)| v.clone())
+		self.inner().hash_contents.find(hash, |(k, _)| k == key).map(|(_, v)| *v)
 	}
 
 	pub fn contains(&self, key: &Value) -> bool {
 		if let Some(index) = as_index(key) {
-			return self.inner().array_contents.get(index).and_then(|v| v.as_ref()).is_some();
+			return self.inner().array_contents.get(index).is_some();
 		}
 
 		let hash = hash_impl(key);
@@ -186,7 +187,11 @@ impl Table {
 
 	pub fn remove(&mut self, key: &Value) -> Option<Value> {
 		if let Some(index) = as_index(key) {
-			return self.inner_mut().array_contents.get_mut(index).and_then(|v| v.take());
+			return self.inner_mut().array_contents.get_mut(index).map(|v| {
+				let val = *v;
+				*v = Value::nil();
+				val
+			});
 		}
 
 		let hash = hash_impl(key);
@@ -200,7 +205,7 @@ impl Table {
 	}
 	pub fn is_empty(&self) -> bool {
 		self.inner().hash_contents.is_empty() &&
-			(self.inner().array_contents.is_empty() || self.inner().array_contents.iter().all(|v| v.is_none()))
+			self.inner().array_contents.first().is_none_or(|v| v.is_nil())
 	}
 
 	pub fn meta_table(&self) -> Option<Table> {

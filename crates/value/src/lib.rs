@@ -63,6 +63,11 @@ impl Value {
 		ValueTag::from_u8(self.data[0] & 0x0F)
 	}
 
+	pub fn is_nil(self) -> bool {
+		// Nil is always represented as all zeroes.
+		self == Self::nil()
+	}
+
 	pub fn nil() -> Self {
 		Self { data: [0u8; 8] }
 	}

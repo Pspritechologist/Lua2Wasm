@@ -162,8 +162,6 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 				state.emit(scope, Op::LoadClosure(dst, idx), span);
 			} else {
 				//TODO: This uses two Vecs in the worst case and just isn't very shwifty.
-				//TODO: Globals/Upvalues.
-
 				let first_ident = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
 				let mut rest_idents = Vec::new();
 				
@@ -210,8 +208,7 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 					ret_count += 1;
 					
 					let expr = parse_expr(lexer.next_must()?, lexer, scope, state)?;
-					//TODO!
-					// expr.set_to_slot(lexer, scope, state, start_reg + ret_count - 1)?;
+					expr.set_to_slot(lexer, scope, state, Loc::Slot(start_reg + ret_count - 1))?;
 					
 					if lexer.next_if(Token::Comma)?.is_none() {
 						break;
