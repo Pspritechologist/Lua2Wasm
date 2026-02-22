@@ -1,13 +1,6 @@
-#![feature(wasm_numeric_instr)]
+#![feature(trim_prefix_suffix, bstr, wasm_numeric_instr)]
 #![no_std]
 
-// #[global_allocator]
-// static ALLOCATOR: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
-
-// #[global_allocator]
-// static ALLOCATOR: lol_alloc::AssumeSingleThreaded<lol_alloc::FreeListAllocator> = unsafe {
-// 	lol_alloc::AssumeSingleThreaded::new(lol_alloc::FreeListAllocator::new())
-// };
 
 #[global_allocator]
 static ALLOCATOR: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
@@ -18,44 +11,25 @@ use core::arch::wasm32;
 
 mod table;
 
-pub fn string(s: &'static (impl AsRef<[u8]> + ?Sized)) -> Value {
-	let s = s.as_ref();
-	
-	let ptr = u32::try_from(s.as_ptr().addr()).expect("infallible");
-	let len = u32::try_from(s.len()).expect("infallible");
-
-	Value::string(ptr, len)
-}
+extern crate alloc;
 
 mod binds {
 	use super::*;
 
 	unsafe extern "C" {
-		// fn __luant_exception(object: i64) -> !;
 		fn put_str(ptr: *const u8, len: usize);
+	}
+
+	#[link(wasm_import_module = "__luant")]
+	unsafe extern "C" {
+		fn throw(object: i64) -> !;
 	}
 	
 	// pub fn error(object: i64) -> ! { unsafe { __luant_exception(object); } }
 
+	#[inline]
 	pub fn error(object: i64) -> ! {
-		let object = Value::from_i64(object);
-
-		let s = match object.get_tag() {
-			ValueTag::Nil => "<nil>".as_bytes(),
-			ValueTag::Bool => if object.to_bool() { "true" } else { "false" }.as_bytes(),
-			ValueTag::Number => {
-				let mut s = zmij::Buffer::new();
-				let s = s.format(object.to_num());
-				unsafe { put_str(s.as_ptr(), s.len()) };
-				wasm32::unreachable();
-			},
-			ValueTag::String => object.to_str(),
-			_ => "<non-printable value>".as_bytes(),
-		};
-
-		unsafe { put_str(s.as_ptr(), s.len()) };
-
-		wasm32::unreachable();
+		unsafe { throw(object) }
 	}
 }
 
@@ -65,7 +39,7 @@ extern "C" fn __luant_add(a: i64, b: i64) -> i64 {
 
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() + b.to_num()).as_i64(),
-		_ => binds::error(string("Attempted to add incompatible values").as_i64()),
+		_ => binds::error(Value::from("Attempted to add incompatible values").as_i64()),
 	}
 }
 
@@ -75,7 +49,7 @@ extern "C" fn __luant_sub(a: i64, b: i64) -> i64 {
 
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() - b.to_num()).as_i64(),
-		_ => binds::error(string("Attempted to subtract incompatible values").as_i64()),
+		_ => binds::error(Value::from("Attempted to subtract incompatible values").as_i64()),
 	}
 }
 
@@ -85,7 +59,7 @@ extern "C" fn __luant_mul(a: i64, b: i64) -> i64 {
 
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() * b.to_num()).as_i64(),
-		_ => binds::error(string("Attempted to multiply incompatible values").as_i64()),
+		_ => binds::error(Value::from("Attempted to multiply incompatible values").as_i64()),
 	}
 }
 
@@ -95,7 +69,7 @@ extern "C" fn __luant_div(a: i64, b: i64) -> i64 {
 
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() / b.to_num()).as_i64(),
-		_ => binds::error(string("Attempted to divide incompatible values").as_i64()),
+		_ => binds::error(Value::from("Attempted to divide incompatible values").as_i64()),
 	}
 }
 
@@ -118,9 +92,9 @@ extern "C" fn __luant_get_fn(func: i64) -> extern "C" fn(usize) -> usize {
 			func.to_function()
 		},
 		ValueTag::Closure => {
-			binds::error(string("Attempted to call a closure, which is not supported yet").as_i64());
+			binds::error(Value::from("Attempted to call a closure, which is not supported yet").as_i64());
 		},
-		_ => binds::error(string("Attempted to call a non-function value").as_i64()),
+		_ => binds::error(Value::from("Attempted to call a non-function value").as_i64()),
 	}
 }
 
@@ -139,7 +113,7 @@ extern "C" fn __luant_val_to_i64(value: i64) -> i64 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as i64,
-		_ => binds::error(string("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::from("Attempted to convert a non-string, non-number value to a number").as_i64()),
 	}
 }
 
@@ -153,7 +127,7 @@ extern "C" fn __luant_val_to_f64(value: i64) -> f64 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num(),
-		_ => binds::error(string("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::from("Attempted to convert a non-string, non-number value to a number").as_i64()),
 	}
 }
 
@@ -167,7 +141,7 @@ extern "C" fn __luant_val_to_i32(value: i64) -> i32 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as i32,
-		_ => binds::error(string("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::from("Attempted to convert a non-string, non-number value to a number").as_i64()),
 	}
 }
 
@@ -181,7 +155,7 @@ extern "C" fn __luant_val_to_f32(value: i64) -> f32 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as f32,
-		_ => binds::error(string("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::from("Attempted to convert a non-string, non-number value to a number").as_i64()),
 	}
 }
 
@@ -201,7 +175,7 @@ extern "C" fn __luant_tab_get(table: i64, key: i64) -> i64 {
 	let key = Value::from_i64(key);
 
 	let Some(table) = table.as_table() else {
-		binds::error(string("Attempted to index into a non-table value").as_i64());
+		binds::error(Value::from("Attempted to index into a non-table value").as_i64());
 	};
 
 	table.get(&key).unwrap_or(Value::nil()).as_i64()
@@ -214,7 +188,7 @@ extern "C" fn __luant_tab_set(table: i64, key: i64, value: i64) {
 	let value = Value::from_i64(value);
 
 	let Some(mut table) = table.as_table() else {
-		binds::error(string("Attempted to index into a non-table value").as_i64());
+		binds::error(Value::from("Attempted to index into a non-table value").as_i64());
 	};
 
 	if value.get_tag() == ValueTag::Nil {

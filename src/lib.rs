@@ -21,7 +21,7 @@ pub struct State<'s> {
 	dyn_call_ty: TypeId,
 	call_tab: TableId,
 	locals: BTreeMap<u8, LocalId>,
-	arg_ptr: GlobalId,
+	shtack_ptr: GlobalId,
 	strings: Box<[(u32, u32)]>,
 	closures: Box<[Option<FunctionId>]>,
 	extern_fns: ExternFns,
@@ -108,6 +108,23 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	let mut module = walrus::ModuleConfig::default()
 		.parse(include_bytes!("../target/wasm32-unknown-unknown/release/wasm_scratch.wasm"))?;
 
+	{
+		// Exceptions.
+		let error_handler_sig = module.types.add(&[ValType::I64], &[]);
+		module.types.get_mut(error_handler_sig).name = Some("__luant_error_handler".into());
+		let error_tag = module.tags.add(error_handler_sig);
+		// let error_glob = module.globals.add_local(ValType::I64, true, false, ConstExpr::Value(walrus::ir::Value::I64(0)));
+		let throw_fn = module.imports.get_func("__luant", "throw")?;
+		module.replace_imported_func(throw_fn, |(seq, args)| {
+			let input = args[0];
+			seq.name("__luant_error".into())
+				.func_body()
+				.local_get(input)
+				// .global_set(error_glob)
+				.throw(error_tag);
+		})?;
+	}
+
 	let mut skipped = 0;
 	while let Some(e) = { module.exports.iter().nth(skipped) } {
 		if e.name.starts_with("__luant") {
@@ -132,11 +149,13 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	let stack_ptr = module.globals.iter().find(|g| g.name.as_ref().is_some_and(|n| n == "__stack_pointer")).expect("Module must have a stack pointer").id();
 	let data_end = module.exports.iter().find_map(|e| (e.name == "__data_end").then(|| {
 		let ExportItem::Global(data_end) = e.item else { panic!("data_end isn't a global") };
+		module.globals.get_mut(data_end).name = Some("__data_end".into());
 		data_end
 	})).expect("Module must have a data end");
 	module.exports.remove("__data_end").unwrap();
 	let heap_base = module.exports.iter().find_map(|e| (e.name == "__heap_base").then(|| {
 		let ExportItem::Global(heap_base) = e.item else { panic!("heap_base isn't a global") };
+		module.globals.get_mut(heap_base).name = Some("__heap_base".into());
 		heap_base
 	})).expect("Module must have a data end");
 	module.exports.remove("__heap_base").unwrap();
@@ -178,8 +197,8 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	module.globals.get_mut(data_end).kind = GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(new_data_end)));
 	module.globals.get_mut(heap_base).kind = GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32((new_data_end + 15) & !15)));
 
-	let arg_ptr = module.globals.add_local(ValType::I32, false, false, ConstExpr::Value(walrus::ir::Value::I32(0)));
-	module.globals.get_mut(arg_ptr).name = Some("__var_args_ptr".into());
+	let shtack_ptr = module.globals.add_local(ValType::I32, false, false, ConstExpr::Value(walrus::ir::Value::I32(0)));
+	module.globals.get_mut(shtack_ptr).name = Some("__luant_shtack_ptr".into());
 
 	let dyn_call_ty = module.types.add(&[ValType::I32], &[ValType::I32]);
 	let call_tab = module.tables.main_function_table()?.unwrap_or_else(|| {
@@ -190,7 +209,7 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 		dyn_call_ty,
 		call_tab,
 		locals: Default::default(),
-		arg_ptr,
+		shtack_ptr,
 		strings,
 		memory,
 		shtack_mem,
@@ -257,7 +276,7 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 			
 			let args = params.iter().enumerate().map(|(i, param)| {
 				let arg = state.module.locals.add(*param);
-				seq.global_get(state.arg_ptr).local_get(arg);
+				seq.global_get(state.shtack_ptr).local_get(arg);
 
 				match param {
 					ValType::I32 => seq.call(state.extern_fns.i32_to_val),
@@ -289,7 +308,7 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 							.i32_const(i as i32)
 							.binop(BinaryOp::I32LeU)
 							.br_if(block_id)
-							.global_get(state.arg_ptr)
+							.global_get(state.shtack_ptr)
 							.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
 
 						match r {
@@ -320,8 +339,6 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 
 	let main_fn = compile_function(&mut state, &main_fn);
 	state.closures[0] = Some(main_fn);
-	
-	state.module.exports.add("main", main_fn);
 
 	let main_fn_shim = {
 		let mut builder = FunctionBuilder::new(&mut state.module.types, &[], &[]);
@@ -332,6 +349,8 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 			.drop();
 		builder.finish(vec![], &mut state.module.funcs)
 	};
+	
+	state.module.exports.add("main", main_fn_shim);
 	state.module.start = Some(main_fn_shim); //FIXME: Probably a bad idea :P
 
 	{
@@ -398,7 +417,7 @@ fn compile_function(state: &mut State, func: &parsing::ParsedFunction) -> Functi
 					.i32_const(i.into())
 					.binop(BinaryOp::I32LeU)
 					.br_if(block_id)
-					.global_get(state.arg_ptr)
+					.global_get(state.shtack_ptr)
 					.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: u32::from(i) * 8 })
 					.local_set(state.locals[&i]);
 			}
@@ -429,7 +448,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		Op::Set(tab, key, val) => { tab.push(state, seq); key.push(state, seq); val.push(state, seq); seq.call(state.extern_fns.table_set); },
 		Op::Ret { ret_slot, ret_cnt } => {
 			for (i, s) in (ret_slot..ret_slot + ret_cnt).enumerate() {
-				seq.global_get(state.arg_ptr);
+				seq.global_get(state.shtack_ptr);
 				Loc::Slot(s).push_get(state, seq);
 				seq.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
 			}
@@ -437,7 +456,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		},
 		Op::Call { func_slot, arg_cnt, ret_kind } => {
 			for i in 0..arg_cnt {
-				seq.global_get(state.arg_ptr);
+				seq.global_get(state.shtack_ptr);
 				Loc::Slot(func_slot + i).push_get(state, seq);
 				seq.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
 			}
@@ -452,7 +471,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 					seq.i32_const(0)
 						.binop(BinaryOp::I32Eq)
 						.if_else(ValType::I64, |seq| { seq.i64_const(Value::nil().as_i64()); }, |seq| {
-							seq.global_get(state.arg_ptr)
+							seq.global_get(state.shtack_ptr)
 								.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
 						});
 					loc.push_set(state, seq);
@@ -523,7 +542,7 @@ impl Expr {
 					.if_else(ValType::I64, |seq| {
 						seq.i64_const(0);
 					}, |seq| {
-						seq.global_get(state.arg_ptr)
+						seq.global_get(state.shtack_ptr)
 							.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
 					});
 			},

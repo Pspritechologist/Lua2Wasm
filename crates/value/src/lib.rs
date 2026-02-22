@@ -50,10 +50,10 @@ pub struct Value {
 }
 impl Value {
 	pub fn as_i64(self) -> i64 {
-		i64::from_le_bytes(self.data)
+		i64::from_ne_bytes(self.data)
 	}
 	pub fn from_i64(n: i64) -> Self {
-		Self { data: n.to_le_bytes() }
+		Self { data: n.to_ne_bytes() }
 	}
 
 	pub fn set_tag(&mut self, tag: ValueTag) {
@@ -77,7 +77,7 @@ impl Value {
 	// 	v
 	// }
 	pub fn float(n: f64) -> Self {
-		let mut v = Self { data: n.to_le_bytes() };
+		let mut v = Self { data: n.to_ne_bytes() };
 		v.set_tag(ValueTag::Number);
 		v
 	}
@@ -87,7 +87,8 @@ impl Value {
 		v
 	}
 	pub fn string(addr: u32, len: u32) -> Self {
-		let bytes = ((addr as i64) << 32) | (len as i64);
+		//? Strings store their length in big-endian.
+		let bytes = ((addr as i64) << 32) | (len.to_be() as i64);
 		let mut v = Self::from_i64(bytes);
 		v.set_tag(ValueTag::String);
 		v
@@ -125,7 +126,7 @@ impl Value {
 	}
 
 	pub fn to_num(self) -> f64 {
-		f64::from_le_bytes(self.meaningful_bits())
+		f64::from_ne_bytes(self.meaningful_bits())
 	}
 	pub fn to_bool(self) -> bool {
 		// Checks if the first non-tag bit is set.
@@ -133,20 +134,46 @@ impl Value {
 	}
 	pub fn to_str(&self) -> &ByteStr {
 		let bytes = self.meaningful_bits();
-		let ptr = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as *const u8;
-		let len = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+		let ptr = u32::from_ne_bytes(bytes[4..8].try_into().unwrap()) as *const u8;
+		//? Strings store the length in big-endian to avoid getting eaten by the tag.
+		let len = u32::from_be_bytes(bytes[0..4].try_into().unwrap()) as usize;
 		let data = unsafe { core::slice::from_raw_parts(ptr, len) };
 		ByteStr::new(data)
 	}
 	pub fn to_function(self) -> extern "C" fn(usize) -> usize {
 		let bytes = self.meaningful_bits();
-		let ptr = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+		let ptr = u32::from_ne_bytes(bytes[4..8].try_into().unwrap()) as usize;
 		let ptr = ptr as *const u8;
 		unsafe { core::mem::transmute(ptr) }
 	}
 	
 	pub fn to_idx(self) -> u32 {
 		let bytes = self.meaningful_bits();
-		u32::from_le_bytes(bytes[4..8].try_into().unwrap())
+		u32::from_ne_bytes(bytes[4..8].try_into().unwrap())
+	}
+}
+
+macro_rules! from_num {
+	($($ty:ty),*) => { $(
+		impl From<$ty> for Value {
+			fn from(n: $ty) -> Self { Self::float(n as f64) }
+		}
+	)* };
+}
+
+from_num!(i64, u64, isize, usize, i32, u32, i16, u16, i8, u8, f64, f32);
+
+impl From<bool> for Value {
+	fn from(b: bool) -> Self { Self::bool(b) }
+}
+
+impl<S: AsRef<[u8]> + ?Sized> From<&'static S> for Value {
+	fn from(value: &'static S) -> Self {
+		let s = value.as_ref();
+		
+		let ptr = u32::try_from(s.as_ptr().addr()).expect("infallible");
+		let len = u32::try_from(s.len()).expect("infallible");
+
+		Value::string(ptr, len)
 	}
 }
