@@ -198,6 +198,41 @@ extern "C" fn __luant_tab_set(table: i64, key: i64, value: i64) {
 	}
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn __luant_tab_get_name(table: i64, key: i64) -> i64 {
+	let table = Value::from_i64(table);
+	let key = Value::from_i64(key);
+	
+	match key.get_tag() {
+		ValueTag::String => table.to_table().get(&key).unwrap_or(Value::nil()).as_i64(),
+		_ if cfg!(debug_assertions) => panic!("Attempted to get_name with non-string key"),
+		_ => unsafe { core::hint::unreachable_unchecked() },
+	}
+}
+
+#[unsafe(no_mangle)]
+// `value` is the first param here for impl reasons on the WASM side...
+extern "C" fn __luant_tab_set_name(value: i64, table: i64, key: i64) {
+	let table = Value::from_i64(table);
+	let key = Value::from_i64(key);
+	let value = Value::from_i64(value);
+
+	match key.get_tag() {
+		ValueTag::String => {
+			let mut table = table.to_table();
+		
+			if value.get_tag() == ValueTag::Nil {
+				table.remove(&key);
+			} else {
+				table.set(key, value);
+			}
+		},
+		_ if cfg!(debug_assertions) => panic!("Attempted to set_name with non-string key"),
+		_ => unsafe { core::hint::unreachable_unchecked() },
+	}
+
+}
+
 #[panic_handler]
 fn on_panic(_info: &core::panic::PanicInfo) -> ! {
 	if cfg!(debug_assertions) {

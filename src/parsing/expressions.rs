@@ -44,7 +44,7 @@ pub enum Expr {
 	Constant(Const),
 	Slot(u8),
 	UpValue(u8),
-	Global(IdentKey),
+	Global(usize),
 	VarRet,
 	VarArgs,
 }

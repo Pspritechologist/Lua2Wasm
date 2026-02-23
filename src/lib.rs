@@ -4,7 +4,7 @@ use bytecode::Operation as Op;
 use luant_lexer::LexInterner;
 use value::Value;
 use walrus::{
-	ConstExpr, DataId, DataKind, ElementItems, ElementKind, ExportItem, FunctionBuilder, FunctionId, GlobalId, GlobalKind, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, TableId, TypeId, ValType, ir::{BinaryOp, LoadKind, MemArg, StoreKind}
+	ConstExpr, DataId, DataKind, ElementItems, ElementKind, ExportItem, FunctionBuilder, FunctionId, GlobalId, GlobalKind, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, TableId, TypeId, ValType, ir::{BinaryOp, LoadKind, MemArg, StoreKind, TryTable, TryTableCatch}
 };
 use std::collections::BTreeMap;
 
@@ -25,7 +25,8 @@ pub struct State<'s> {
 	strings: Box<[(u32, u32)]>,
 	closures: Box<[Option<FunctionId>]>,
 	extern_fns: ExternFns,
-	interner: LexInterner<'s>
+	interner: LexInterner<'s>,
+	global_table: GlobalId,
 }
 
 macro_rules! extern_fns {
@@ -74,6 +75,10 @@ extern_fns! {
 		table_load: __luant_init_tab() -> I64;
 		table_get: __luant_tab_get(I64, I64) -> I64;
 		table_set: __luant_tab_set(I64, I64, I64);
+
+		// Doesn't type check input as a table, and assumes a string key. For internal use.
+		table_get_name: __luant_tab_get_name(I64, I64) -> I64;
+		table_set_name: __luant_tab_set_name(I64, I64, I64);
 	}
 }
 
@@ -91,24 +96,37 @@ impl Loc {
 		match self {
 			Loc::Slot(idx) => { seq.local_get(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
-			Loc::Global(ident_key) => todo!(),
+			Loc::Global(idx) => {
+				seq.global_get(state.global_table)
+					.i64_const(static_string(state, idx).as_i64())
+					.call(state.extern_fns.table_get_name);
+			},
 		};
 	}
 
 	fn push_set(self, state: &mut State, seq: &mut InstrSeqBuilder) {
 		match self {
-			Loc::Slot(idx) => seq.local_set(state.locals[&idx]),
+			Loc::Slot(idx) => { seq.local_set(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
-			Loc::Global(ident_key) => todo!(),
+			Loc::Global(idx) => {
+				seq.global_get(state.global_table)
+					.i64_const(static_string(state, idx).as_i64())
+					.call(state.extern_fns.table_set_name);
+			},
 		};
 	}
 }
 
-pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Result<Vec<u8>> {
+fn static_string(state: &State, idx: usize) -> Value {
+	let (addr, len) = state.strings[idx];
+	Value::string(addr, len)
+}
+
+pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Result<Vec<u8>> {
 	let mut module = walrus::ModuleConfig::default()
 		.parse(include_bytes!("../target/wasm32-unknown-unknown/release/wasm_scratch.wasm"))?;
 
-	{
+	let error_tag = {
 		// Exceptions.
 		let error_handler_sig = module.types.add(&[ValType::I64], &[]);
 		module.types.get_mut(error_handler_sig).name = Some("__luant_error_handler".into());
@@ -117,13 +135,15 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 		let throw_fn = module.imports.get_func("__luant", "throw")?;
 		module.replace_imported_func(throw_fn, |(seq, args)| {
 			let input = args[0];
-			seq.name("__luant_error".into())
+			seq.name("__luant_throw_error".into())
 				.func_body()
 				.local_get(input)
 				// .global_set(error_glob)
 				.throw(error_tag);
 		})?;
-	}
+
+		error_tag
+	};
 
 	let mut skipped = 0;
 	while let Some(e) = { module.exports.iter().nth(skipped) } {
@@ -164,9 +184,23 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	let GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(string_data_base))) = module.globals.get(stack_ptr).kind else {
 		panic!("Invalid __stack_pointer");
 	};
+
+	struct Strings {
+		error: usize,
+		pcall: usize,
+		expected_args: usize,
+	}
+
+	let internal_strings = {
+		let error = parsed.constants.get_string("error");
+		let pcall = parsed.constants.get_string("pcall");
+		let expected_args = parsed.constants.get_string("Expected at least %d argument(s) to %s, got %d");
+
+		Strings { error, pcall, expected_args }
+	};
 	
 	let mut string_data_size = 0;
-	let strings = parsed.strings.iter().map(|s| {
+	let strings = parsed.constants.strings().iter().map(|s| {
 		let (ptr, len) = (string_data_size as u32, s.len() as u32);
 		string_data_size += s.len();
 		(ptr + string_data_base as u32, len)
@@ -187,7 +221,7 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 
 	// Append our new strings.
 	let rodata = &mut module.data.get_mut(rodata).value;
-	rodata.extend(parsed.strings.iter().flat_map(|s| s.bytes()));
+	rodata.extend(parsed.constants.strings().iter().flat_map(|s| s.bytes()));
 
 	let GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(old_data_end))) = module.globals.get(data_end).kind else {
 		panic!("Invalid __data_end");
@@ -197,13 +231,16 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	module.globals.get_mut(data_end).kind = GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(new_data_end)));
 	module.globals.get_mut(heap_base).kind = GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32((new_data_end + 15) & !15)));
 
-	let shtack_ptr = module.globals.add_local(ValType::I32, false, false, ConstExpr::Value(walrus::ir::Value::I32(0)));
+	let shtack_ptr = module.globals.add_local(ValType::I32, true, false, ConstExpr::Value(walrus::ir::Value::I32(0)));
 	module.globals.get_mut(shtack_ptr).name = Some("__luant_shtack_ptr".into());
 
 	let dyn_call_ty = module.types.add(&[ValType::I32], &[ValType::I32]);
 	let call_tab = module.tables.main_function_table()?.unwrap_or_else(|| {
 		module.tables.add_local(false, 0, None, RefType::FUNCREF)
 	});
+
+	let global_table = module.globals.add_local(ValType::I64, true, false, ConstExpr::Value(walrus::ir::Value::I64(0)));
+	module.globals.get_mut(global_table).name = Some("__luant_global_table".into());
 
 	let mut state = State {
 		dyn_call_ty,
@@ -213,14 +250,15 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 		strings,
 		memory,
 		shtack_mem,
-		closures: vec![None; parsed.closures.len() + 1].into_boxed_slice(),
+		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
 		extern_fns: ExternFns::init(&module),
 		interner,
 		module,
+		global_table,
 	};
 
-	for (i, func) in parsed.closures.iter().enumerate().rev() {
-		let id = compile_function(&mut state, func);
+	for (i, func) in parsed.constants.closures().iter().enumerate().rev() {
+		let id = compile_luant_function(&mut state, func);
 		state.closures[i + 1] = Some(id);
 
 		if let Some((name, type_sig)) = &func.exported {
@@ -337,32 +375,145 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 		debug.set_func_name("<main>");
 	}
 
-	let main_fn = compile_function(&mut state, &main_fn);
+	let main_fn = compile_luant_function(&mut state, &main_fn);
 	state.closures[0] = Some(main_fn);
 
-	let main_fn_shim = {
+	let mut closures: Vec<_> = state.closures.iter().copied().map(Option::unwrap).collect();
+
+	let start_fn = {
 		let mut builder = FunctionBuilder::new(&mut state.module.types, &[], &[]);
-		builder.name("__luant_shim_<main>".into())
-			.func_body()
-			.i32_const(0)
+		let mut seq = builder.name("__luant_shim_<main>".into()).func_body();
+
+		let global_tab = state.module.locals.add(ValType::I64);
+
+		// Initialize the global table.
+		seq.call(state.extern_fns.table_load)
+			.local_tee(global_tab)
+			.global_set(state.global_table);
+
+		// Load the 'error' function into it.
+		let error_fn = compile_function(&mut state, "__luant_std_error", |state, seq, _| {
+			seq.global_get(state.shtack_ptr)
+				.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
+				.throw(error_tag)
+				.i32_const(0);
+		});
+		
+		let error_fn_idx = closures.len();
+		closures.push(error_fn);
+		seq.local_get(global_tab)
+			.i64_const(static_string(&state, internal_strings.error).as_i64())
+			.i64_const(Value::function(error_fn_idx).as_i64())
+			.call(state.extern_fns.table_set_name);
+		
+		// Load the 'pcall' function into it.
+		let pcall_fn = compile_function(&mut state, "__luant_std_pcall", |state, seq, arg_cnt| {
+			let temp_var = state.module.locals.add(ValType::I64);
+
+			seq.global_get(state.shtack_ptr)
+				.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
+				.local_set(temp_var);
+
+			// Increase the stack pointer by one to remove the first arg.
+			seq.global_get(state.shtack_ptr)
+				.i32_const(1)
+				.binop(BinaryOp::I32Add)
+				.global_set(state.shtack_ptr);
+
+			seq.block(ValType::I64, |seq| {
+				let catch_label = seq.id();
+
+				// Write the 'try' block...
+				let try_seq = seq.dangling_instr_seq(ValType::I64)
+					// Pass the current arg count minus one, to a minimum of zero.
+					.i32_const(0)
+					.i32_const(1)
+					.local_get(arg_cnt)
+					.binop(BinaryOp::I32Sub)
+					.i32_const(0)
+					.local_get(arg_cnt)
+					.binop(BinaryOp::I32Eq)
+					.select(Some(ValType::I32))
+					// Make the call.
+					.local_get(temp_var)
+					.call(state.extern_fns.get_fn)
+					.call_indirect(state.dyn_call_ty, state.call_tab)
+					// Increase the count to return, accounting for the error flag.
+					.i32_const(1)
+					.binop(BinaryOp::I32Add)
+					// Reset the shtack pointer.
+					.global_get(state.shtack_ptr)
+					.i32_const(1)
+					.binop(BinaryOp::I32Sub)
+					.global_set(state.shtack_ptr)
+					// And prepend the 'success' flag to the return values.
+					.global_get(state.shtack_ptr)
+					.i64_const(Value::bool(true).as_i64())
+					.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
+					// Return the new arg count, still on the stack.
+					.return_()
+					.id();
+
+				// Insert the 'try catch' statement...
+				seq.instr(TryTable {
+					seq: try_seq,
+					catches: vec![TryTableCatch::Catch {
+						tag: error_tag,
+						label: catch_label,
+					}],
+				});
+			});
+
+			// Write the 'catch' block...
+			seq
+				// Store the error object for now.
+				.local_set(temp_var)
+				// Reset the shtack pointer.
+				.global_get(state.shtack_ptr)
+				.i32_const(1)
+				.binop(BinaryOp::I32Sub)
+				.global_set(state.shtack_ptr)
+				// Prepend the 'error' flag to the return values.
+				.global_get(state.shtack_ptr)
+				.i64_const(Value::bool(false).as_i64())
+				.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
+				// Set the error object as the second return value.
+				.global_get(state.shtack_ptr)
+				.local_get(temp_var)
+				.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 8 })
+				// Return the arg count of two.
+				.i32_const(2)
+				.return_();
+		});
+
+		let pcall_fn_idx = closures.len();
+		closures.push(pcall_fn);
+		seq.local_get(global_tab)
+			.i64_const(static_string(&state, internal_strings.pcall).as_i64())
+			.i64_const(Value::function(pcall_fn_idx).as_i64())
+			.call(state.extern_fns.table_set_name);
+
+		// Generate a call to the actual main function.
+		seq.i32_const(0)
 			.call(main_fn)
 			.drop();
+
 		builder.finish(vec![], &mut state.module.funcs)
 	};
 	
-	state.module.exports.add("main", main_fn_shim);
-	state.module.start = Some(main_fn_shim); //FIXME: Probably a bad idea :P
+	state.module.exports.add("main", start_fn);
+	state.module.start = Some(start_fn); //FIXME: Probably a bad idea :P
 
 	{
 		let func_tab = state.module.tables.get_mut(state.call_tab);
 		func_tab.name = Some("__luant_call_table".into());
-		func_tab.initial = state.closures.len() as u64;
-		func_tab.maximum = Some(state.closures.len() as u64);
+		func_tab.initial = closures.len() as u64;
+		func_tab.maximum = Some(closures.len() as u64);
 		
 		state.module.elements.add(ElementKind::Active {
 			table: state.call_tab,
 			offset: ConstExpr::Value(walrus::ir::Value::I32(func_tab.elem_segments.len() as i32)),
-		}, ElementItems::Functions(state.closures.into_iter().map(Option::unwrap).collect()));
+		}, ElementItems::Functions(closures));
 
 		func_tab.maximum = None;
 	}
@@ -370,67 +521,76 @@ pub fn lower<'s>(parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Resu
 	Ok(state.module.emit_wasm())
 }
 
-fn compile_function(state: &mut State, func: &parsing::ParsedFunction) -> FunctionId {
-	let mut operations = func.operations.iter().copied();
+fn compile_function(state: &mut State, name: impl Into<String>, f: impl FnOnce(&mut State, &mut InstrSeqBuilder, LocalId)) -> FunctionId {
 	let mut builder = FunctionBuilder::new(&mut state.module.types, &[ValType::I32], &[ValType::I32]);
-	let mut func_hash = std::hash::DefaultHasher::new();
-	std::hash::Hash::hash(&func.operations, &mut func_hash);
-	let func_hash = std::hash::Hasher::finish(&func_hash);
-	builder.name(func.debug.as_ref().and_then(|d| d.func_name().map(|s| format!("{s}_{func_hash:#x}"))).unwrap_or_else(|| format!("<anonymous closure_{func_hash:#x}>")));
+	builder.name(name.into());
 
 	let arg_cnt = state.module.locals.add(ValType::I32);
 	state.module.locals.get_mut(arg_cnt).name = Some("__fn_arg_cnt".into());
 
-	let mut temps = 0;
-	for slot in 0..func.frame_size {
-		let local = state.module.locals.add(ValType::I64);
-		state.locals.insert(slot, local);
-		if let Some(debug) = func.debug.as_ref() {
-			state.module.locals.get_mut(local).name = Some(match debug.get_local_name(slot) {
-				Some(name) => name.to_string(),
-				None => { temps += 1; format!("temp_{temps}") },
-			});
-		}
-	}
-
-	if func.param_count > 0 {
-		builder.func_body()
-			// Get the number of arguments passed...
-			.local_get(arg_cnt)
-			// And the number of arguments expected...
-			.i32_const(func.param_count.into())
-			// ... And then both again
-			.local_get(arg_cnt)
-			.i32_const(func.param_count.into())
-			// Check if the number of arguments passed is less than the number of arguments expected.
-			.binop(BinaryOp::I32LtU)
-			// Choose the lower values.
-			.select(Some(ValType::I32))
-			// And store it for later use.
-			.local_set(arg_cnt);
-
-		builder.func_body().block(None, |seq| {
-			for i in 0..func.param_count {
-				let block_id = seq.id();
-				seq
-					.local_get(arg_cnt)
-					.i32_const(i.into())
-					.binop(BinaryOp::I32LeU)
-					.br_if(block_id)
-					.global_get(state.shtack_ptr)
-					.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: u32::from(i) * 8 })
-					.local_set(state.locals[&i]);
-			}
-		});
-	}
-
-	while let Some(op) = operations.next() {
-		compile_op(state, &mut operations, &mut builder.func_body(), op);
-	}
-
-	state.locals.clear();
+	f(state, &mut builder.func_body(), arg_cnt);
 
 	builder.finish(vec![arg_cnt], &mut state.module.funcs)
+}
+
+fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> FunctionId {
+	let mut operations = func.operations.iter().copied();
+	let mut func_hash = std::hash::DefaultHasher::new();
+	std::hash::Hash::hash(&func.operations, &mut func_hash);
+	let func_hash = std::hash::Hasher::finish(&func_hash);
+	let name = func.debug.as_ref().and_then(|d| d.func_name().map(|s| format!("{s}_{func_hash:#x}"))).unwrap_or_else(|| format!("<anonymous closure_{func_hash:#x}>"));
+	
+	compile_function(state, name, |state, seq, arg_cnt| {
+		let mut temps = 0;
+		for slot in 0..func.frame_size {
+			let local = state.module.locals.add(ValType::I64);
+			state.locals.insert(slot, local);
+			if let Some(debug) = func.debug.as_ref() {
+				state.module.locals.get_mut(local).name = Some(match debug.get_local_name(slot) {
+					Some(name) => name.to_string(),
+					None => { temps += 1; format!("temp_{temps}") },
+				});
+			}
+		}
+
+		if func.param_count > 0 {
+			seq
+				// Get the number of arguments passed...
+				.local_get(arg_cnt)
+				// And the number of arguments expected...
+				.i32_const(func.param_count.into())
+				// ... And then both again
+				.local_get(arg_cnt)
+				.i32_const(func.param_count.into())
+				// Check if the number of arguments passed is less than the number of arguments expected.
+				.binop(BinaryOp::I32LtU)
+				// Choose the lower value.
+				.select(Some(ValType::I32))
+				// And store it for later use.
+				.local_set(arg_cnt);
+
+			seq.block(None, |seq| {
+				for i in 0..func.param_count {
+					let block_id = seq.id();
+					seq
+						.local_get(arg_cnt)
+						.i32_const(i.into())
+						.binop(BinaryOp::I32LeU)
+						.br_if(block_id)
+						.global_get(state.shtack_ptr)
+						.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: u32::from(i) * 8 })
+						.local_set(state.locals[&i]);
+				}
+			});
+		}
+
+		while let Some(op) = operations.next() {
+			compile_op(state, &mut operations, seq, op);
+		}
+
+		state.locals.clear();
+	})
+
 }
 
 fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut InstrSeqBuilder, op: Op) {
@@ -535,7 +695,7 @@ impl Expr {
 			},
 			Expr::Slot(idx) => Loc::Slot(idx).push_get(state, seq),
 			Expr::UpValue(idx) => Loc::UpValue(idx).push_get(state, seq),
-			Expr::Global(ident) => Loc::Global(ident).push_get(state, seq),
+			Expr::Global(idx) => Loc::Global(idx).push_get(state, seq),
 			Expr::VarRet => {
 				seq.i32_const(0)
 					.binop(BinaryOp::I32Eq)

@@ -19,8 +19,7 @@ pub use functions::{ParsedFunction, Upvalue};
 #[derive(Debug)]
 pub struct Parsed<'s> {
 	pub parsed_func: functions::ParsedFunction,
-	pub strings: Box<[Cow<'s, bstr::BStr>]>,
-	pub closures: Box<[functions::ParsedFunction]>,
+	pub constants: ConstantMap<'s>,
 }
 
 pub trait ParseSrc {
@@ -71,8 +70,7 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<(Parsed<'s>, LexInt
 
 	Ok((Parsed {
 		parsed_func,
-		strings: constants.strings.into_boxed_slice(),
-		closures: constants.closures.into_boxed_slice(),
+		constants,
 	}, lexer.into_interner()))
 }
 
@@ -81,6 +79,24 @@ pub struct ConstantMap<'s> {
 	string_indexes: hashbrown::HashMap<Cow<'s, bstr::BStr>, usize>,
 	strings: Vec<Cow<'s, bstr::BStr>>,
 	closures: Vec<functions::ParsedFunction>,
+}
+impl<'s> ConstantMap<'s> {
+	/// Gets the index of the given string in the constant table, adding it if it doesn't already exist.
+	pub fn get_string(&mut self, string: &'s (impl AsRef<[u8]> + ?Sized)) -> usize {
+		let string = Cow::Borrowed(bstr::BStr::new(string));
+
+		if let Some(&idx) = self.string_indexes.get(&string) {
+			idx
+		} else {
+			let idx = self.strings.len();
+			self.strings.push(string.clone());
+			self.string_indexes.insert(string, idx);
+			idx
+		}
+	}
+
+	pub fn strings(&self) -> &[Cow<'s, bstr::BStr>] { &self.strings }
+	pub fn closures(&self) -> &[functions::ParsedFunction] { &self.closures }
 }
 
 trait LexerExt<'s> {
@@ -139,7 +155,9 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 
 			let idx = state.push_closure(closure);
 
-			state.emit(scope, Op::LoadClosure(Loc::Global(name), idx), span);
+			let name_idx = state.string_idx(lexer.resolve_ident(name), true)?;
+
+			state.emit(scope, Op::LoadClosure(Loc::Global(name_idx), idx), span);
 		},
 		Token::Local => {
 			if lexer.next_if(Token::Function)?.is_some() {

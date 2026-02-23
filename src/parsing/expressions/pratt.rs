@@ -23,7 +23,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl 
 			Token::VarArgs => Expr::VarArgs,
 			Token::Function => todo!(),
 			Token::Number(n) => Expr::Constant(Const::Number(n)),
-			Token::Identifier(ident) => Expr::from_named(scope.resolve_name(state, ident, false)?),
+			Token::Identifier(ident) => Expr::from_named(scope.resolve_name(lexer, state, ident, false)?),
 			Token::String((raw, s)) => Expr::Constant(Const::String(state.string_idx(s, raw)?)),
 			Token::True => Expr::Constant(Const::Bool(true)),
 			Token::False => Expr::Constant(Const::Bool(false)),

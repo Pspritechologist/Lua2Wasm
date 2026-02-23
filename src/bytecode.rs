@@ -1,11 +1,10 @@
 use crate::parsing::expressions::Expr;
-use luant_lexer::IdentKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Loc {
 	Slot(u8),
 	UpValue(u8),
-	Global(IdentKey),
+	Global(usize),
 }
 impl Loc {
 	pub fn as_slot(self) -> Option<u8> {

@@ -18,7 +18,7 @@ pub trait ParseScope<'s> {
 	fn emit_continue(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> { self.parent().emit_continue(state, span) }
 
 	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Loc, Error<'s>> { self.parent().new_local(lexer, state, name) }
-	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> { self.parent().resolve_name(state, name, is_capturing) }
+	fn resolve_name(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> { self.parent().resolve_name(lexer, state, name, is_capturing) }
 	fn total_locals(&mut self) -> u8 { self.parent().total_locals() }
 	fn needs_closing(&mut self) -> bool { self.parent().needs_closing() }
 
@@ -29,7 +29,7 @@ pub trait ParseScope<'s> {
 pub enum Named {
 	Local(u8),
 	UpValue(u8),
-	Global(IdentKey),
+	Global(usize),
 }
 
 /// The root parsing scope.\
@@ -69,12 +69,13 @@ impl<'s> ParseScope<'s> for RootScope {
 		unreachable!()
 	}
 
-	fn resolve_name(&mut self, _state: &mut FuncState<'_, 's>, name: IdentKey, _is_capturing: bool) -> Result<Named, Error<'s>> {
+	fn resolve_name(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey, _is_capturing: bool) -> Result<Named, Error<'s>> {
 		if name == self.env_ident {
 			// The 'main' function of a script always has exactly one upvalue, _ENV, the global environment.
 			Ok(Named::UpValue(0))
 		} else {
-			Ok(Named::Global(name))
+			let idx = state.string_idx(lexer.resolve_ident(name), true)?;
+			Ok(Named::Global(idx))
 		}
 	}
 
@@ -156,7 +157,8 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 		}
 		//TODO: Feels like this should be cached.
 		let slot = self.total_locals();
-		self.locals.insert(name, slot);
+		let op_idx = state.ops().len();
+		self.locals.insert(name, LocalData::new(slot, op_idx));
 		self.local_count += 1;
 		
 		state.declare_local(name);
@@ -168,13 +170,13 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 		Ok(Loc::Slot(slot))
 	}
 
-	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> {
+	fn resolve_name(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> {
 		if let Some(&slot) = self.locals.get(name) {
 			self.has_captured_locals |= is_capturing;
 			return Ok(Named::Local(slot));
 		}
 
-		self.parent.resolve_name(state, name, is_capturing)
+		self.parent.resolve_name(lexer, state, name, is_capturing)
 	}
 
 	fn total_locals(&mut self) -> u8 {

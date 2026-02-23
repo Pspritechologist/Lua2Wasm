@@ -101,13 +101,13 @@ impl<'a, 's> FuncState<'a, 's> {
 				if c == b'\\' {
 					// It's technically impossible for a non-raw string to end with a single backslash.
 					match chars.next().ok_or("Trailing backslash in string")? {
-						b'a' => unescaped.push(b'a'),   // bell.
-						b'b' => unescaped.push(b'a'),   // back space.
-						b'f' => unescaped.push(b'a'),   // form feed.
+						b'a' => unescaped.push(b'\x07'),   // bell.
+						b'b' => unescaped.push(b'\x08'),   // back space.
+						b'f' => unescaped.push(b'\x0b'),   // form feed.
 						b'n' => unescaped.push(b'\n'),  // newline.
 						b'r' => unescaped.push(b'\r'),  // carriage return.
 						b't' => unescaped.push(b'\t'),  // horizontal tab.
-						b'v' => unescaped.push(b'a'),   // vertical tab.
+						b'v' => unescaped.push(b'\x0b'),   // vertical tab.
 						b'\\' => unescaped.push(b'\\'), // backslash.
 						b'"' => unescaped.push(b'"'),   // double quote.
 						b'\'' => unescaped.push(b'\''), // single quote.
@@ -281,12 +281,12 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 		unreachable!()
 	}
 
-	fn resolve_name(&mut self, state: &mut FuncState<'_, 's>, name: IdentKey, _is_capturing: bool) -> Result<Named, Error<'s>> {
+	fn resolve_name(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey, _is_capturing: bool) -> Result<Named, Error<'s>> {
 		if let Some(&(idx, _)) = self.upvalues.get(name) {
 			return Ok(Named::UpValue(idx));
 		}
 
-		Ok(match self.outer_scope.resolve_name(state, name, true)? {
+		Ok(match self.outer_scope.resolve_name(lexer, state, name, true)? {
 			Named::Local(slot) => {
 				let upval_idx = self.upvalues.len().try_into().expect("Too many upvalues :(");
 				self.upvalues.insert(name, (upval_idx, Upvalue::ParentSlot(slot)));
