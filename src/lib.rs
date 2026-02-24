@@ -4,7 +4,7 @@ use bytecode::Operation as Op;
 use luant_lexer::LexInterner;
 use value::Value;
 use walrus::{
-	ConstExpr, DataId, DataKind, ElementItems, ElementKind, ExportItem, FunctionBuilder, FunctionId, GlobalId, GlobalKind, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, TableId, TypeId, ValType, ir::{BinaryOp, LoadKind, MemArg, StoreKind, TryTable, TryTableCatch}
+	ConstExpr, ElementItems, ElementKind, ExportItem, FunctionBuilder, FunctionId, GlobalId, GlobalKind, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, TableId, TypeId, ValType, ir::{BinaryOp, LegacyCatch, LoadKind, MemArg, StoreKind, Try}
 };
 use std::collections::BTreeMap;
 
@@ -420,52 +420,41 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 				.binop(BinaryOp::I32Add)
 				.global_set(state.shtack_ptr);
 
-			seq.block(ValType::I64, |seq| {
-				let catch_label = seq.id();
-
-				// Write the 'try' block...
-				let try_seq = seq.dangling_instr_seq(ValType::I64)
-					// Pass the current arg count minus one, to a minimum of zero.
-					.i32_const(0)
-					.i32_const(1)
-					.local_get(arg_cnt)
-					.binop(BinaryOp::I32Sub)
-					.i32_const(0)
-					.local_get(arg_cnt)
-					.binop(BinaryOp::I32Eq)
-					.select(Some(ValType::I32))
-					// Make the call.
-					.local_get(temp_var)
-					.call(state.extern_fns.get_fn)
-					.call_indirect(state.dyn_call_ty, state.call_tab)
-					// Increase the count to return, accounting for the error flag.
-					.i32_const(1)
-					.binop(BinaryOp::I32Add)
-					// Reset the shtack pointer.
-					.global_get(state.shtack_ptr)
-					.i32_const(1)
-					.binop(BinaryOp::I32Sub)
-					.global_set(state.shtack_ptr)
-					// And prepend the 'success' flag to the return values.
-					.global_get(state.shtack_ptr)
-					.i64_const(Value::bool(true).as_i64())
-					.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
-					// Return the new arg count, still on the stack.
-					.return_()
-					.id();
-
-				// Insert the 'try catch' statement...
-				seq.instr(TryTable {
-					seq: try_seq,
-					catches: vec![TryTableCatch::Catch {
-						tag: error_tag,
-						label: catch_label,
-					}],
-				});
-			});
+			let catch_ty = state.module.types.add(&[ValType::I64], &[]);
+				
+			// Write the 'try' block...
+			let try_seq = seq.dangling_instr_seq(None)
+				// Pass the current arg count minus one, to a minimum of zero.
+				.i32_const(0)
+				.i32_const(1)
+				.local_get(arg_cnt)
+				.binop(BinaryOp::I32Sub)
+				.i32_const(0)
+				.local_get(arg_cnt)
+				.binop(BinaryOp::I32Eq)
+				.select(Some(ValType::I32))
+				// Make the call.
+				.local_get(temp_var)
+				.call(state.extern_fns.get_fn)
+				.call_indirect(state.dyn_call_ty, state.call_tab)
+				// Increase the count to return, accounting for the error flag.
+				.i32_const(1)
+				.binop(BinaryOp::I32Add)
+				// Reset the shtack pointer.
+				.global_get(state.shtack_ptr)
+				.i32_const(1)
+				.binop(BinaryOp::I32Sub)
+				.global_set(state.shtack_ptr)
+				// And prepend the 'success' flag to the return values.
+				.global_get(state.shtack_ptr)
+				.i64_const(Value::bool(true).as_i64())
+				.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
+				// Return the new arg count, still on the stack.
+				.return_()
+				.id();
 
 			// Write the 'catch' block...
-			seq
+			let catch_seq = seq.dangling_instr_seq(catch_ty)
 				// Store the error object for now.
 				.local_set(temp_var)
 				// Reset the shtack pointer.
@@ -483,7 +472,28 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 				.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 8 })
 				// Return the arg count of two.
 				.i32_const(2)
-				.return_();
+				.return_()
+				.id();
+
+			// Write the fallback catch sequence which will perform cleanup and then rethrow the exception...
+			let catch_all_seq = seq.dangling_instr_seq(None)
+				// Reset the shtack pointer.
+				.global_get(state.shtack_ptr)
+				.i32_const(1)
+				.binop(BinaryOp::I32Sub)
+				.global_set(state.shtack_ptr)
+				// Rethrow the error.
+				.rethrow(0)
+				.id();
+
+			// Insert the 'try catch' statement...
+			seq.instr(Try {
+				seq: try_seq,
+				catches: vec![LegacyCatch::Catch {
+					tag: error_tag,
+					handler: catch_seq,
+				}, LegacyCatch::CatchAll { handler: catch_all_seq }],
+			}).unreachable();
 		});
 
 		let pcall_fn_idx = closures.len();
