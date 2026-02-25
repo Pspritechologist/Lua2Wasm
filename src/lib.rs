@@ -3,10 +3,25 @@ use bstr::ByteSlice;
 use bytecode::Operation as Op;
 use luant_lexer::LexInterner;
 use value::Value;
-use walrus::{
-	ConstExpr, ElementItems, ElementKind, ExportItem, FunctionBuilder, FunctionId, GlobalId, GlobalKind, InstrSeqBuilder, LocalId, MemoryId, Module, RefType, TableId, TypeId, ValType, ir::{BinaryOp, LegacyCatch, LoadKind, MemArg, StoreKind, Try}
-};
 use std::collections::BTreeMap;
+use walrus::{
+	ir::{BinaryOp, LoadKind, MemArg, StoreKind, TryTable, TryTableCatch},
+	ConstExpr,
+	ElementItems,
+	ElementKind,
+	FunctionBuilder,
+	FunctionId,
+	GlobalId,
+	GlobalKind,
+	InstrSeqBuilder,
+	LocalId,
+	MemoryId,
+	Module,
+	RefType,
+	TableId,
+	TypeId,
+	ValType,
+};
 
 use crate::{bytecode::{Loc, RetKind}, parsing::expressions::{Const, Expr}};
 
@@ -31,10 +46,16 @@ pub struct State<'s> {
 
 macro_rules! extern_fns {
 	(struct $StructName:ident {
-			$( $field:ident: $name:ident($($in:expr),*) $(-> $($ret:expr),+)? );+ $(;)?
+			$(
+				$(#[$attr:meta])*
+				$field:ident: $name:ident($($in:expr),*) $(-> $($ret:expr),+)?
+			);+ $(;)?
 	}) => {
 		struct $StructName {
-			$( $field: FunctionId, )+
+			$(
+				$(#[$attr])*
+				$field: FunctionId,
+			)+
 		}
 
 		impl $StructName {
@@ -62,8 +83,10 @@ extern_fns! {
 		mul: __luant_mul(I64, I64) -> I64;
 		div: __luant_div(I64, I64) -> I64;
 		eq: __luant_eq(I64, I64) -> I64;
+
 		get_fn: __luant_get_fn(I64) -> I32;
 		get_truthy: __luant_get_truthy(I64) -> I32;
+
 		val_to_i64: __luant_val_to_i64(I64) -> I64;
 		val_to_f64: __luant_val_to_f64(I64) -> F64;
 		val_to_i32: __luant_val_to_i32(I64) -> I32;
@@ -72,12 +95,15 @@ extern_fns! {
 		f64_to_val: __luant_f64_to_val(F64) -> I64;
 		i32_to_val: __luant_i32_to_val(I32) -> I64;
 		f32_to_val: __luant_f32_to_val(F32) -> I64;
+		
 		table_load: __luant_init_tab() -> I64;
 		table_get: __luant_tab_get(I64, I64) -> I64;
 		table_set: __luant_tab_set(I64, I64, I64);
 
-		// Doesn't type check input as a table, and assumes a string key. For internal use.
+		/// Doesn't type check input as a table, and assumes a string key. For internal use.
 		table_get_name: __luant_tab_get_name(I64, I64) -> I64;
+		/// Doesn't type check input as a table, and assumes a string key. For internal use.\
+		/// This takes `value, table, key` unlike other functions for impl reasons.
 		table_set_name: __luant_tab_set_name(I64, I64, I64);
 	}
 }
@@ -123,8 +149,50 @@ fn static_string(state: &State, idx: usize) -> Value {
 }
 
 pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Result<Vec<u8>> {
+	#[derive(Debug, Clone, Copy)]
+	pub struct Strings {
+		pub error: usize,
+		pub pcall: usize,
+		pub expected_args: usize,
+	}
+
+	let internal_strings = {
+		let error = parsed.constants.get_string("error");
+		let pcall = parsed.constants.get_string("pcall");
+		let expected_args = parsed.constants.get_string("Expected at least %d argument(s) to %s, got %d");
+
+		Strings { error, pcall, expected_args }
+	};
+
 	let mut module = walrus::ModuleConfig::default()
 		.parse(include_bytes!("../target/wasm32-unknown-unknown/release/wasm_scratch.wasm"))?;
+
+	// $.rodata         Name of the data section used to store static strings.
+	// $__stack_pointer Name of the global used the store the current stack pointer.
+	//                    This is *decremented* as more stack space is needed and starts *equal* to the rodata pointer.
+	// __data_end       (Export name of a global) The end of the rodata portion, presumably equal to $__stack_pointer + len($.rodata).
+	// __heap_base      (Export name of a global) The start of the heap, just slightly after __data_end.
+
+	let rodata = module.data.iter().find(|d| d.name.as_ref().is_some_and(|n| n == ".rodata")).expect("Module must have rodata section").id();
+	let stack_ptr = module.globals.iter().find(|g| g.name.as_ref().is_some_and(|n| n == "__stack_pointer")).expect("Module must have a stack pointer").id();
+
+	// Append our Lua static strings onto the end of the Rust static strings and shuffle the various pointers accordingly.
+	let GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(string_data_base))) = module.globals.get(stack_ptr).kind else {
+		panic!("Invalid __stack_pointer");
+	};
+
+	// Append our new strings.
+	module.data.get_mut(rodata).value.extend(parsed.constants.strings().iter().flat_map(|s| s.bytes()));
+
+	//? At this point I was previously modifying the memory values within the module to account for the extended rodata section.
+	//? Of course I found out that wasn't working...
+
+	let mut string_data_size = 0;
+	let strings = parsed.constants.strings().iter().map(|s| {
+		let (ptr, len) = (string_data_size as u32, s.len() as u32);
+		string_data_size += s.len();
+		(ptr + string_data_base as u32, len)
+	}).collect();
 
 	let error_tag = {
 		// Exceptions.
@@ -158,78 +226,6 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	let shtack_mem = module.memories.add_local(false, false, 1, Some(1), None);
 	module.memories.get_mut(shtack_mem).name = Some("__luant_shtack".into());
-
-	// $.rodata         Name of the data section used to store static strings.
-	// $__stack_pointer Name of the global used the store the current stack pointer.
-	//                    This is *decremented* as more stack space is needed and starts *equal* to the rodata pointer.
-	// __data_end       (Export name of a global) The end of the rodata portion, presumably equal to $__stack_pointer + len($.rodata).
-	// __heap_base      (Export name of a global) The start of the heap, just slightly after __data_end.
-
-	let rodata = module.data.iter().find(|d| d.name.as_ref().is_some_and(|n| n == ".rodata")).expect("Module must have rodata section").id();
-	let stack_ptr = module.globals.iter().find(|g| g.name.as_ref().is_some_and(|n| n == "__stack_pointer")).expect("Module must have a stack pointer").id();
-	let data_end = module.exports.iter().find_map(|e| (e.name == "__data_end").then(|| {
-		let ExportItem::Global(data_end) = e.item else { panic!("data_end isn't a global") };
-		module.globals.get_mut(data_end).name = Some("__data_end".into());
-		data_end
-	})).expect("Module must have a data end");
-	module.exports.remove("__data_end").unwrap();
-	let heap_base = module.exports.iter().find_map(|e| (e.name == "__heap_base").then(|| {
-		let ExportItem::Global(heap_base) = e.item else { panic!("heap_base isn't a global") };
-		module.globals.get_mut(heap_base).name = Some("__heap_base".into());
-		heap_base
-	})).expect("Module must have a data end");
-	module.exports.remove("__heap_base").unwrap();
-
-	// Append our Lua static strings onto the end of the Rust static strings and shuffle the various pointers accordingly.
-	let GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(string_data_base))) = module.globals.get(stack_ptr).kind else {
-		panic!("Invalid __stack_pointer");
-	};
-
-	struct Strings {
-		error: usize,
-		pcall: usize,
-		expected_args: usize,
-	}
-
-	let internal_strings = {
-		let error = parsed.constants.get_string("error");
-		let pcall = parsed.constants.get_string("pcall");
-		let expected_args = parsed.constants.get_string("Expected at least %d argument(s) to %s, got %d");
-
-		Strings { error, pcall, expected_args }
-	};
-	
-	let mut string_data_size = 0;
-	let strings = parsed.constants.strings().iter().map(|s| {
-		let (ptr, len) = (string_data_size as u32, s.len() as u32);
-		string_data_size += s.len();
-		(ptr + string_data_base as u32, len)
-	}).collect();
-
-	if cfg!(debug_assertions) {
-		let GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(data_end))) = module.globals.get(data_end).kind else {
-			panic!("Invalid __data_end");
-		};
-		let GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(heap_base))) = module.globals.get(heap_base).kind else {
-			panic!("Invalid __heap_base");
-		};
-
-		// heap_base should be the closest 16-byte aligned address after data_end.
-		let expected_heap_base = (data_end + 15) & !15;
-		assert_eq!(heap_base, expected_heap_base, "Heap base isn't correctly aligned after end of data");
-	}
-
-	// Append our new strings.
-	let rodata = &mut module.data.get_mut(rodata).value;
-	rodata.extend(parsed.constants.strings().iter().flat_map(|s| s.bytes()));
-
-	let GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(old_data_end))) = module.globals.get(data_end).kind else {
-		panic!("Invalid __data_end");
-	};
-	
-	let new_data_end = old_data_end + string_data_size as i32;
-	module.globals.get_mut(data_end).kind = GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(new_data_end)));
-	module.globals.get_mut(heap_base).kind = GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32((new_data_end + 15) & !15)));
 
 	let shtack_ptr = module.globals.add_local(ValType::I32, true, false, ConstExpr::Value(walrus::ir::Value::I32(0)));
 	module.globals.get_mut(shtack_ptr).name = Some("__luant_shtack_ptr".into());
@@ -401,9 +397,9 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		
 		let error_fn_idx = closures.len();
 		closures.push(error_fn);
-		seq.local_get(global_tab)
+		seq.i64_const(Value::function(error_fn_idx).as_i64())
+			.local_get(global_tab)
 			.i64_const(static_string(&state, internal_strings.error).as_i64())
-			.i64_const(Value::function(error_fn_idx).as_i64())
 			.call(state.extern_fns.table_set_name);
 		
 		// Load the 'pcall' function into it.
@@ -420,41 +416,52 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 				.binop(BinaryOp::I32Add)
 				.global_set(state.shtack_ptr);
 
-			let catch_ty = state.module.types.add(&[ValType::I64], &[]);
-				
-			// Write the 'try' block...
-			let try_seq = seq.dangling_instr_seq(None)
-				// Pass the current arg count minus one, to a minimum of zero.
-				.i32_const(0)
-				.i32_const(1)
-				.local_get(arg_cnt)
-				.binop(BinaryOp::I32Sub)
-				.i32_const(0)
-				.local_get(arg_cnt)
-				.binop(BinaryOp::I32Eq)
-				.select(Some(ValType::I32))
-				// Make the call.
-				.local_get(temp_var)
-				.call(state.extern_fns.get_fn)
-				.call_indirect(state.dyn_call_ty, state.call_tab)
-				// Increase the count to return, accounting for the error flag.
-				.i32_const(1)
-				.binop(BinaryOp::I32Add)
-				// Reset the shtack pointer.
-				.global_get(state.shtack_ptr)
-				.i32_const(1)
-				.binop(BinaryOp::I32Sub)
-				.global_set(state.shtack_ptr)
-				// And prepend the 'success' flag to the return values.
-				.global_get(state.shtack_ptr)
-				.i64_const(Value::bool(true).as_i64())
-				.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
-				// Return the new arg count, still on the stack.
-				.return_()
-				.id();
+			seq.block(ValType::I64, |seq| {
+				let catch_label = seq.id();
+
+				// Write the 'try' block...
+				let try_seq = seq.dangling_instr_seq(ValType::I64)
+					// Pass the current arg count minus one, to a minimum of zero.
+					.i32_const(0)
+					.i32_const(1)
+					.local_get(arg_cnt)
+					.binop(BinaryOp::I32Sub)
+					.i32_const(0)
+					.local_get(arg_cnt)
+					.binop(BinaryOp::I32Eq)
+					.select(Some(ValType::I32))
+					// Make the call.
+					.local_get(temp_var)
+					.call(state.extern_fns.get_fn)
+					.call_indirect(state.dyn_call_ty, state.call_tab)
+					// Increase the count to return, accounting for the error flag.
+					.i32_const(1)
+					.binop(BinaryOp::I32Add)
+					// Reset the shtack pointer.
+					.global_get(state.shtack_ptr)
+					.i32_const(1)
+					.binop(BinaryOp::I32Sub)
+					.global_set(state.shtack_ptr)
+					// And prepend the 'success' flag to the return values.
+					.global_get(state.shtack_ptr)
+					.i64_const(Value::bool(true).as_i64())
+					.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
+					// Return the new arg count, still on the stack.
+					.return_()
+					.id();
+
+				// Insert the 'try catch' statement...
+				seq.instr(TryTable {
+					seq: try_seq,
+					catches: vec![TryTableCatch::Catch {
+						tag: error_tag,
+						label: catch_label,
+					}],
+				});
+			});
 
 			// Write the 'catch' block...
-			let catch_seq = seq.dangling_instr_seq(catch_ty)
+			seq
 				// Store the error object for now.
 				.local_set(temp_var)
 				// Reset the shtack pointer.
@@ -472,35 +479,14 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 				.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 8 })
 				// Return the arg count of two.
 				.i32_const(2)
-				.return_()
-				.id();
-
-			// Write the fallback catch sequence which will perform cleanup and then rethrow the exception...
-			let catch_all_seq = seq.dangling_instr_seq(None)
-				// Reset the shtack pointer.
-				.global_get(state.shtack_ptr)
-				.i32_const(1)
-				.binop(BinaryOp::I32Sub)
-				.global_set(state.shtack_ptr)
-				// Rethrow the error.
-				.rethrow(0)
-				.id();
-
-			// Insert the 'try catch' statement...
-			seq.instr(Try {
-				seq: try_seq,
-				catches: vec![LegacyCatch::Catch {
-					tag: error_tag,
-					handler: catch_seq,
-				}, LegacyCatch::CatchAll { handler: catch_all_seq }],
-			}).unreachable();
+				.return_();
 		});
 
 		let pcall_fn_idx = closures.len();
 		closures.push(pcall_fn);
-		seq.local_get(global_tab)
+		seq.i64_const(Value::function(pcall_fn_idx).as_i64())
+			.local_get(global_tab)
 			.i64_const(static_string(&state, internal_strings.pcall).as_i64())
-			.i64_const(Value::function(pcall_fn_idx).as_i64())
 			.call(state.extern_fns.table_set_name);
 
 		// Generate a call to the actual main function.

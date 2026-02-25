@@ -103,8 +103,10 @@ impl Value {
 	/// # SAFETY
 	/// The caller must ensure the value is properly tagged after construction.
 	pub unsafe fn idx(idx: usize) -> Self {
-		let bytes = (u32::try_from(idx).unwrap() as i64) << 32;
-		Self::from_i64(bytes)
+		let mut bytes = [0; 8];
+		let idx = u32::try_from(idx).unwrap().to_ne_bytes();
+		bytes[4..8].copy_from_slice(&idx);
+		Self::from_i64(i64::from_ne_bytes(bytes))
 	}
 
 	pub fn meaningful_bits(mut self) -> [u8; 8] {

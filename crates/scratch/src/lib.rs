@@ -1,7 +1,6 @@
 #![feature(trim_prefix_suffix, bstr, wasm_numeric_instr)]
 #![no_std]
 
-
 #[global_allocator]
 static ALLOCATOR: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
@@ -34,7 +33,7 @@ mod binds {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_add(a: i64, b: i64) -> i64 {
+pub extern "C" fn __luant_add(a: i64, b: i64) -> i64 {
 	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
 
 	match (a.get_tag(), b.get_tag()) {
@@ -44,7 +43,7 @@ extern "C" fn __luant_add(a: i64, b: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_sub(a: i64, b: i64) -> i64 {
+pub extern "C" fn __luant_sub(a: i64, b: i64) -> i64 {
 	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
 
 	match (a.get_tag(), b.get_tag()) {
@@ -54,7 +53,7 @@ extern "C" fn __luant_sub(a: i64, b: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_mul(a: i64, b: i64) -> i64 {
+pub extern "C" fn __luant_mul(a: i64, b: i64) -> i64 {
 	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
 
 	match (a.get_tag(), b.get_tag()) {
@@ -64,7 +63,7 @@ extern "C" fn __luant_mul(a: i64, b: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_div(a: i64, b: i64) -> i64 {
+pub extern "C" fn __luant_div(a: i64, b: i64) -> i64 {
 	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
 
 	match (a.get_tag(), b.get_tag()) {
@@ -74,7 +73,7 @@ extern "C" fn __luant_div(a: i64, b: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_eq(a: i64, b: i64) -> i64 {
+pub extern "C" fn __luant_eq(a: i64, b: i64) -> i64 {
 	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
 
 	match (a.get_tag(), b.get_tag()) {
@@ -84,7 +83,7 @@ extern "C" fn __luant_eq(a: i64, b: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_get_fn(func: i64) -> extern "C" fn(usize) -> usize {
+pub extern "C" fn __luant_get_fn(func: i64) -> extern "C" fn(usize) -> usize {
 	let func = Value::from_i64(func);
 
 	match func.get_tag() {
@@ -99,7 +98,7 @@ extern "C" fn __luant_get_fn(func: i64) -> extern "C" fn(usize) -> usize {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_get_truthy(value: i64) -> i32 {
+pub extern "C" fn __luant_get_truthy(value: i64) -> i32 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Nil => 0,
@@ -109,7 +108,7 @@ extern "C" fn __luant_get_truthy(value: i64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_val_to_i64(value: i64) -> i64 {
+pub extern "C" fn __luant_val_to_i64(value: i64) -> i64 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as i64,
@@ -118,12 +117,12 @@ extern "C" fn __luant_val_to_i64(value: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_i64_to_val(value: i64) -> i64 {
+pub extern "C" fn __luant_i64_to_val(value: i64) -> i64 {
 	Value::float(value as f64).as_i64()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_val_to_f64(value: i64) -> f64 {
+pub extern "C" fn __luant_val_to_f64(value: i64) -> f64 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num(),
@@ -132,12 +131,12 @@ extern "C" fn __luant_val_to_f64(value: i64) -> f64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_f64_to_val(value: f64) -> i64 {
+pub extern "C" fn __luant_f64_to_val(value: f64) -> i64 {
 	Value::float(value).as_i64()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_val_to_i32(value: i64) -> i32 {
+pub extern "C" fn __luant_val_to_i32(value: i64) -> i32 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as i32,
@@ -146,12 +145,12 @@ extern "C" fn __luant_val_to_i32(value: i64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_i32_to_val(value: i32) -> i64 {
+pub extern "C" fn __luant_i32_to_val(value: i32) -> i64 {
 	Value::float(value as f64).as_i64()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_val_to_f32(value: i64) -> f32 {
+pub extern "C" fn __luant_val_to_f32(value: i64) -> f32 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as f32,
@@ -160,17 +159,17 @@ extern "C" fn __luant_val_to_f32(value: i64) -> f32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_f32_to_val(value: f32) -> i64 {
+pub extern "C" fn __luant_f32_to_val(value: f32) -> i64 {
 	Value::float(value as f64).as_i64()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_init_tab() -> i64 {
+pub extern "C" fn __luant_init_tab() -> i64 {
 	Value::new_table().as_i64()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_tab_get(table: i64, key: i64) -> i64 {
+pub extern "C" fn __luant_tab_get(table: i64, key: i64) -> i64 {
 	let table = Value::from_i64(table);
 	let key = Value::from_i64(key);
 
@@ -182,7 +181,7 @@ extern "C" fn __luant_tab_get(table: i64, key: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_tab_set(table: i64, key: i64, value: i64) {
+pub extern "C" fn __luant_tab_set(table: i64, key: i64, value: i64) {
 	let table = Value::from_i64(table);
 	let key = Value::from_i64(key);
 	let value = Value::from_i64(value);
@@ -199,7 +198,7 @@ extern "C" fn __luant_tab_set(table: i64, key: i64, value: i64) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn __luant_tab_get_name(table: i64, key: i64) -> i64 {
+pub extern "C" fn __luant_tab_get_name(table: i64, key: i64) -> i64 {
 	let table = Value::from_i64(table);
 	let key = Value::from_i64(key);
 	
@@ -212,7 +211,7 @@ extern "C" fn __luant_tab_get_name(table: i64, key: i64) -> i64 {
 
 #[unsafe(no_mangle)]
 // `value` is the first param here for impl reasons on the WASM side...
-extern "C" fn __luant_tab_set_name(value: i64, table: i64, key: i64) {
+pub extern "C" fn __luant_tab_set_name(value: i64, table: i64, key: i64) {
 	let table = Value::from_i64(table);
 	let key = Value::from_i64(key);
 	let value = Value::from_i64(value);
@@ -230,7 +229,6 @@ extern "C" fn __luant_tab_set_name(value: i64, table: i64, key: i64) {
 		_ if cfg!(debug_assertions) => panic!("Attempted to set_name with non-string key"),
 		_ => unsafe { core::hint::unreachable_unchecked() },
 	}
-
 }
 
 #[panic_handler]
