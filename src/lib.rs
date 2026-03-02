@@ -4,23 +4,8 @@ use bytecode::Operation as Op;
 use luant_lexer::LexInterner;
 use value::Value;
 use std::collections::BTreeMap;
-use walrus::{
-	ir::{BinaryOp, LoadKind, MemArg, StoreKind, TryTable, TryTableCatch},
-	ConstExpr,
-	ElementItems,
-	ElementKind,
-	FunctionBuilder,
-	FunctionId,
-	GlobalId,
-	GlobalKind,
-	InstrSeqBuilder,
-	LocalId,
-	MemoryId,
-	Module,
-	RefType,
-	TableId,
-	TypeId,
-	ValType,
+use wasm_encoder::{
+	BlockType, Catch, CodeSection, ConstExpr, ElementSection, Elements, EntityType, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection, Instruction, InstructionSink, LinkingSection, MemArg, MemorySection, MemoryType, Module, RefType, StartSection, SymbolTable, TableSection, TableType, TagKind, TagSection, TagType, TypeSection, ValType
 };
 
 use crate::{bytecode::{Loc, RetKind}, parsing::expressions::{Const, Expr}};
@@ -29,48 +14,78 @@ pub mod parsing;
 mod bytecode;
 mod debug;
 
-pub struct State<'s> {
+struct State<'s> {
 	module: Module,
-	memory: MemoryId,
-	shtack_mem: MemoryId,
-	dyn_call_ty: TypeId,
-	call_tab: TableId,
-	locals: BTreeMap<u8, LocalId>,
-	shtack_ptr: GlobalId,
+	symbol_table: SymbolTable,
+	types_sect: TypeSection,
+	import_sect: ImportSection,
+	table_sect: TableSection,
+	memory_sect: MemorySection,
+	tag_sect: TagSection,
+	global_sect: GlobalSection,
+	export_sect: ExportSection,
+	element_sect: ElementSection,
+	function_sect: FunctionSection,
+	function_count: u32,
+	code_sect: CodeSection,
+	memory: u32,
+	shtack_mem: u32,
+	dyn_call_ty: u32,
+	call_tab: u32,
+	locals: BTreeMap<u8, u32>,
+	shtack_ptr: u32,
 	strings: Box<[(u32, u32)]>,
-	closures: Box<[Option<FunctionId>]>,
+	closures: Box<[Option<u32>]>,
 	extern_fns: ExternFns,
 	interner: LexInterner<'s>,
-	global_table: GlobalId,
+	global_table: u32,
+}
+
+struct TypeHandler {
+	
 }
 
 macro_rules! extern_fns {
 	(struct $StructName:ident {
 			$(
 				$(#[$attr:meta])*
-				$field:ident: $name:ident($($in:expr),*) $(-> $($ret:expr),+)?
+				$field:ident $(: $name:ident)? ($($in:expr),*) $(-> $($ret:expr),+)?
 			);+ $(;)?
 	}) => {
 		struct $StructName {
 			$(
 				$(#[$attr])*
-				$field: FunctionId,
+				$field: u32,
 			)+
 		}
 
 		impl $StructName {
-			fn init(module: &Module) -> Self {
+			fn init(types_section: &mut TypeSection, import_sect: &mut ImportSection, symbol_table: &mut SymbolTable) -> (u32, Self) {
 				use ValType::*;
+
+				let mut name_buf = String::new();
+				let mut count = 0;
+
 				$(
-					let $field = module.funcs.by_name(stringify!($name)).expect(concat!("Failed to find extern fn: ", stringify!($name)));
-					let ty = module.types.get(module.funcs.get($field).ty());
-					debug_assert_eq!(ty.params(), &[$( $in ),*]);
-					debug_assert_eq!(ty.results(), &[$( $( $ret ),* )?]);
+					#[allow(unused)]
+					let name = stringify!($field);
+					$(let name = stringify!($name);)?
+
+					let fn_type = types_section.len();
+					types_section.ty().function([ $($in),* ], [ $($($ret),+)? ]);
+					let $field = count;
+					import_sect.import("__luant_internal", name, EntityType::Function(fn_type));
+					name_buf.push_str("__luant_");
+					name_buf.push_str(name);
+					symbol_table.function(SymbolTable::WASM_SYM_UNDEFINED | SymbolTable::WASM_SYM_EXPLICIT_NAME, $field, Some(&name_buf));
+					name_buf.clear();
+
+					count += 1;
 				)+
 
-				Self {
+				(count, Self {
 					$( $field, )+
-				}
+				})
 			}
 		}
 	}
@@ -78,47 +93,47 @@ macro_rules! extern_fns {
 
 extern_fns! {
 	struct ExternFns {
-		add: __luant_add(I64, I64) -> I64;
-		sub: __luant_sub(I64, I64) -> I64;
-		mul: __luant_mul(I64, I64) -> I64;
-		div: __luant_div(I64, I64) -> I64;
-		eq: __luant_eq(I64, I64) -> I64;
+		add(I64, I64) -> I64;
+		sub(I64, I64) -> I64;
+		mul(I64, I64) -> I64;
+		div(I64, I64) -> I64;
+		eq(I64, I64) -> I64;
 
-		get_fn: __luant_get_fn(I64) -> I32;
-		get_truthy: __luant_get_truthy(I64) -> I32;
+		get_fn(I64) -> I32;
+		get_truthy(I64) -> I32;
 
-		val_to_i64: __luant_val_to_i64(I64) -> I64;
-		val_to_f64: __luant_val_to_f64(I64) -> F64;
-		val_to_i32: __luant_val_to_i32(I64) -> I32;
-		val_to_f32: __luant_val_to_f32(I64) -> F32;
-		i64_to_val: __luant_i64_to_val(I64) -> I64;
-		f64_to_val: __luant_f64_to_val(F64) -> I64;
-		i32_to_val: __luant_i32_to_val(I32) -> I64;
-		f32_to_val: __luant_f32_to_val(F32) -> I64;
+		val_to_i64(I64) -> I64;
+		val_to_f64(I64) -> F64;
+		val_to_i32(I64) -> I32;
+		val_to_f32(I64) -> F32;
+		i64_to_val(I64) -> I64;
+		f64_to_val(F64) -> I64;
+		i32_to_val(I32) -> I64;
+		f32_to_val(F32) -> I64;
 		
-		table_load: __luant_init_tab() -> I64;
-		table_get: __luant_tab_get(I64, I64) -> I64;
-		table_set: __luant_tab_set(I64, I64, I64);
+		table_load: init_tab() -> I64;
+		table_get: tab_get(I64, I64) -> I64;
+		table_set: tab_set(I64, I64, I64);
 
 		/// Doesn't type check input as a table, and assumes a string key. For internal use.
-		table_get_name: __luant_tab_get_name(I64, I64) -> I64;
+		table_get_name: tab_get_name(I64, I64) -> I64;
 		/// Doesn't type check input as a table, and assumes a string key. For internal use.\
 		/// This takes `value, table, key` unlike other functions for impl reasons.
-		table_set_name: __luant_tab_set_name(I64, I64, I64);
+		table_set_name: tab_set_name(I64, I64, I64);
 	}
 }
 
 trait ValueExt {
-	fn push(self, seq: &mut InstrSeqBuilder);
+	fn push(self, seq: &mut InstructionSink);
 }
 impl ValueExt for Value {
-	fn push(self, seq: &mut InstrSeqBuilder) {
+	fn push(self, seq: &mut InstructionSink) {
 		seq.i64_const(self.as_i64());
 	}
 }
 
 impl Loc {
-	fn push_get(self, state: &mut State, seq: &mut InstrSeqBuilder) {
+	fn push_get(self, state: &mut State, seq: &mut InstructionSink) {
 		match self {
 			Loc::Slot(idx) => { seq.local_get(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
@@ -130,7 +145,7 @@ impl Loc {
 		};
 	}
 
-	fn push_set(self, state: &mut State, seq: &mut InstrSeqBuilder) {
+	fn push_set(self, state: &mut State, seq: &mut InstructionSink) {
 		match self {
 			Loc::Slot(idx) => { seq.local_set(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
@@ -164,25 +179,10 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		Strings { error, pcall, expected_args }
 	};
 
-	let mut module = walrus::ModuleConfig::default()
-		.parse(include_bytes!("../target/wasm32-unknown-unknown/release/wasm_scratch.wasm"))?;
-
-	// $.rodata         Name of the data section used to store static strings.
-	// $__stack_pointer Name of the global used the store the current stack pointer.
-	//                    This is *decremented* as more stack space is needed and starts *equal* to the rodata pointer.
-	// __data_end       (Export name of a global) The end of the rodata portion, presumably equal to $__stack_pointer + len($.rodata).
-	// __heap_base      (Export name of a global) The start of the heap, just slightly after __data_end.
-
-	let rodata = module.data.iter().find(|d| d.name.as_ref().is_some_and(|n| n == ".rodata")).expect("Module must have rodata section").id();
-	let stack_ptr = module.globals.iter().find(|g| g.name.as_ref().is_some_and(|n| n == "__stack_pointer")).expect("Module must have a stack pointer").id();
-
-	// Append our Lua static strings onto the end of the Rust static strings and shuffle the various pointers accordingly.
-	let GlobalKind::Local(ConstExpr::Value(walrus::ir::Value::I32(string_data_base))) = module.globals.get(stack_ptr).kind else {
-		panic!("Invalid __stack_pointer");
-	};
+	let mut module = Module::new();
 
 	// Append our new strings.
-	module.data.get_mut(rodata).value.extend(parsed.constants.strings().iter().flat_map(|s| s.bytes()));
+	// module.data.get_mut(rodata).value.extend(parsed.constants.strings().iter().flat_map(|s| s.bytes()));
 
 	//? At this point I was previously modifying the memory values within the module to account for the extended rodata section.
 	//? Of course I found out that wasn't working...
@@ -191,178 +191,75 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	let strings = parsed.constants.strings().iter().map(|s| {
 		let (ptr, len) = (string_data_size as u32, s.len() as u32);
 		string_data_size += s.len();
-		(ptr + string_data_base as u32, len)
+		(ptr, len)
 	}).collect();
+	
+	let mut symbol_table = SymbolTable::new();
+	let mut types_sect = TypeSection::new();
+	let mut import_sect = ImportSection::new();
+	let mut table_sect = TableSection::new();
+	let mut memory_sect = MemorySection::new();
+	let mut tag_sect = TagSection::new();
+	let mut global_sect = GlobalSection::new();
+	let mut export_sect = ExportSection::new();
+	let mut element_sect = ElementSection::new();
+	let mut function_sect = FunctionSection::new();
+	let mut code_sect = CodeSection::new();
 
-	let error_tag = {
-		// Exceptions.
-		let error_handler_sig = module.types.add(&[ValType::I64], &[]);
-		module.types.get_mut(error_handler_sig).name = Some("__luant_error_handler".into());
-		let error_tag = module.tags.add(error_handler_sig);
-		// let error_glob = module.globals.add_local(ValType::I64, true, false, ConstExpr::Value(walrus::ir::Value::I64(0)));
-		let throw_fn = module.imports.get_func("__luant", "throw")?;
-		module.replace_imported_func(throw_fn, |(seq, args)| {
-			let input = args[0];
-			seq.name("__luant_throw_error".into())
-				.func_body()
-				.local_get(input)
-				// .global_set(error_glob)
-				.throw(error_tag);
-		})?;
+	import_sect.import("__internal", "memory", MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: None });
+	memory_sect.memory(MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: Some(1) });
 
-		error_tag
-	};
+	global_sect.global(GlobalType { val_type: ValType::I32, mutable: true, shared: false }, &ConstExpr::i32_const(0));
+	global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
+	symbol_table.global(SymbolTable::WASM_SYM_BINDING_LOCAL, 0, None);
+	symbol_table.global(SymbolTable::WASM_SYM_BINDING_LOCAL, 1, None);
 
-	let mut skipped = 0;
-	while let Some(e) = { module.exports.iter().nth(skipped) } {
-		if e.name.starts_with("__luant") {
-			module.exports.delete(e.id());
-		} else {
-			skipped += 1;
-		}
-	}
+	types_sect.ty().function([ValType::I32], [ValType::I32]);
 
-	let memory = module.get_memory_id().expect("Input module must have a memory");
-
-	let shtack_mem = module.memories.add_local(false, false, 1, Some(1), None);
-	module.memories.get_mut(shtack_mem).name = Some("__luant_shtack".into());
-
-	let shtack_ptr = module.globals.add_local(ValType::I32, true, false, ConstExpr::Value(walrus::ir::Value::I32(0)));
-	module.globals.get_mut(shtack_ptr).name = Some("__luant_shtack_ptr".into());
-
-	let dyn_call_ty = module.types.add(&[ValType::I32], &[ValType::I32]);
-	let call_tab = module.tables.main_function_table()?.unwrap_or_else(|| {
-		module.tables.add_local(false, 0, None, RefType::FUNCREF)
+	import_sect.import("__luant_internal", "__indirect_function_table", TableType {
+		element_type: RefType::FUNCREF,
+		table64: false,
+		minimum: 0,
+		maximum: None,
+		shared: false,
 	});
+	symbol_table.table(SymbolTable::WASM_SYM_UNDEFINED | SymbolTable::WASM_SYM_EXPLICIT_NAME, 0, None);
 
-	let global_table = module.globals.add_local(ValType::I64, true, false, ConstExpr::Value(walrus::ir::Value::I64(0)));
-	module.globals.get_mut(global_table).name = Some("__luant_global_table".into());
+	let (function_count, extern_fns) = ExternFns::init(&mut types_sect, &mut import_sect, &mut symbol_table);
+
+	tag_sect.tag(TagType { kind: TagKind::Exception, func_type_idx: types_sect.len() });
+	types_sect.ty().function([ValType::I64], []);
 
 	let mut state = State {
-		dyn_call_ty,
-		call_tab,
+		dyn_call_ty: 0,
+		call_tab: 0,
 		locals: Default::default(),
-		shtack_ptr,
+		shtack_ptr: 0,
 		strings,
-		memory,
-		shtack_mem,
+		memory: 0,
+		shtack_mem: 1,
 		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
-		extern_fns: ExternFns::init(&module),
+		function_count,
+		extern_fns,
 		interner,
 		module,
-		global_table,
+		global_table: 1,
+		symbol_table,
+		types_sect,
+		import_sect,
+		table_sect,
+		memory_sect,
+		tag_sect,
+		global_sect,
+		export_sect,
+		element_sect,
+		function_sect,
+		code_sect,
 	};
 
 	for (i, func) in parsed.constants.closures().iter().enumerate().rev() {
 		let id = compile_luant_function(&mut state, func);
 		state.closures[i + 1] = Some(id);
-
-		if let Some((name, type_sig)) = &func.exported {
-			let mut type_sig = type_sig.strip_prefix(b"fn(").ok_or_else(|| anyhow::Error::msg("Invalid export attribute format"))?;
-			let mut params = vec![];
-			
-			loop {
-				if let Some(next) = type_sig.strip_prefix(b")") {
-					type_sig = next.trim();
-					break;
-				}
-
-				type_sig = match type_sig {
-					[ b'i',b'6',b'4', r@.. ] => { params.push(ValType::I64); r },
-					[ b'i',b'3',b'2', r@.. ] => { params.push(ValType::I32); r },
-					[ b'f',b'6',b'4', r@.. ] => { params.push(ValType::F64); r },
-					[ b'f',b'3',b'2', r@.. ] => { params.push(ValType::F32); r },
-					_ => return Err(anyhow::Error::msg("Invalid export attribute format")),
-				}.trim();
-				
-				if let Some(next) = type_sig.strip_prefix(b",") {
-					type_sig = next.trim();
-				}
-			}
-
-			let mut rets = vec![];
-			if let Some(next) = type_sig.strip_prefix(b"->") {
-				type_sig = next.trim();
-
-				loop {
-					if type_sig.is_empty() {
-						break;
-					}
-
-					type_sig = match type_sig {
-						[ b'i',b'6',b'4', r@.. ] => { rets.push(ValType::I64); r },
-						[ b'i',b'3',b'2', r@.. ] => { rets.push(ValType::I32); r },
-						[ b'f',b'6',b'4', r@.. ] => { rets.push(ValType::F64); r },
-						[ b'f',b'3',b'2', r@.. ] => { rets.push(ValType::F32); r },
-						_ => return Err(anyhow::Error::msg("Invalid export attribute format")),
-					}.trim();
-
-					if let Some(next) = type_sig.strip_prefix(b",") {
-						type_sig = next.trim();
-					}
-				}
-			}
-
-			let mut builder = FunctionBuilder::new(&mut state.module.types, &params, &rets);
-			builder.name(["__luant_shim_", name.as_str()].concat());
-
-			let mut seq = builder.func_body();
-			
-			let args = params.iter().enumerate().map(|(i, param)| {
-				let arg = state.module.locals.add(*param);
-				seq.global_get(state.shtack_ptr).local_get(arg);
-
-				match param {
-					ValType::I32 => seq.call(state.extern_fns.i32_to_val),
-					ValType::I64 => seq.call(state.extern_fns.i64_to_val),
-					ValType::F32 => seq.call(state.extern_fns.f32_to_val),
-					ValType::F64 => seq.call(state.extern_fns.f64_to_val),
-					ValType::V128 => todo!(),
-					ValType::Ref(_) => todo!(),
-				}.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
-				arg
-			}).collect();
-
-			// Make the dynamic call...
-			seq
-				.i32_const(params.len() as i32)
-				.call(id);
-
-			// Handle the dynamic return values...
-			if rets.is_empty() {
-				seq.drop();
-			} else {
-				let arg_cnt = state.module.locals.add(ValType::I32);
-				seq.local_set(arg_cnt);
-
-				seq.block(None, |seq| {
-					let block_id = seq.id();
-					for (i, r) in rets.iter().enumerate() {
-						seq.local_get(arg_cnt)
-							.i32_const(i as i32)
-							.binop(BinaryOp::I32LeU)
-							.br_if(block_id)
-							.global_get(state.shtack_ptr)
-							.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
-
-						match r {
-							ValType::I32 => seq.call(state.extern_fns.val_to_i32),
-							ValType::I64 => seq.call(state.extern_fns.val_to_i64),
-							ValType::F32 => seq.call(state.extern_fns.val_to_f32),
-							ValType::F64 => seq.call(state.extern_fns.val_to_f64),
-							ValType::V128 => todo!(),
-							ValType::Ref(_) => todo!(),
-						};
-					}
-
-					seq.return_();
-				});
-
-				seq.unreachable(); //TODO: This needs to actually be handled.
-			}
-
-			state.module.exports.add(name, builder.finish(args, &mut state.module.funcs));
-		}
 	}
 
 	let mut main_fn = parsed.parsed_func;
@@ -377,10 +274,12 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	let mut closures: Vec<_> = state.closures.iter().copied().map(Option::unwrap).collect();
 
 	let start_fn = {
-		let mut builder = FunctionBuilder::new(&mut state.module.types, &[], &[]);
-		let mut seq = builder.name("__luant_shim_<main>".into()).func_body();
+		let mut builder = Function::new_with_locals_types([ValType::I64]);
+		// let mut seq = builder.name("__luant_shim_<main>".into()).func_body();
+		let mut seq = builder.instructions();
 
-		let global_tab = state.module.locals.add(ValType::I64);
+		// let global_tab = state.module.locals.add(ValType::I64);
+		let global_tab = 0;
 
 		// Initialize the global table.
 		seq.call(state.extern_fns.table_load)
@@ -388,10 +287,11 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 			.global_set(state.global_table);
 
 		// Load the 'error' function into it.
-		let error_fn = compile_function(&mut state, "__luant_std_error", |state, seq, _| {
+		let error_fn = compile_function(&mut state, "__luant_std_error", 0, |state, seq| {
 			seq.global_get(state.shtack_ptr)
-				.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
-				.throw(error_tag)
+				// .load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 3, offset: 0 })
+				.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem }) //TODO: This assumes the first arg is null if not provided...
+				.throw(0)
 				.i32_const(0);
 		});
 		
@@ -403,62 +303,56 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 			.call(state.extern_fns.table_set_name);
 		
 		// Load the 'pcall' function into it.
-		let pcall_fn = compile_function(&mut state, "__luant_std_pcall", |state, seq, arg_cnt| {
-			let temp_var = state.module.locals.add(ValType::I64);
+		let pcall_fn = compile_function(&mut state, "__luant_std_pcall", 1, |state, seq| {
+			let arg_cnt = 0;
+			let temp_var = 1;
 
 			seq.global_get(state.shtack_ptr)
-				.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
+				// .load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 3, offset: 0 })
+				.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem }) //TODO: This assumes the first arg is null if not provided...
 				.local_set(temp_var);
 
 			// Increase the stack pointer by one to remove the first arg.
 			seq.global_get(state.shtack_ptr)
 				.i32_const(1)
-				.binop(BinaryOp::I32Add)
+				.i32_add()
 				.global_set(state.shtack_ptr);
 
-			seq.block(ValType::I64, |seq| {
-				let catch_label = seq.id();
+			seq.block(BlockType::Result(ValType::I64))
+				.try_table(BlockType::Result(ValType::I64), [Catch::One { tag: 0, label: 0 }]);
 
-				// Write the 'try' block...
-				let try_seq = seq.dangling_instr_seq(ValType::I64)
-					// Pass the current arg count minus one, to a minimum of zero.
-					.i32_const(0)
-					.i32_const(1)
-					.local_get(arg_cnt)
-					.binop(BinaryOp::I32Sub)
-					.i32_const(0)
-					.local_get(arg_cnt)
-					.binop(BinaryOp::I32Eq)
-					.select(Some(ValType::I32))
-					// Make the call.
-					.local_get(temp_var)
-					.call(state.extern_fns.get_fn)
-					.call_indirect(state.dyn_call_ty, state.call_tab)
-					// Increase the count to return, accounting for the error flag.
-					.i32_const(1)
-					.binop(BinaryOp::I32Add)
-					// Reset the shtack pointer.
-					.global_get(state.shtack_ptr)
-					.i32_const(1)
-					.binop(BinaryOp::I32Sub)
-					.global_set(state.shtack_ptr)
-					// And prepend the 'success' flag to the return values.
-					.global_get(state.shtack_ptr)
-					.i64_const(Value::bool(true).as_i64())
-					.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
-					// Return the new arg count, still on the stack.
-					.return_()
-					.id();
+			// Write the 'try' block...
+			seq
+				// Pass the current arg count minus one, to a minimum of zero.
+				.i32_const(0)
+				.i32_const(1)
+				.local_get(arg_cnt)
+				.i32_sub()
+				.i32_const(0)
+				.local_get(arg_cnt)
+				.i32_eq()
+				.typed_select(ValType::I32)
+				// Make the call.
+				.local_get(temp_var)
+				.call(state.extern_fns.get_fn)
+				.call_indirect(state.dyn_call_ty, state.call_tab)
+				// Increase the count to return, accounting for the error flag.
+				.i32_const(1)
+				.i32_add()
+				// Reset the shtack pointer.
+				.global_get(state.shtack_ptr)
+				.i32_const(1)
+				.i32_sub()
+				.global_set(state.shtack_ptr)
+				// And prepend the 'success' flag to the return values.
+				.global_get(state.shtack_ptr)
+				.i64_const(Value::bool(true).as_i64())
+				.i64_store(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
+				// Return the new arg count, still on the stack.
+				.return_()
+				.end();
 
-				// Insert the 'try catch' statement...
-				seq.instr(TryTable {
-					seq: try_seq,
-					catches: vec![TryTableCatch::Catch {
-						tag: error_tag,
-						label: catch_label,
-					}],
-				});
-			});
+			seq.end();
 
 			// Write the 'catch' block...
 			seq
@@ -467,16 +361,16 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 				// Reset the shtack pointer.
 				.global_get(state.shtack_ptr)
 				.i32_const(1)
-				.binop(BinaryOp::I32Sub)
+				.i32_sub()
 				.global_set(state.shtack_ptr)
 				// Prepend the 'error' flag to the return values.
 				.global_get(state.shtack_ptr)
 				.i64_const(Value::bool(false).as_i64())
-				.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 })
+				.i64_store(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
 				// Set the error object as the second return value.
 				.global_get(state.shtack_ptr)
 				.local_get(temp_var)
-				.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: 8 })
+				.i64_store(MemArg { align: 3, offset: 8, memory_index: state.shtack_mem })
 				// Return the arg count of two.
 				.i32_const(2)
 				.return_();
@@ -494,59 +388,74 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 			.call(main_fn)
 			.drop();
 
-		builder.finish(vec![], &mut state.module.funcs)
+		seq.end();
+
+		let id = state.function_count;
+		state.function_count += 1;
+
+		state.code_sect.function(&builder);
+		state.function_sect.function(state.types_sect.len());
+		state.types_sect.ty().function([], []);
+
+		id
 	};
-	
-	state.module.exports.add("main", start_fn);
-	state.module.start = Some(start_fn); //FIXME: Probably a bad idea :P
 
-	{
-		let func_tab = state.module.tables.get_mut(state.call_tab);
-		func_tab.name = Some("__luant_call_table".into());
-		func_tab.initial = closures.len() as u64;
-		func_tab.maximum = Some(closures.len() as u64);
-		
-		state.module.elements.add(ElementKind::Active {
-			table: state.call_tab,
-			offset: ConstExpr::Value(walrus::ir::Value::I32(func_tab.elem_segments.len() as i32)),
-		}, ElementItems::Functions(closures));
+	let mut module = state.module;
 
-		func_tab.maximum = None;
-	}
+	state.symbol_table.function(SymbolTable::WASM_SYM_NO_STRIP, start_fn, None);
+	state.element_sect.active(Some(state.call_tab), &ConstExpr::i32_const(0), Elements::Functions(closures.into()));
 
-	Ok(state.module.emit_wasm())
+	module
+		.section(&state.types_sect)
+		.section(&state.import_sect)
+		.section(&state.function_sect)
+		.section(&state.table_sect)
+		.section(&state.memory_sect)
+		.section(&state.tag_sect)
+		.section(&state.global_sect)
+		.section(&state.export_sect)
+		.section(&StartSection { function_index: start_fn })
+		.section(&state.element_sect)
+		.section(&state.code_sect)
+		.section(LinkingSection::new().symbol_table(&state.symbol_table));
+
+	Ok(module.finish())
 }
 
-fn compile_function(state: &mut State, name: impl Into<String>, f: impl FnOnce(&mut State, &mut InstrSeqBuilder, LocalId)) -> FunctionId {
-	let mut builder = FunctionBuilder::new(&mut state.module.types, &[ValType::I32], &[ValType::I32]);
-	builder.name(name.into());
+fn compile_function(state: &mut State, name: impl Into<String>, locals: u32, f: impl FnOnce(&mut State, &mut InstructionSink)) -> u32 {
+	let idx = state.function_count;
+	state.function_count += 1;
 
-	let arg_cnt = state.module.locals.add(ValType::I32);
-	state.module.locals.get_mut(arg_cnt).name = Some("__fn_arg_cnt".into());
+	let mut builder = Function::new([(locals, ValType::I64)]);
+	f(state, &mut builder.instructions());
+	builder.instruction(&Instruction::End);
+	state.code_sect.function(&builder);
+	state.function_sect.function(state.dyn_call_ty);
 
-	f(state, &mut builder.func_body(), arg_cnt);
+	state.symbol_table.function(SymbolTable::WASM_SYM_BINDING_LOCAL, idx, None);
 
-	builder.finish(vec![arg_cnt], &mut state.module.funcs)
+	idx
 }
 
-fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> FunctionId {
+fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> u32 {
 	let mut operations = func.operations.iter().copied();
 	let mut func_hash = std::hash::DefaultHasher::new();
 	std::hash::Hash::hash(&func.operations, &mut func_hash);
 	let func_hash = std::hash::Hasher::finish(&func_hash);
 	let name = func.debug.as_ref().and_then(|d| d.func_name().map(|s| format!("{s}_{func_hash:#x}"))).unwrap_or_else(|| format!("<anonymous closure_{func_hash:#x}>"));
 	
-	compile_function(state, name, |state, seq, arg_cnt| {
+	compile_function(state, name, func.frame_size.into(), |state, seq| {
+		let arg_cnt = 0;
+
 		let mut temps = 0;
-		for slot in 0..func.frame_size {
-			let local = state.module.locals.add(ValType::I64);
-			state.locals.insert(slot, local);
-			if let Some(debug) = func.debug.as_ref() {
-				state.module.locals.get_mut(local).name = Some(match debug.get_local_name(slot) {
-					Some(name) => name.to_string(),
-					None => { temps += 1; format!("temp_{temps}") },
-				});
-			}
+		for (i, slot) in (0..func.frame_size).enumerate() {
+			state.locals.insert(slot, i as u32 + 1); // Account for the argument slot at 0.
+			// if let Some(debug) = func.debug.as_ref() {
+			// 	state.module.locals.get_mut(local).name = Some(match debug.get_local_name(slot) {
+			// 		Some(name) => name.to_string(),
+			// 		None => { temps += 1; format!("temp_{temps}") },
+			// 	});
+			// }
 		}
 
 		if func.param_count > 0 {
@@ -559,25 +468,24 @@ fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> 
 				.local_get(arg_cnt)
 				.i32_const(func.param_count.into())
 				// Check if the number of arguments passed is less than the number of arguments expected.
-				.binop(BinaryOp::I32LtU)
+				.i32_lt_u()
 				// Choose the lower value.
-				.select(Some(ValType::I32))
+				.typed_select(ValType::I32)
 				// And store it for later use.
 				.local_set(arg_cnt);
 
-			seq.block(None, |seq| {
-				for i in 0..func.param_count {
-					let block_id = seq.id();
-					seq
-						.local_get(arg_cnt)
-						.i32_const(i.into())
-						.binop(BinaryOp::I32LeU)
-						.br_if(block_id)
-						.global_get(state.shtack_ptr)
-						.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: u32::from(i) * 8 })
-						.local_set(state.locals[&i]);
-				}
-			});
+			seq.block(BlockType::Empty);
+			for i in 0..func.param_count {
+				seq
+					.local_get(arg_cnt)
+					.i32_const(i.into())
+					.i32_le_u()
+					.br_if(0)
+					.global_get(state.shtack_ptr)
+					.i64_load(MemArg { align: 3, offset: u64::from(i) * 8, memory_index: state.shtack_mem })
+					.local_set(state.locals[&i]);
+			}
+			seq.end();
 		}
 
 		while let Some(op) = operations.next() {
@@ -589,7 +497,7 @@ fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> 
 
 }
 
-fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut InstrSeqBuilder, op: Op) {
+fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink, op: Op) {
 	match op {
 		Op::Add(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.add); dst.push_set(state, seq); },
 		Op::Sub(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.sub); dst.push_set(state, seq); },
@@ -606,7 +514,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 			for (i, s) in (ret_slot..ret_slot + ret_cnt).enumerate() {
 				seq.global_get(state.shtack_ptr);
 				Loc::Slot(s).push_get(state, seq);
-				seq.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
+				seq.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
 			}
 			seq.i32_const(ret_cnt.into()).return_();
 		},
@@ -614,7 +522,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 			for i in 0..arg_cnt {
 				seq.global_get(state.shtack_ptr);
 				Loc::Slot(func_slot + i).push_get(state, seq);
-				seq.store(state.shtack_mem, StoreKind::I64 { atomic: false }, MemArg { align: 8, offset: i as u32 * 8 });
+				seq.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
 			}
 			seq.i32_const(arg_cnt.into());
 			Loc::Slot(func_slot).push_get(state, seq);
@@ -625,11 +533,12 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 				RetKind::None => { seq.drop(); },
 				RetKind::Single(loc) => {
 					seq.i32_const(0)
-						.binop(BinaryOp::I32Eq)
-						.if_else(ValType::I64, |seq| { seq.i64_const(Value::nil().as_i64()); }, |seq| {
-							seq.global_get(state.shtack_ptr)
-								.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
-						});
+						.i32_eq()
+						.if_(BlockType::Result(ValType::I64))
+						.i64_const(Value::nil().as_i64())
+						.else_()
+						.global_get(state.shtack_ptr)
+						.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem });
 					loc.push_set(state, seq);
 				},
 				RetKind::Many => todo!(),
@@ -639,48 +548,36 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 	}
 }
 
-fn compile_if(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut InstrSeqBuilder, cond: Expr) {
+fn compile_if(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink, cond: Expr) {
 	cond.push(state, seq);
 	seq.call(state.extern_fns.get_truthy);
-	let (consequent, next) = {
-		let mut seq = seq.dangling_instr_seq(None);
-		let next = loop {
+
+	seq.if_(BlockType::Empty);
+	let next = loop {
+		let op = ops.next().unwrap();
+
+		if op == Op::EndIf { break None; }
+		if op == Op::Else { seq.else_(); break Some(None); }
+		if op == Op::ElseIf(cond) { seq.else_(); break Some(Some(cond)); }
+
+		compile_op(state, ops, seq, op);
+	};
+
+	match next {
+		None => (),
+		Some(None) => loop {
 			let op = ops.next().unwrap();
+			if op == Op::EndIf { break; }
+			compile_op(state, ops, seq, op)
+		},
+		Some(Some(cond)) => compile_if(state, ops, seq, cond),
+	}
 
-			if op == Op::EndIf { break None; }
-			if op == Op::Else { break Some(None); }
-			if op == Op::ElseIf(cond) { break Some(Some(cond)); }
-			
-			compile_op(state, ops, &mut seq, op)
-		};
-
-		(seq.id(), next)
-	};
-
-	let alternative = {
-		let mut seq = seq.dangling_instr_seq(None);
-
-		match next {
-			None => (),
-			Some(None) => loop {
-				let op = ops.next().unwrap();
-				if op == Op::EndIf { break; }
-				compile_op(state, ops, &mut seq, op)
-			},
-			Some(Some(cond)) => compile_if(state, ops, &mut seq, cond),
-		}
-
-		seq.id()
-	};
-
-	seq.instr(walrus::ir::IfElse {
-		consequent,
-		alternative,
-	});
+	seq.end();
 }
 
 impl Expr {
-	fn push(self, state: &mut State, seq: &mut InstrSeqBuilder) {
+	fn push(self, state: &mut State, seq: &mut InstructionSink) {
 		match self {
 			Expr::Constant(Const::Nil) => Value::nil().push(seq),
 			Expr::Constant(Const::Bool(b)) => Value::bool(b).push(seq),
@@ -694,13 +591,14 @@ impl Expr {
 			Expr::Global(idx) => Loc::Global(idx).push_get(state, seq),
 			Expr::VarRet => {
 				seq.i32_const(0)
-					.binop(BinaryOp::I32Eq)
-					.if_else(ValType::I64, |seq| {
-						seq.i64_const(0);
-					}, |seq| {
-						seq.global_get(state.shtack_ptr)
-							.load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 8, offset: 0 });
-					});
+					// .binop(BinaryOp::I32Eq)
+					.i32_eq()
+					.if_(BlockType::Result(ValType::I64))
+					.i64_const(Value::nil().as_i64())
+					.else_()
+					.global_get(state.shtack_ptr)
+					.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
+					.end();
 			},
 			Expr::VarArgs => todo!(),
 		};

@@ -27,7 +27,8 @@ bstr.workspace = true
 
 auto_impl = "1.3.0"
 anyhow = "1.0.101"
-walrus = "0.25.1"
+# walrus = "0.25.1"
+wasm-encoder = "0.245.1"
 
 [profile.release]
 lto = true

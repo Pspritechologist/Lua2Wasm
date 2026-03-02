@@ -14,3 +14,5 @@ zmij = "1.0.14"
 # dlmalloc = { version = "0.2.12", features = ["global"] }
 # lol_alloc = "0.4.1"
 talc = "4.4.3"
+macro_rules_attribute = "0.2.2"
+pastey = "0.2.1"
