@@ -553,7 +553,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		Op::Call { func_slot, arg_cnt, ret_kind } => {
 			for i in 0..arg_cnt {
 				seq.global_get(state.shtack_ptr);
-				Loc::Slot(func_slot + i).push_get(state, seq);
+				Loc::Slot(func_slot + i + 1).push_get(state, seq);
 				seq.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
 			}
 			seq.i32_const(arg_cnt.into());
