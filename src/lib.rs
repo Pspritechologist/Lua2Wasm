@@ -258,7 +258,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		
 		let error_fn_idx = closures.len();
 		closures.push(error_fn);
-		seq.i64_const(Value::function(error_fn_idx).as_i64())
+		seq.const_val(Value::function(error_fn_idx))
 			.local_get(global_tab)
 			.static_str(&state, internal_strings.error)
 			.call(state.extern_fns.table_set_name);
@@ -307,7 +307,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 				.global_set(state.shtack_ptr)
 				// And prepend the 'success' flag to the return values.
 				.global_get(state.shtack_ptr)
-				.i64_const(Value::bool(true).as_i64())
+				.const_val(true)
 				.i64_store(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
 				// Return the new arg count, still on the stack.
 				.return_()
@@ -326,7 +326,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 				.global_set(state.shtack_ptr)
 				// Prepend the 'error' flag to the return values.
 				.global_get(state.shtack_ptr)
-				.i64_const(Value::bool(false).as_i64())
+				.const_val(false)
 				.i64_store(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
 				// Set the error object as the second return value.
 				.global_get(state.shtack_ptr)
@@ -339,7 +339,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 		let pcall_fn_idx = closures.len();
 		closures.push(pcall_fn);
-		seq.i64_const(Value::function(pcall_fn_idx).as_i64())
+		seq.const_val(Value::function(pcall_fn_idx))
 			.local_get(global_tab)
 			.static_str(&state, internal_strings.pcall)
 			.call(state.extern_fns.table_set_name);

@@ -168,14 +168,3 @@ from_num!(i64, u64, isize, usize, i32, u32, i16, u16, i8, u8, f64, f32);
 impl From<bool> for Value {
 	fn from(b: bool) -> Self { Self::bool(b) }
 }
-
-impl<S: AsRef<[u8]> + ?Sized> From<&'static S> for Value {
-	fn from(value: &'static S) -> Self {
-		let s = value.as_ref();
-		
-		let ptr = u32::try_from(s.as_ptr().addr()).expect("infallible");
-		let len = u32::try_from(s.len()).expect("infallible");
-
-		Value::string(ptr, len)
-	}
-}

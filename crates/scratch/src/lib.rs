@@ -40,6 +40,18 @@ macro_rules! internal {
 	} };
 }
 
+trait ValExt {
+	fn str(value: &'static (impl AsRef<[u8]> + ?Sized)) -> Value {
+		let s = value.as_ref();
+		
+		let ptr = u32::try_from(s.as_ptr().addr()).expect("infallible");
+		let len = u32::try_from(s.len()).expect("infallible");
+
+		Value::string(ptr, len)
+	}
+}
+impl ValExt for Value {}
+
 #[apply(internal)]
 pub fn static_str(addr: u32, len: u32) -> i64 {
 	Value::string(addr, len).as_i64()
@@ -51,7 +63,7 @@ pub fn add(a: i64, b: i64) -> i64 {
 
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() + b.to_num()).as_i64(),
-		_ => binds::error(Value::from("Attempted to add incompatible values").as_i64()),
+		_ => binds::error(Value::str("Attempted to add incompatible values").as_i64()),
 	}
 }
 
@@ -61,7 +73,7 @@ pub fn sub(a: i64, b: i64) -> i64 {
 
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() - b.to_num()).as_i64(),
-		_ => binds::error(Value::from("Attempted to subtract incompatible values").as_i64()),
+		_ => binds::error(Value::str("Attempted to subtract incompatible values").as_i64()),
 	}
 }
 
@@ -71,7 +83,7 @@ pub fn mul(a: i64, b: i64) -> i64 {
 
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() * b.to_num()).as_i64(),
-		_ => binds::error(Value::from("Attempted to multiply incompatible values").as_i64()),
+		_ => binds::error(Value::str("Attempted to multiply incompatible values").as_i64()),
 	}
 }
 
@@ -81,7 +93,7 @@ pub fn div(a: i64, b: i64) -> i64 {
 
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() / b.to_num()).as_i64(),
-		_ => binds::error(Value::from("Attempted to divide incompatible values").as_i64()),
+		_ => binds::error(Value::str("Attempted to divide incompatible values").as_i64()),
 	}
 }
 
@@ -103,7 +115,7 @@ pub fn gt(a: i64, b: i64) -> i64 {
 		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() > b.to_str()).as_i64(),
 		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() > b.to_num()).as_i64(),
 		_ => {
-			binds::error(Value::from("Attempted to compare unsupported values").as_i64());
+			binds::error(Value::str("Attempted to compare unsupported values").as_i64());
 		},
 	}
 }
@@ -117,9 +129,9 @@ pub fn get_fn(func: i64) -> extern "C" fn(usize) -> usize {
 			func.to_function()
 		},
 		ValueTag::Closure => {
-			binds::error(Value::from("Attempted to call a closure, which is not supported yet").as_i64());
+			binds::error(Value::str("Attempted to call a closure, which is not supported yet").as_i64());
 		},
-		_ => binds::error(Value::from("Attempted to call a non-function value").as_i64()),
+		_ => binds::error(Value::str("Attempted to call a non-function value").as_i64()),
 	}
 }
 
@@ -138,7 +150,7 @@ pub fn val_to_i64(value: i64) -> i64 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as i64,
-		_ => binds::error(Value::from("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number").as_i64()),
 	}
 }
 
@@ -152,7 +164,7 @@ pub fn val_to_f64(value: i64) -> f64 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num(),
-		_ => binds::error(Value::from("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number").as_i64()),
 	}
 }
 
@@ -166,7 +178,7 @@ pub fn val_to_i32(value: i64) -> i32 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as i32,
-		_ => binds::error(Value::from("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number").as_i64()),
 	}
 }
 
@@ -180,7 +192,7 @@ pub fn val_to_f32(value: i64) -> f32 {
 	let value = Value::from_i64(value);
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as f32,
-		_ => binds::error(Value::from("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number").as_i64()),
 	}
 }
 
@@ -200,7 +212,7 @@ pub fn tab_get(table: i64, key: i64) -> i64 {
 	let key = Value::from_i64(key);
 
 	let Some(table) = table.as_table() else {
-		binds::error(Value::from("Attempted to index into a non-table value").as_i64());
+		binds::error(Value::str("Attempted to index into a non-table value").as_i64());
 	};
 
 	table.get(&key).unwrap_or(Value::nil()).as_i64()
@@ -213,7 +225,7 @@ pub fn tab_set(table: i64, key: i64, value: i64) {
 	let value = Value::from_i64(value);
 
 	let Some(mut table) = table.as_table() else {
-		binds::error(Value::from("Attempted to index into a non-table value").as_i64());
+		binds::error(Value::str("Attempted to index into a non-table value").as_i64());
 	};
 
 	if value.get_tag() == ValueTag::Nil {

@@ -17,9 +17,9 @@ pub trait InstructionsExt<'a>: Sized {
 			.call(state.extern_fns.static_str)
 	}
 
-	fn const_val(&mut self, value: Value) -> &mut InstructionSink<'a> {
+	fn const_val(&mut self, value: impl Into<Value>) -> &mut InstructionSink<'a> {
 		let seq = self.get_sink();
-		value.push(seq);
+		value.into().push(seq);
 		seq
 	}
 
