@@ -41,6 +41,11 @@ macro_rules! internal {
 }
 
 #[apply(internal)]
+pub fn static_str(addr: u32, len: u32) -> i64 {
+	Value::string(addr, len).as_i64()
+}
+
+#[apply(internal)]
 pub fn add(a: i64, b: i64) -> i64 {
 	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
 
@@ -87,6 +92,19 @@ pub fn eq(a: i64, b: i64) -> i64 {
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() == b.to_str()).as_i64(),
 		_ => Value::bool(a == b).as_i64(),
+	}
+}
+
+#[apply(internal)]
+pub fn gt(a: i64, b: i64) -> i64 {
+	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
+
+	match (a.get_tag(), b.get_tag()) {
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() > b.to_str()).as_i64(),
+		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() > b.to_num()).as_i64(),
+		_ => {
+			binds::error(Value::from("Attempted to compare unsupported values").as_i64());
+		},
 	}
 }
 

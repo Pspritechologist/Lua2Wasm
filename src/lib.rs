@@ -1,7 +1,8 @@
+use instructions_ext::InstructionsExt;
+use luant_lexer::LexInterner;
 use anyhow::Result;
 use bstr::ByteSlice;
 use bytecode::Operation as Op;
-use luant_lexer::LexInterner;
 use value::Value;
 use std::collections::BTreeMap;
 use wasm_encoder::{
@@ -13,8 +14,9 @@ use crate::{bytecode::{Loc, RetKind}, parsing::expressions::{Const, Expr}};
 pub mod parsing;
 mod bytecode;
 mod debug;
+mod instructions_ext;
 
-struct State<'s> {
+pub struct State<'s> {
 	module: Module,
 	symbol_table: SymbolTable,
 	types_sect: TypeSection,
@@ -53,6 +55,7 @@ macro_rules! extern_fns {
 		struct $StructName {
 			$(
 				$(#[$attr])*
+				#[allow(unused)] //TODO
 				$field: u32,
 			)+
 		}
@@ -91,6 +94,8 @@ macro_rules! extern_fns {
 
 extern_fns! {
 	struct ExternFns {
+		static_str(I32, I32) -> I64;
+
 		add(I64, I64) -> I64;
 		sub(I64, I64) -> I64;
 		mul(I64, I64) -> I64;
@@ -120,46 +125,6 @@ extern_fns! {
 		/// This takes `value, table, key` unlike other functions for impl reasons.
 		table_set_name: tab_set_name(I64, I64, I64);
 	}
-}
-
-trait ValueExt {
-	fn push(self, seq: &mut InstructionSink);
-}
-impl ValueExt for Value {
-	fn push(self, seq: &mut InstructionSink) {
-		seq.i64_const(self.as_i64());
-	}
-}
-
-impl Loc {
-	fn push_get(self, state: &mut State, seq: &mut InstructionSink) {
-		match self {
-			Loc::Slot(idx) => { seq.local_get(state.locals[&idx]); },
-			Loc::UpValue(idx) => todo!(),
-			Loc::Global(idx) => {
-				seq.global_get(state.global_table)
-					.i64_const(static_string(state, idx).as_i64())
-					.call(state.extern_fns.table_get_name);
-			},
-		};
-	}
-
-	fn push_set(self, state: &mut State, seq: &mut InstructionSink) {
-		match self {
-			Loc::Slot(idx) => { seq.local_set(state.locals[&idx]); },
-			Loc::UpValue(idx) => todo!(),
-			Loc::Global(idx) => {
-				seq.global_get(state.global_table)
-					.i64_const(static_string(state, idx).as_i64())
-					.call(state.extern_fns.table_set_name);
-			},
-		};
-	}
-}
-
-fn static_string(state: &State, idx: usize) -> Value {
-	let (addr, len) = state.strings[idx];
-	Value::string(addr, len)
 }
 
 pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Result<Vec<u8>> {
@@ -299,7 +264,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		closures.push(error_fn);
 		seq.i64_const(Value::function(error_fn_idx).as_i64())
 			.local_get(global_tab)
-			.i64_const(static_string(&state, internal_strings.error).as_i64())
+			.static_str(&state, internal_strings.error)
 			.call(state.extern_fns.table_set_name);
 		
 		// Load the 'pcall' function into it.
@@ -380,7 +345,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		closures.push(pcall_fn);
 		seq.i64_const(Value::function(pcall_fn_idx).as_i64())
 			.local_get(global_tab)
-			.i64_const(static_string(&state, internal_strings.pcall).as_i64())
+			.static_str(&state, internal_strings.pcall)
 			.call(state.extern_fns.table_set_name);
 
 		// Generate a call to the actual main function.
@@ -499,31 +464,31 @@ fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> 
 
 fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink, op: Op) {
 	match op {
-		Op::Add(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.add); dst.push_set(state, seq); },
-		Op::Sub(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.sub); dst.push_set(state, seq); },
-		Op::Mul(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.mul); dst.push_set(state, seq); },
-		Op::Div(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.div); dst.push_set(state, seq); },
-		// Op::Mod(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::Pow(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::Neg(dst, lhs) => { lhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		Op::Add(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.add).loc_set(state, dst); },
+		Op::Sub(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.sub).loc_set(state, dst); },
+		Op::Mul(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.mul).loc_set(state, dst); },
+		Op::Div(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.div).loc_set(state, dst); },
+		// Op::Mod(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::Pow(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::Neg(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.thing).loc_set(state, dst); },
 
-		Op::Eq(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.eq); dst.push_set(state, seq); },
-		// Op::Neq(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::Lt(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::Lte(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		Op::Gt(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.gt); dst.push_set(state, seq); },
-		// Op::Gte(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::Not(dst, lhs) => { lhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		Op::Eq(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.eq).loc_set(state, dst); },
+		// Op::Neq(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::Lt(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::Lte(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		Op::Gt(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.gt).loc_set(state, dst); },
+		// Op::Gte(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::Not(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.thing).loc_set(state, dst); },
 
-		// Op::BitAnd(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::BitOr(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::BitXor(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::BitShL(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::BitShR(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::BitNot(dst, lhs) => { lhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::BitAnd(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::BitOr(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::BitXor(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::BitShL(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::BitShR(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::BitNot(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.thing).loc_set(state, dst); },
 
-		// Op::Concat(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
-		// Op::Len(dst, lhs) => { lhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::Concat(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		// Op::Len(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.thing).loc_set(state, dst); },
 		
 		Op::Copy(dst, val) => { val.push(state, seq); dst.push_set(state, seq); },
 		Op::LoadClosure(dst, idx) => { seq.i64_const(Value::function(idx).as_i64()); dst.push_set(state, seq); },
@@ -534,32 +499,30 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		Op::StartLoop => compile_loop(state, ops, seq),
 		Op::Break => { seq.br(1); }, // A depth of 1 points to the outer block, for breaking.
 		Op::BreakIfNot(cond) => {
-			cond.push(state, seq);
-			seq.call(state.extern_fns.get_truthy).i32_eqz().br_if(1);
+			seq.expr(state, cond).call(state.extern_fns.get_truthy).i32_eqz().br_if(1);
 		},
 		Op::Continue => { seq.br(0); }, // A depth of 0 points to the inner block, for continuing.
 		Op::ContIfNot(cond) => {
-			cond.push(state, seq);
-			seq.call(state.extern_fns.get_truthy).i32_eqz().br_if(0);
+			seq.expr(state, cond).call(state.extern_fns.get_truthy).i32_eqz().br_if(0);
 		},
 		Op::Ret { ret_slot, ret_cnt } => {
 			for (i, s) in (ret_slot..ret_slot + ret_cnt).enumerate() {
-				seq.global_get(state.shtack_ptr);
-				Loc::Slot(s).push_get(state, seq);
-				seq.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
+				seq.global_get(state.shtack_ptr)
+					.loc_get(state, Loc::Slot(s))
+					.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
 			}
 			seq.i32_const(ret_cnt.into()).return_();
 		},
 		Op::Call { func_slot, arg_cnt, ret_kind } => {
 			for i in 0..arg_cnt {
-				seq.global_get(state.shtack_ptr);
-				Loc::Slot(func_slot + i + 1).push_get(state, seq);
-				seq.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
+				seq.global_get(state.shtack_ptr)
+					.loc_get(state, Loc::Slot(func_slot + i + 1))
+					.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
 			}
-			seq.i32_const(arg_cnt.into());
-			Loc::Slot(func_slot).push_get(state, seq);
-			seq.call(state.extern_fns.get_fn);
-			seq.call_indirect(state.dyn_call_ty, state.call_tab);
+			seq.i32_const(arg_cnt.into())
+				.loc_get(state, Loc::Slot(func_slot))
+				.call(state.extern_fns.get_fn)
+				.call_indirect(state.dyn_call_ty, state.call_tab);
 
 			match ret_kind {
 				RetKind::None => { seq.drop(); },
@@ -570,8 +533,8 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 						.i64_const(Value::nil().as_i64())
 						.else_()
 						.global_get(state.shtack_ptr)
-						.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem });
-					loc.push_set(state, seq);
+						.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
+						.loc_set(state, loc);
 				},
 				RetKind::Many => todo!(),
 			}
@@ -634,33 +597,4 @@ fn compile_loop(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut I
 	state.loop_depth = old_depth;
 	
 	// A jump back to the start of the loop will have been compiled already.
-}
-
-impl Expr {
-	fn push(self, state: &mut State, seq: &mut InstructionSink) {
-		match self {
-			Expr::Constant(Const::Nil) => Value::nil().push(seq),
-			Expr::Constant(Const::Bool(b)) => Value::bool(b).push(seq),
-			Expr::Constant(Const::Number(n)) => Value::float(n.val()).push(seq),
-			Expr::Constant(Const::String(idx)) => {
-				let (addr, len) = state.strings[idx];
-				Value::string(addr, len).push(seq);
-			},
-			Expr::Slot(idx) => Loc::Slot(idx).push_get(state, seq),
-			Expr::UpValue(idx) => Loc::UpValue(idx).push_get(state, seq),
-			Expr::Global(idx) => Loc::Global(idx).push_get(state, seq),
-			Expr::VarRet => {
-				seq.i32_const(0)
-					// .binop(BinaryOp::I32Eq)
-					.i32_eq()
-					.if_(BlockType::Result(ValType::I64))
-					.i64_const(Value::nil().as_i64())
-					.else_()
-					.global_get(state.shtack_ptr)
-					.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
-					.end();
-			},
-			Expr::VarArgs => todo!(),
-		};
-	}
 }
