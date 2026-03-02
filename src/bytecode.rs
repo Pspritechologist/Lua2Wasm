@@ -72,10 +72,15 @@ pub enum Operation {
 	ElseIf(Expr),
 	Else,
 	EndIf,
+	StartLoop,
+	Break,
+	BreakIfNot(Expr),
+	Continue,
+	ContIfNot(Expr),
+	EndLoop,
 	// Meta.
 	Copy(Loc, Expr),
 	Close(u8),
-	MaybeClose(u8, bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

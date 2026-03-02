@@ -39,10 +39,8 @@ struct State<'s> {
 	extern_fns: ExternFns,
 	interner: LexInterner<'s>,
 	global_table: u32,
-}
-
-struct TypeHandler {
-	
+	/// The distance from the last loop.
+	loop_depth: u32,
 }
 
 macro_rules! extern_fns {
@@ -98,6 +96,7 @@ extern_fns! {
 		mul(I64, I64) -> I64;
 		div(I64, I64) -> I64;
 		eq(I64, I64) -> I64;
+		gt(I64, I64) -> I64;
 
 		get_fn(I64) -> I32;
 		get_truthy(I64) -> I32;
@@ -255,6 +254,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		element_sect,
 		function_sect,
 		code_sect,
+		loop_depth: 0,
 	};
 
 	for (i, func) in parsed.constants.closures().iter().enumerate().rev() {
@@ -503,13 +503,45 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		Op::Sub(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.sub); dst.push_set(state, seq); },
 		Op::Mul(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.mul); dst.push_set(state, seq); },
 		Op::Div(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.div); dst.push_set(state, seq); },
+		// Op::Mod(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::Pow(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::Neg(dst, lhs) => { lhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+
 		Op::Eq(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.eq); dst.push_set(state, seq); },
+		// Op::Neq(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::Lt(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::Lte(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		Op::Gt(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.gt); dst.push_set(state, seq); },
+		// Op::Gte(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::Not(dst, lhs) => { lhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+
+		// Op::BitAnd(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::BitOr(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::BitXor(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::BitShL(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::BitShR(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::BitNot(dst, lhs) => { lhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+
+		// Op::Concat(dst, lhs, rhs) => { lhs.push(state, seq); rhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		// Op::Len(dst, lhs) => { lhs.push(state, seq); seq.call(state.extern_fns.thing); dst.push_set(state, seq); },
+		
 		Op::Copy(dst, val) => { val.push(state, seq); dst.push_set(state, seq); },
 		Op::LoadClosure(dst, idx) => { seq.i64_const(Value::function(idx).as_i64()); dst.push_set(state, seq); },
-		Op::StartIf(cond) => compile_if(state, ops, seq, cond),
 		Op::LoadTab(dst) => { seq.call(state.extern_fns.table_load); dst.push_set(state, seq); },
 		Op::Get(dst, tab, key) => { tab.push(state, seq); key.push(state, seq); seq.call(state.extern_fns.table_get); dst.push_set(state, seq); },
 		Op::Set(tab, key, val) => { tab.push(state, seq); key.push(state, seq); val.push(state, seq); seq.call(state.extern_fns.table_set); },
+		Op::StartIf(cond) => compile_if(state, ops, seq, cond),
+		Op::StartLoop => compile_loop(state, ops, seq),
+		Op::Break => { seq.br(1); }, // A depth of 1 points to the outer block, for breaking.
+		Op::BreakIfNot(cond) => {
+			cond.push(state, seq);
+			seq.call(state.extern_fns.get_truthy).i32_eqz().br_if(1);
+		},
+		Op::Continue => { seq.br(0); }, // A depth of 0 points to the inner block, for continuing.
+		Op::ContIfNot(cond) => {
+			cond.push(state, seq);
+			seq.call(state.extern_fns.get_truthy).i32_eqz().br_if(0);
+		},
 		Op::Ret { ret_slot, ret_cnt } => {
 			for (i, s) in (ret_slot..ret_slot + ret_cnt).enumerate() {
 				seq.global_get(state.shtack_ptr);
@@ -544,6 +576,9 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 				RetKind::Many => todo!(),
 			}
 		},
+
+		Op::Close(_) => todo!(),
+
 		_ => todo!("{op:?}"),
 	}
 }
@@ -551,6 +586,8 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 fn compile_if(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink, cond: Expr) {
 	cond.push(state, seq);
 	seq.call(state.extern_fns.get_truthy);
+
+	state.loop_depth += 1;
 
 	seq.if_(BlockType::Empty);
 	let next = loop {
@@ -573,7 +610,30 @@ fn compile_if(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		Some(Some(cond)) => compile_if(state, ops, seq, cond),
 	}
 
+	state.loop_depth -= 1;
+
 	seq.end();
+}
+
+fn compile_loop(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink) {
+	// The outer block, for breaks.
+	seq.block(BlockType::Empty);
+	// The inner block, for looping.
+	seq.loop_(BlockType::Empty);
+
+	let old_depth = state.loop_depth;
+	state.loop_depth = 0;
+	while let Some(op) = ops.next() {
+		if op == Op::EndLoop { break; }
+		compile_op(state, ops, seq, op);
+	}
+
+	seq.end(); // End the loop block.
+	seq.end(); // End the outer block.
+
+	state.loop_depth = old_depth;
+	
+	// A jump back to the start of the loop will have been compiled already.
 }
 
 impl Expr {

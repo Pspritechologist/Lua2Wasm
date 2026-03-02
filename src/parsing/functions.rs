@@ -270,7 +270,7 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 
 	fn label_exists(&mut self, _label: IdentKey) -> bool { false }
 
-	fn emit_break(&mut self, _state: &mut FuncState<'_, 's>, _span: usize) -> Result<(), Error<'s>> {
+	fn emit_break(&mut self, _state: &mut FuncState<'_, 's>, _span: usize, _cond: Option<super::Expr>) -> Result<(), Error<'s>> {
 		Err("Break statement not within a loop".into())
 	}
 	fn emit_continue(&mut self, _state: &mut FuncState<'_, 's>, _span: usize) -> Result<(), Error<'s>> {
