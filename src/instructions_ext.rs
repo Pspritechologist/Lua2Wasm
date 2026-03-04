@@ -1,7 +1,5 @@
 use crate::{
-	bytecode::{Operation as Op, Loc, RetKind},
-	parsing::expressions::{Const, Expr},
-	State,
+	State, bytecode::{Loc, Operation as Op, RetKind}, parsing::expressions::{Const, Expr}, reloc_sections::RelocEntry
 };
 use value::Value;
 use wasm_encoder::{BlockType, InstructionSink, MemArg, ValType};
@@ -9,12 +7,21 @@ use wasm_encoder::{BlockType, InstructionSink, MemArg, ValType};
 pub trait InstructionsExt<'a>: Sized {
 	fn get_sink(&mut self) -> &mut InstructionSink<'a>;
 
-	fn static_str(&mut self, state: &State, idx: usize) -> &mut InstructionSink<'a> {
+	// fn i32_const_r(&mut self, x: i32) -> &mut Self {
+	// 	let seq = self.get_sink();
+	// 	self.sink.push(0x41);
+	// 	x.encode(self.sink);
+	// 	self
+	// }
+
+	fn static_str(&mut self, state: &mut State, idx: usize) -> &mut InstructionSink<'a> {
 		let seq = self.get_sink();
 		let (addr, len) = state.strings[idx];
 		seq.i32_const(addr.cast_signed())
+			.reloc(state, RelocEntry::i32const_address(addr))
 			.i32_const(len.cast_signed())
 			.call(state.extern_fns.static_str)
+			.reloc(state, RelocEntry::function(state.extern_fns.static_str))
 	}
 
 	fn const_val(&mut self, value: impl Into<Value>) -> &mut InstructionSink<'a> {
@@ -23,13 +30,13 @@ pub trait InstructionsExt<'a>: Sized {
 		seq
 	}
 
-	fn expr(&mut self, state: &State, expr: Expr) -> &mut InstructionSink<'a> {
+	fn expr(&mut self, state: &mut State, expr: Expr) -> &mut InstructionSink<'a> {
 		let seq = self.get_sink();
 		expr.push(state, seq);
 		seq
 	}
 
-	fn loc_get(&mut self, state: &State, loc: Loc) -> &mut InstructionSink<'a> {
+	fn loc_get(&mut self, state: &mut State, loc: Loc) -> &mut InstructionSink<'a> {
 		let seq = self.get_sink();
 		loc.push_get(state, seq);
 		seq
@@ -49,6 +56,11 @@ pub trait InstructionsExt<'a>: Sized {
 		}
 		seq
 	}
+
+	fn reloc(&mut self, state: &mut State, entry: RelocEntry) -> &mut InstructionSink<'a> {
+		state.reloc_code_sect.append_entry(state.code_sect.byte_len(), entry);
+		self.get_sink()
+	}
 }
 
 impl<'a> InstructionsExt<'a> for InstructionSink<'a> {
@@ -65,7 +77,7 @@ impl ValueExt for Value {
 }
 
 impl Loc {
-	pub fn push_get(self, state: &State, seq: &mut InstructionSink) {
+	pub fn push_get(self, state: &mut State, seq: &mut InstructionSink) {
 		match self {
 			Loc::Slot(idx) => { seq.local_get(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
@@ -91,7 +103,7 @@ impl Loc {
 }
 
 impl Expr {
-	pub fn push(self, state: &State, seq: &mut InstructionSink) {
+	pub fn push(self, state: &mut State, seq: &mut InstructionSink) {
 		match self {
 			Expr::Constant(Const::Nil) => Value::nil().push(seq),
 			Expr::Constant(Const::Bool(b)) => Value::bool(b).push(seq),

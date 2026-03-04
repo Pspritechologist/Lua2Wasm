@@ -4,7 +4,7 @@ use anyhow::Result;
 use value::Value;
 use std::collections::BTreeMap;
 use wasm_encoder::{
-    BlockType, Catch, CodeSection, ConstExpr, CustomSection, DataSection, ElementSection, Elements,
+    BlockType, Catch, CodeSection, ConstExpr, DataSection, ElementSection, Elements,
     EntityType, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
     IndirectNameMap, Instruction, InstructionSink, LinkingSection, MemArg, MemorySection,
     MemoryType, Module, NameMap, NameSection, ProducersField, ProducersSection, RefType,
@@ -12,10 +12,13 @@ use wasm_encoder::{
     ValType,
 };
 
+use crate::reloc_sections::{RelocCodeSection, RelocDataSection};
+
 pub mod parsing;
 mod bytecode;
 mod debug;
 mod instructions_ext;
+mod reloc_sections;
 
 pub struct State<'s> {
 	module: Module,
@@ -31,8 +34,8 @@ pub struct State<'s> {
 	function_sect: FunctionSection,
 	function_names: NameMap,
 	local_names: IndirectNameMap,
-	reloc_code_section: Vec<u8>,
-	reloc_data_section: Vec<u8>,
+	reloc_code_sect: RelocCodeSection,
+	reloc_data_sect: RelocDataSection,
 	function_count: u32,
 	code_sect: CodeSection,
 	memory: u32,
@@ -166,6 +169,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	let element_sect = ElementSection::new();
 	let function_sect = FunctionSection::new();
 	let code_sect = CodeSection::new();
+	let mut reloc_code_sect = RelocCodeSection::new();
+	let mut reloc_data_sect = RelocDataSection::new();
 
 	import_sect.import("env", "__linear_memory", MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: None });
 	memory_sect.memory(MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: Some(1) });
@@ -218,8 +223,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		code_sect,
 		function_names: NameMap::new(),
 		local_names: IndirectNameMap::new(),
-		reloc_code_section: vec![],
-		reloc_data_section: vec![],
+		reloc_code_sect,
+		reloc_data_sect,
 		loop_depth: 0,
 	};
 
@@ -241,10 +246,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	let start_fn = {
 		let mut builder = Function::new_with_locals_types([ValType::I64]);
-		// let mut seq = builder.name("__luant_shim_<main>".into()).func_body();
 		let mut seq = builder.instructions();
 
-		// let global_tab = state.module.locals.add(ValType::I64);
 		let global_tab = 0;
 
 		// Initialize the global table.
@@ -265,7 +268,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		closures.push(error_fn);
 		seq.const_val(Value::function(error_fn_idx))
 			.local_get(global_tab)
-			.static_str(&state, internal_strings.error)
+			.static_str(&mut state, internal_strings.error)
 			.call(state.extern_fns.table_set_name);
 		
 		// Load the 'pcall' function into it.
@@ -346,7 +349,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		closures.push(pcall_fn);
 		seq.const_val(Value::function(pcall_fn_idx))
 			.local_get(global_tab)
-			.static_str(&state, internal_strings.pcall)
+			.static_str(&mut state, internal_strings.pcall)
 			.call(state.extern_fns.table_set_name);
 
 		// Generate a call to the actual main function.
@@ -381,15 +384,6 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		.field("language", ProducersField::new().value("Lua", "5.5"))
 		.field("processed-by", ProducersField::new().value("luant", env!("CARGO_PKG_VERSION")));
 
-	let reloc_code = CustomSection {
-		name: "reloc.CODE".into(),
-		data: state.reloc_code_section.into(),
-	};
-	let reloc_data = CustomSection {
-		name: "reloc.DATA".into(),
-		data: state.reloc_data_section.into(),
-	};
-
 	let mut data_sect = DataSection::new();
 	for (data, offset) in parsed.constants.strings().iter().zip(state.strings.iter().map(|(p, _)| p.cast_signed())) {
 		data_sect.active(state.memory, &ConstExpr::i32_const(offset), data.iter().copied());
@@ -409,8 +403,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		.section(&state.code_sect)
 		.section(&data_sect)
 		.section(LinkingSection::new().symbol_table(&state.symbol_table))
-		.section(&reloc_code)
-		.section(&reloc_data)
+		.section(&state.reloc_code_sect)
+		.section(&state.reloc_data_sect)
 		.section(&names)
 		.section(&producers);
 
