@@ -4,7 +4,12 @@ use anyhow::Result;
 use value::Value;
 use std::collections::BTreeMap;
 use wasm_encoder::{
-	BlockType, Catch, CodeSection, ConstExpr, ElementSection, Elements, EntityType, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection, Instruction, InstructionSink, LinkingSection, MemArg, MemorySection, MemoryType, Module, RefType, StartSection, SymbolTable, TableSection, TableType, TagKind, TagSection, TagType, TypeSection, ValType
+    BlockType, Catch, CodeSection, ConstExpr, CustomSection, DataSection, ElementSection, Elements,
+    EntityType, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
+    IndirectNameMap, Instruction, InstructionSink, LinkingSection, MemArg, MemorySection,
+    MemoryType, Module, NameMap, NameSection, ProducersField, ProducersSection, RefType,
+    StartSection, SymbolTable, TableSection, TableType, TagKind, TagSection, TagType, TypeSection,
+    ValType,
 };
 
 pub mod parsing;
@@ -24,6 +29,10 @@ pub struct State<'s> {
 	export_sect: ExportSection,
 	element_sect: ElementSection,
 	function_sect: FunctionSection,
+	function_names: NameMap,
+	local_names: IndirectNameMap,
+	reloc_code_section: Vec<u8>,
+	reloc_data_section: Vec<u8>,
 	function_count: u32,
 	code_sect: CodeSection,
 	memory: u32,
@@ -128,45 +137,37 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	pub struct Strings {
 		pub error: usize,
 		pub pcall: usize,
-		pub expected_args: usize,
 	}
 
 	let internal_strings = {
 		let error = parsed.constants.get_string("error");
 		let pcall = parsed.constants.get_string("pcall");
-		let expected_args = parsed.constants.get_string("Expected at least %d argument(s) to %s, got %d");
 
-		Strings { error, pcall, expected_args }
+		Strings { error, pcall }
 	};
 
-	let mut module = Module::new();
-
-	// Append our new strings.
-	// module.data.get_mut(rodata).value.extend(parsed.constants.strings().iter().flat_map(|s| s.bytes()));
-
-	//? At this point I was previously modifying the memory values within the module to account for the extended rodata section.
-	//? Of course I found out that wasn't working...
-
-	let mut string_data_size = 0;
-	let strings = parsed.constants.strings().iter().map(|s| {
-		let (ptr, len) = (string_data_size as u32, s.len() as u32);
-		string_data_size += s.len();
-		(ptr, len)
-	}).collect();
+	let strings = {
+		let mut offset = 0;
+		parsed.constants.strings().iter().map(|s| {
+			let (ptr, len) = (offset as u32, s.len() as u32);
+			offset += s.len();
+			(ptr, len)
+		}).collect()
+	};
 	
 	let mut symbol_table = SymbolTable::new();
 	let mut types_sect = TypeSection::new();
 	let mut import_sect = ImportSection::new();
-	let mut table_sect = TableSection::new();
+	let table_sect = TableSection::new();
 	let mut memory_sect = MemorySection::new();
 	let mut tag_sect = TagSection::new();
 	let mut global_sect = GlobalSection::new();
-	let mut export_sect = ExportSection::new();
-	let mut element_sect = ElementSection::new();
-	let mut function_sect = FunctionSection::new();
-	let mut code_sect = CodeSection::new();
+	let export_sect = ExportSection::new();
+	let element_sect = ElementSection::new();
+	let function_sect = FunctionSection::new();
+	let code_sect = CodeSection::new();
 
-	import_sect.import("__internal", "memory", MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: None });
+	import_sect.import("env", "__linear_memory", MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: None });
 	memory_sect.memory(MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: Some(1) });
 
 	global_sect.global(GlobalType { val_type: ValType::I32, mutable: true, shared: false }, &ConstExpr::i32_const(0));
@@ -183,7 +184,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		maximum: None,
 		shared: false,
 	});
-	symbol_table.table(SymbolTable::WASM_SYM_UNDEFINED | SymbolTable::WASM_SYM_EXPLICIT_NAME, 0, None);
+	symbol_table.table(SymbolTable::WASM_SYM_UNDEFINED, 0, None);
 
 	let (function_count, extern_fns) = ExternFns::init(&mut types_sect, &mut import_sect, &mut symbol_table);
 
@@ -202,7 +203,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		function_count,
 		extern_fns,
 		interner,
-		module,
+		module: Module::new(),
 		global_table: 1,
 		symbol_table,
 		types_sect,
@@ -215,6 +216,10 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		element_sect,
 		function_sect,
 		code_sect,
+		function_names: NameMap::new(),
+		local_names: IndirectNameMap::new(),
+		reloc_code_section: vec![],
+		reloc_data_section: vec![],
 		loop_depth: 0,
 	};
 
@@ -248,7 +253,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 			.global_set(state.global_table);
 
 		// Load the 'error' function into it.
-		let error_fn = compile_function(&mut state, "__luant_std_error", 0, |state, seq| {
+		let error_fn = compile_function(&mut state, "__luant_std_error", 0, |state, seq, _| {
 			seq.global_get(state.shtack_ptr)
 				// .load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 3, offset: 0 })
 				.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem }) //TODO: This assumes the first arg is null if not provided...
@@ -264,7 +269,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 			.call(state.extern_fns.table_set_name);
 		
 		// Load the 'pcall' function into it.
-		let pcall_fn = compile_function(&mut state, "__luant_std_pcall", 1, |state, seq| {
+		let pcall_fn = compile_function(&mut state, "__luant_std_pcall", 1, |state, seq, _| {
 			let arg_cnt = 0;
 			let temp_var = 1;
 
@@ -363,8 +368,32 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	let mut module = state.module;
 
-	state.symbol_table.function(SymbolTable::WASM_SYM_NO_STRIP, start_fn, None);
+	state.symbol_table.function(SymbolTable::WASM_SYM_BINDING_LOCAL | SymbolTable::WASM_SYM_NO_STRIP, start_fn, None);
 	state.element_sect.active(Some(state.call_tab), &ConstExpr::i32_const(0), Elements::Functions(closures.into()));
+
+	let mut names = NameSection::new();
+	names.functions(&state.function_names);
+	names.locals(&state.local_names);
+	names.tag(&{ let mut map = NameMap::new(); map.append(0, "lua_error"); map });
+
+	let mut producers = ProducersSection::new();
+	producers
+		.field("language", ProducersField::new().value("Lua", "5.5"))
+		.field("processed-by", ProducersField::new().value("luant", env!("CARGO_PKG_VERSION")));
+
+	let reloc_code = CustomSection {
+		name: "reloc.CODE".into(),
+		data: state.reloc_code_section.into(),
+	};
+	let reloc_data = CustomSection {
+		name: "reloc.DATA".into(),
+		data: state.reloc_data_section.into(),
+	};
+
+	let mut data_sect = DataSection::new();
+	for (data, offset) in parsed.constants.strings().iter().zip(state.strings.iter().map(|(p, _)| p.cast_signed())) {
+		data_sect.active(state.memory, &ConstExpr::i32_const(offset), data.iter().copied());
+	}
 
 	module
 		.section(&state.types_sect)
@@ -378,45 +407,56 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		.section(&StartSection { function_index: start_fn })
 		.section(&state.element_sect)
 		.section(&state.code_sect)
-		.section(LinkingSection::new().symbol_table(&state.symbol_table));
+		.section(&data_sect)
+		.section(LinkingSection::new().symbol_table(&state.symbol_table))
+		.section(&reloc_code)
+		.section(&reloc_data)
+		.section(&names)
+		.section(&producers);
 
 	Ok(module.finish())
 }
 
-fn compile_function(state: &mut State, name: impl Into<String>, locals: u32, f: impl FnOnce(&mut State, &mut InstructionSink)) -> u32 {
+fn compile_function(state: &mut State, name: impl AsRef<str>, locals: u32, f: impl FnOnce(&mut State, &mut InstructionSink, u32)) -> u32 {
 	let idx = state.function_count;
 	state.function_count += 1;
 
 	let mut builder = Function::new([(locals, ValType::I64)]);
-	f(state, &mut builder.instructions());
+	f(state, &mut builder.instructions(), idx);
 	builder.instruction(&Instruction::End);
 	state.code_sect.function(&builder);
 	state.function_sect.function(state.dyn_call_ty);
+	state.function_names.append(idx, name.as_ref());
 
-	state.symbol_table.function(SymbolTable::WASM_SYM_BINDING_LOCAL, idx, None);
+	state.symbol_table.function(SymbolTable::WASM_SYM_BINDING_LOCAL, idx, Some(name.as_ref()));
 
 	idx
 }
 
 fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> u32 {
-	let mut operations = func.operations.iter().copied();
-	let mut func_hash = std::hash::DefaultHasher::new();
-	std::hash::Hash::hash(&func.operations, &mut func_hash);
-	let func_hash = std::hash::Hasher::finish(&func_hash);
-	let name = func.debug.as_ref().and_then(|d| d.func_name().map(|s| format!("{s}_{func_hash:#x}"))).unwrap_or_else(|| format!("<anonymous closure_{func_hash:#x}>"));
+	let name = func.debug.as_ref().and_then(|d| d.func_name()).unwrap_or("<anonymous closure>");
 	
-	compile_function(state, name, func.frame_size.into(), |state, seq| {
+	compile_function(state, name, func.frame_size.into(), |state, seq, current_fn| {
 		let arg_cnt = 0;
 
-		let mut temps = 0;
-		for (i, slot) in (0..func.frame_size).enumerate() {
-			state.locals.insert(slot, i as u32 + 1); // Account for the argument slot at 0.
-			// if let Some(debug) = func.debug.as_ref() {
-			// 	state.module.locals.get_mut(local).name = Some(match debug.get_local_name(slot) {
-			// 		Some(name) => name.to_string(),
-			// 		None => { temps += 1; format!("temp_{temps}") },
-			// 	});
-			// }
+		{
+			let mut temps = 0;
+			let mut name_buf = String::new();
+			let mut local_names = NameMap::new();
+			for (i, slot) in (0..func.frame_size).enumerate() {
+				state.locals.insert(slot, i as u32 + 1); // Account for the argument slot at 0.
+				if let Some(debug) = func.debug.as_ref() {
+					local_names.append(i as u32 + 1, debug.get_local_name(slot).unwrap_or_else(|| {
+						use std::fmt::Write;
+						temps += 1;
+						name_buf.clear();
+						write!(&mut name_buf, "temp_{temps}").unwrap();
+						&name_buf
+					}));
+				}
+			}
+
+			state.local_names.append(current_fn, &local_names);
 		}
 
 		if func.param_count > 0 {
@@ -449,7 +489,7 @@ fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> 
 			seq.end();
 		}
 
-		seq.operations(state, operations);
+		seq.operations(state, func.operations.iter().copied());
 
 		state.locals.clear();
 	})
