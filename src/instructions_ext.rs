@@ -137,27 +137,27 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		Op::Sub(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.sub).loc_set(state, dst); },
 		Op::Mul(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.mul).loc_set(state, dst); },
 		Op::Div(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.div).loc_set(state, dst); },
-		// Op::Mod(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::Pow(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::Neg(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		Op::Mod(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.modulo).loc_set(state, dst); },
+		Op::Pow(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.pow).loc_set(state, dst); },
+		Op::Neg(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.neg).loc_set(state, dst); },
 
 		Op::Eq(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.eq).loc_set(state, dst); },
-		// Op::Neq(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::Lt(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::Lte(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		Op::Neq(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.neq).loc_set(state, dst); },
+		Op::Lt(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.lt).loc_set(state, dst); },
+		Op::Lte(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.lte).loc_set(state, dst); },
 		Op::Gt(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.gt).loc_set(state, dst); },
-		// Op::Gte(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::Not(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		Op::Gte(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.gte).loc_set(state, dst); },
+		Op::Not(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.not).loc_set(state, dst); },
 
-		// Op::BitAnd(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::BitOr(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::BitXor(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::BitShL(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::BitShR(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::BitNot(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		Op::BitAnd(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.bit_and).loc_set(state, dst); },
+		Op::BitOr(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.bit_or).loc_set(state, dst); },
+		Op::BitXor(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.bit_xor).loc_set(state, dst); },
+		Op::BitShL(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.bit_sh_l).loc_set(state, dst); },
+		Op::BitShR(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.bit_sh_r).loc_set(state, dst); },
+		Op::BitNot(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.bit_not).loc_set(state, dst); },
 
-		// Op::Concat(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.thing).loc_set(state, dst); },
-		// Op::Len(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.thing).loc_set(state, dst); },
+		Op::Concat(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.extern_fns.concat).loc_set(state, dst); },
+		Op::Len(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.len).loc_set(state, dst); },
 		
 		Op::Copy(dst, val) => { val.push(state, seq); dst.push_set(state, seq); },
 		Op::LoadClosure(dst, idx) => { seq.i64_const(Value::function(idx).as_i64()); dst.push_set(state, seq); },
@@ -211,7 +211,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 
 		Op::Close(_) => todo!(),
 
-		_ => todo!("{op:?}"),
+		Op::ElseIf(..) | Op::Else | Op::EndIf | Op::EndLoop  => unreachable!(),
 	}
 }
 

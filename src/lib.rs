@@ -108,8 +108,27 @@ extern_fns! {
 		sub(I64, I64) -> I64;
 		mul(I64, I64) -> I64;
 		div(I64, I64) -> I64;
+		modulo(I64, I64) -> I64;
+		pow(I64, I64) -> I64;
+		neg(I64) -> I64;
+
 		eq(I64, I64) -> I64;
+		neq(I64, I64) -> I64;
+		lt(I64, I64) -> I64;
+		lte(I64, I64) -> I64;
 		gt(I64, I64) -> I64;
+		gte(I64, I64) -> I64;
+		not(I64) -> I64;
+
+		bit_and(I64, I64) -> I64;
+		bit_or(I64, I64) -> I64;
+		bit_xor(I64, I64) -> I64;
+		bit_sh_l(I64, I64) -> I64;
+		bit_sh_r(I64, I64) -> I64;
+		bit_not(I64) -> I64;
+
+		concat(I64, I64) -> I64;
+		len(I64) -> I64;
 
 		get_fn(I64) -> I32;
 		get_truthy(I64) -> I32;

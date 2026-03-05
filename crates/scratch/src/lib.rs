@@ -1,7 +1,6 @@
 #![no_std]
 #![feature(
 	linkage,
-	wasm_numeric_instr,
 	trim_prefix_suffix,
 	bstr,
 )]
@@ -10,9 +9,10 @@
 static ALLOCATOR: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
 use crate::table::TabValueExt;
+use alloc::vec::Vec;
 use macro_rules_attribute::apply;
 use value::{Value, ValueTag};
-use core::arch::wasm32;
+use core::{arch::wasm32, bstr::ByteStr};
 
 mod table;
 
@@ -33,7 +33,7 @@ mod binds {
 macro_rules! internal {
 	(pub fn $name:ident ($($args:tt)*) $(-> $ret:ty)? { $($body:tt)* }) => { pastey::paste! {
 		#[unsafe(no_mangle)]
-		#[linkage = "internal"]
+		// #[linkage = "internal"]
 		pub extern "C" fn [< __luant_ $name >] ($($args)*) $(-> $ret)? {
 			$($body)*
 		}
@@ -98,6 +98,37 @@ pub fn div(a: i64, b: i64) -> i64 {
 }
 
 #[apply(internal)]
+pub fn modulo(a: i64, b: i64) -> i64 {
+	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
+
+	match (a.get_tag(), b.get_tag()) {
+		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() % b.to_num()).as_i64(),
+		_ => binds::error(Value::str("Attempted to modulo incompatible values").as_i64()),
+	}
+}
+
+#[apply(internal)]
+pub fn pow(a: i64, b: i64) -> i64 {
+	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
+
+	match (a.get_tag(), b.get_tag()) {
+		(ValueTag::Number, ValueTag::Number) => Value::float(libm::pow(a.to_num(), b.to_num())).as_i64(),
+		_ => binds::error(Value::str("Attempted to exponentiate incompatible values").as_i64()),
+	}
+}
+
+#[apply(internal)]
+pub fn neg(a: i64) -> i64 {
+	let a = Value::from_i64(a);
+
+	match a.get_tag() {
+		ValueTag::Number => Value::float(-a.to_num()).as_i64(),
+		_ => binds::error(Value::str("Attempted to negate an incompatible value").as_i64()),
+	}
+}
+
+
+#[apply(internal)]
 pub fn eq(a: i64, b: i64) -> i64 {
 	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
 
@@ -106,6 +137,39 @@ pub fn eq(a: i64, b: i64) -> i64 {
 		_ => Value::bool(a == b).as_i64(),
 	}
 }
+
+#[apply(internal)]
+pub fn neq(a: i64, b: i64) -> i64 {
+	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
+
+	match (a.get_tag(), b.get_tag()) {
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() != b.to_str()).as_i64(),
+		_ => Value::bool(a != b).as_i64(),
+	}
+}
+
+#[apply(internal)]
+pub fn lt(a: i64, b: i64) -> i64 {
+	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
+
+	match (a.get_tag(), b.get_tag()) {
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() < b.to_str()).as_i64(),
+		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() < b.to_num()).as_i64(),
+		_ => binds::error(Value::str("Attempted to compare incompatible values").as_i64()),
+	}
+}
+
+#[apply(internal)]
+pub fn lte(a: i64, b: i64) -> i64 {
+	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
+
+	match (a.get_tag(), b.get_tag()) {
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() <= b.to_str()).as_i64(),
+		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() <= b.to_num()).as_i64(),
+		_ => binds::error(Value::str("Attempted to compare incompatible values").as_i64()),
+	}
+}
+
 
 #[apply(internal)]
 pub fn gt(a: i64, b: i64) -> i64 {
@@ -119,6 +183,89 @@ pub fn gt(a: i64, b: i64) -> i64 {
 		},
 	}
 }
+
+#[apply(internal)]
+pub fn gte(a: i64, b: i64) -> i64 {
+	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
+
+	match (a.get_tag(), b.get_tag()) {
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() >= b.to_str()).as_i64(),
+		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() >= b.to_num()).as_i64(),
+		_ => binds::error(Value::str("Attempted to compare incompatible values").as_i64()),
+	}
+}
+
+#[apply(internal)]
+pub fn not(a: i64) -> i64 {
+	Value::bool(__luant_get_truthy(a) != 1).as_i64()
+}
+
+
+#[apply(internal)]
+pub fn bit_and(a: i64, b: i64) -> i64 {
+	0
+}
+
+#[apply(internal)]
+pub fn bit_or(a: i64, b: i64) -> i64 {
+	0
+}
+
+#[apply(internal)]
+pub fn bit_xor(a: i64, b: i64) -> i64 {
+	0
+}
+
+#[apply(internal)]
+pub fn bit_sh_l(a: i64, b: i64) -> i64 {
+	0
+}
+
+#[apply(internal)]
+pub fn bit_sh_r(a: i64, b: i64) -> i64 {
+	0
+}
+
+#[apply(internal)]
+pub fn bit_not(a: i64) -> i64 {
+	0
+}
+
+
+#[apply(internal)]
+pub fn concat(a: i64, b: i64) -> i64 {
+	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
+
+	let mut a_buf = zmij::Buffer::new();
+	let a = match a.get_tag() {
+		ValueTag::String => a.to_str(),
+		ValueTag::Number => ByteStr::new(a_buf.format(a.to_num())),
+		_ => binds::error(Value::str("Attempted to concatenate incompatible values").as_i64()),
+	};
+	
+	let mut b_buf = zmij::Buffer::new();
+	let b = match b.get_tag() {
+		ValueTag::String => b.to_str(),
+		ValueTag::Number => ByteStr::new(b_buf.format(b.to_num())),
+		_ => binds::error(Value::str("Attempted to concatenate incompatible values").as_i64()),
+	};
+
+	let res = Vec::leak([&**a, &**b].concat());
+
+	Value::str(res).as_i64()
+}
+
+#[apply(internal)]
+pub fn len(a: i64) -> i64 {
+	let a = Value::from_i64(a);
+
+	match a.get_tag() {
+		ValueTag::String => Value::float(a.to_str().len() as f64).as_i64(),
+		ValueTag::Table => Value::float(a.to_table().len() as f64).as_i64(),
+		_ => binds::error(Value::str("Attempted to get the length of an unsupported value").as_i64()),
+	}
+}
+
 
 #[apply(internal)]
 pub fn get_fn(func: i64) -> extern "C" fn(usize) -> usize {
