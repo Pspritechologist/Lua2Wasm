@@ -29,6 +29,7 @@ auto_impl = "1.3.0"
 anyhow = "1.0.101"
 # walrus = "0.25.1"
 wasm-encoder = "0.245.1"
+leb128fmt = "0.1.0"
 
 [profile.release]
 lto = true

@@ -58,6 +58,11 @@ pub fn static_str(addr: u32, len: u32) -> i64 {
 }
 
 #[apply(internal)]
+pub fn static_function(addr: usize) -> i64 {
+	Value::function(addr).as_i64()
+}
+
+#[apply(internal)]
 pub fn add(a: i64, b: i64) -> i64 {
 	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
 

@@ -16,11 +16,13 @@ pub trait InstructionsExt<'a>: Sized {
 
 	fn static_str(&mut self, state: &mut State, idx: usize) -> &mut InstructionSink<'a> {
 		let seq = self.get_sink();
-		let (addr, len) = state.strings[idx];
-		seq.i32_const(addr.cast_signed())
-			.reloc(state, RelocEntry::i32const_address(addr))
-			.i32_const(len.cast_signed())
-			.call(state.extern_fns.static_str)
+		let string = state.strings[idx];
+		seq
+			// We set the address to a placeholder value, MAX to ensure padding.
+			.i32_const(i32::MAX)
+			.reloc(state, RelocEntry::i32const_address(string.sym))
+			.i32_const(string.len.cast_signed())
+			.call(u32::MAX)
 			.reloc(state, RelocEntry::function(state.extern_fns.static_str))
 	}
 
@@ -46,6 +48,14 @@ pub trait InstructionsExt<'a>: Sized {
 		let seq = self.get_sink();
 		loc.push_set(state, seq);
 		seq
+	}
+
+	fn push_function(&mut self, state: &mut State, symbol: u32) -> &mut InstructionSink<'a> {
+		let seq = self.get_sink();
+		seq.i32_const(i32::MAX)
+			.reloc(state, RelocEntry::i32const_indirect_fn(symbol))
+			.call(u32::MAX)
+			.reloc(state, RelocEntry::function(state.extern_fns.static_function))
 	}
 
 	fn operations(&mut self, state: &mut State, ops: impl IntoIterator<Item = Op>) -> &mut InstructionSink<'a> {
@@ -109,15 +119,13 @@ impl Expr {
 			Expr::Constant(Const::Bool(b)) => Value::bool(b).push(seq),
 			Expr::Constant(Const::Number(n)) => Value::float(n.val()).push(seq),
 			Expr::Constant(Const::String(idx)) => {
-				let (addr, len) = state.strings[idx];
-				Value::string(addr, len).push(seq);
+				seq.static_str(state, idx);
 			},
 			Expr::Slot(idx) => Loc::Slot(idx).push_get(state, seq),
 			Expr::UpValue(idx) => Loc::UpValue(idx).push_get(state, seq),
 			Expr::Global(idx) => Loc::Global(idx).push_get(state, seq),
 			Expr::VarRet => {
 				seq.i32_const(0)
-					// .binop(BinaryOp::I32Eq)
 					.i32_eq()
 					.if_(BlockType::Result(ValType::I64))
 					.i64_const(Value::nil().as_i64())
@@ -160,7 +168,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		Op::Len(dst, lhs) => { seq.expr(state, lhs).call(state.extern_fns.len).loc_set(state, dst); },
 		
 		Op::Copy(dst, val) => { val.push(state, seq); dst.push_set(state, seq); },
-		Op::LoadClosure(dst, idx) => { seq.i64_const(Value::function(idx).as_i64()); dst.push_set(state, seq); },
+		Op::LoadClosure(dst, idx) => { seq.push_function(state, state.closures[idx].unwrap().sym); dst.push_set(state, seq); },
 		Op::LoadTab(dst) => { seq.call(state.extern_fns.table_load); dst.push_set(state, seq); },
 		Op::Get(dst, tab, key) => { tab.push(state, seq); key.push(state, seq); seq.call(state.extern_fns.table_get); dst.push_set(state, seq); },
 		Op::Set(tab, key, val) => { tab.push(state, seq); key.push(state, seq); val.push(state, seq); seq.call(state.extern_fns.table_set); },

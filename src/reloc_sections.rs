@@ -1,7 +1,98 @@
-use wasm_encoder::{CustomSection, Encode, Section, SectionId};
+use wasm_encoder::{CustomSection, DataSymbolDefinition, Encode, Section, SectionId, SymbolTable};
 
 pub type RelocCodeSection = RelocSection<RelocCodeSectionImpl>;
 pub type RelocDataSection = RelocSection<RelocDataSectionImpl>;
+
+#[derive(Debug, Default)]
+pub struct SymbolTab {
+	inner: SymbolTable,
+	count: u32,
+}
+impl SymbolTab {
+	pub fn new() -> Self {
+		Self::default()
+	}
+	
+	pub fn function(&mut self, flags: u32, index: u32, name: Option<&str>) -> u32 {
+		let id = self.count;
+		self.inner.function(flags, index, name);
+		id
+	}
+
+	pub fn global(&mut self, flags: u32, index: u32, name: Option<&str>) -> u32 {
+		let id = self.count;
+		self.inner.global(flags, index, name);
+		id
+	}
+
+	pub fn table(&mut self, flags: u32, index: u32, name: Option<&str>) -> u32 {
+		let id = self.count;
+		self.inner.table(flags, index, name);
+		id
+	}
+
+	pub fn string(&mut self, index: u32, size: u32) -> u32 {
+		let id = self.count;
+		self.inner.data(SymbolTable::WASM_SYM_BINDING_LOCAL, "__luant_string", Some(DataSymbolDefinition { index, size, offset: 0 }));
+		id
+	}
+
+	pub fn inner(&self) -> &SymbolTable {
+		&self.inner
+	}
+
+	//? Copied from [`SymbolTable`] for convenience.
+
+	/// This is a weak symbol.
+	///
+	/// This flag is mutually exclusive with `WASM_SYM_BINDING_LOCAL`.
+	///
+	/// When linking multiple modules defining the same symbol, all weak
+	/// definitions are discarded if any strong definitions exist; then if
+	/// multiple weak definitions exist all but one (unspecified) are discarded;
+	/// and finally it is an error if more than one definition remains.
+	pub const WASM_SYM_BINDING_WEAK: u32 = 0x1;
+
+	/// This is a local symbol.
+	///
+	/// This flag is mutually exclusive with `WASM_SYM_BINDING_WEAK`.
+	///
+	/// Local symbols are not to be exported, or linked to other
+	/// modules/sections. The names of all non-local symbols must be unique, but
+	/// the names of local symbols are not considered for uniqueness. A local
+	/// function or global symbol cannot reference an import.
+	pub const WASM_SYM_BINDING_LOCAL: u32 = 0x02;
+
+	/// This is a hidden symbol.
+	///
+	/// Hidden symbols are not to be exported when performing the final link,
+	/// but may be linked to other modules.
+	pub const WASM_SYM_VISIBILITY_HIDDEN: u32 = 0x04;
+
+	/// This symbol is not defined.
+	///
+	/// For non-data symbols, this must match whether the symbol is an import or
+	/// is defined; for data symbols, determines whether a segment is specified.
+	pub const WASM_SYM_UNDEFINED: u32 = 0x10;
+
+	/// This symbol is intended to be exported from the wasm module to the host
+	/// environment.
+	///
+	/// This differs from the visibility flags in that it effects the static
+	/// linker.
+	pub const WASM_SYM_EXPORTED: u32 = 0x20;
+
+	/// This symbol uses an explicit symbol name, rather than reusing the name
+	/// from a wasm import.
+	///
+	/// This allows it to remap imports from foreign WebAssembly modules into
+	/// local symbols with different names.
+	pub const WASM_SYM_EXPLICIT_NAME: u32 = 0x40;
+
+	/// This symbol is intended to be included in the linker output, regardless
+	/// of whether it is used by the program.
+	pub const WASM_SYM_NO_STRIP: u32 = 0x80;
+}
 
 pub trait RelocSectionImpl {
 	const SECTION_NAME: &'static str;
@@ -21,18 +112,11 @@ pub struct RelocEntry {
 	over_length: usize,
 	index: u32,
 }
-impl Encode for RelocEntry {
-	fn encode(&self, sink: &mut Vec<u8>) {
-		sink.push(self.type_);
-		self.over_length.encode(sink);
-		self.index.encode(sink);
-	}
-}
 
 impl RelocEntry {
-	pub fn function(func: u32) -> Self {
+	pub fn function(symbol: u32) -> Self {
 		// `5` is the length of a varuint32 immediate value, coming immediately after the `call` opcode.
-		Self { type_: 0, over_length: 5, index: func }
+		Self { type_: 0, over_length: 5, index: symbol }
 	}
 
 	pub fn i32const_indirect_fn(func: u32) -> Self {
@@ -40,14 +124,14 @@ impl RelocEntry {
 		Self { type_: 1, over_length: 5, index: func }
 	}
 
-	pub fn i32const_address(addr: u32) -> Self {
+	pub fn i32const_address(symbol: u32) -> Self {
 		// `5` is the length of a varuint32 immediate value, coming immediately after the `i32.const` opcode.
-		Self { type_: 4, over_length: 5, index: addr }
+		Self { type_: 4, over_length: 5, index: symbol }
 	}
 
-	pub fn call_type(func_type: u32) -> Self {
+	pub fn call_type(type_index: u32) -> Self {
 		// `5` is the length of a varuint32 immediate value, coming immediately after the `call_indirect` opcode.
-		Self { type_: 6, over_length: 5, index: func_type }
+		Self { type_: 6, over_length: 5, index: type_index }
 	}
 
 	pub fn global(global: u32) -> Self {
@@ -59,6 +143,26 @@ impl RelocEntry {
 		// `5` is the length of a varuint32 immediate value, coming immediately after the `tag` opcode.
 		Self { type_: 10, over_length: 5, index: tag }
 	}
+}
+
+
+pub fn encode_padded_usize(val: usize, sink: &mut Vec<u8>) {
+	assert!(val <= u32::MAX as usize);
+	encode_padded_u32(val as u32, sink);
+}
+
+pub fn encode_padded_u32(num: u32, sink: &mut Vec<u8>) {
+	let (mut value, _pos) = leb128fmt::encode_u32(num).unwrap();
+	value.iter_mut().rev().skip(1).rev().for_each(|b| *b |= 0x80);
+	debug_assert_eq!(Some((num, value.len())), leb128fmt::decode_u32(value));
+	sink.extend_from_slice(&value);
+}
+
+pub fn encode_padded_i32(num: i32, sink: &mut Vec<u8>) {
+	let (mut value, _pos) = leb128fmt::encode_s32(num).unwrap();
+	value.iter_mut().rev().skip(1).rev().for_each(|b| *b |= 0x80);
+	debug_assert_eq!(Some((num, value.len())), leb128fmt::decode_s32(value));
+	sink.extend_from_slice(&value);
 }
 
 #[derive(Debug, Default)]
@@ -73,11 +177,13 @@ impl<S: RelocSectionImpl + Default> RelocSection<S> {
 		Self::default()
 	}
 
-	pub fn append_entry(&mut self, section_len: usize, mut entry: RelocEntry) {
-		entry.over_length = section_len - entry.over_length;
-		entry.encode(&mut self.buf);
-		dbg!(&self.buf);
-		eprintln!();
+	pub fn append_entry(&mut self, section_len: usize, entry: RelocEntry) {
+		let offset = section_len - entry.over_length;
+
+		self.buf.push(entry.type_);
+		encode_padded_usize(offset, &mut self.buf);
+		encode_padded_u32(entry.index, &mut self.buf);
+
 		self.entries += 1;
 	}
 }
