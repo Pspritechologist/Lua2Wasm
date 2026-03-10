@@ -436,7 +436,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		.section(&state.element_sect)
 		.section(&state.code_sect)
 		.section(&state.data_sect)
-		.section(LinkingSection::new().symbol_table(state.symbol_table.inner()))
+		.section(LinkingSection::new().symbol_table(&state.symbol_table))
 		.section(&state.reloc_code_sect)
 		.section(&state.reloc_data_sect)
 		.section(&names)
