@@ -1,24 +1,23 @@
 use instructions_ext::InstructionsExt;
 use luant_lexer::LexInterner;
 use anyhow::Result;
-use value::Value;
 use std::collections::BTreeMap;
 use wasm_encoder::{
     BlockType, Catch, CodeSection, ConstExpr, DataSection, ElementSection, Elements,
     EntityType, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
-    IndirectNameMap, Instruction, InstructionSink, LinkingSection, MemArg, MemorySection,
+    IndirectNameMap, Instruction, InstructionSink, MemArg, MemorySection,
     MemoryType, Module, NameMap, NameSection, ProducersField, ProducersSection, RefType,
-    StartSection, /* SymbolTable, */ TableSection, TableType, TagKind, TagSection, TagType, TypeSection,
+    StartSection, TableSection, TableType, TagKind, TagSection, TagType, TypeSection,
     ValType,
 };
 
-use crate::reloc_sections::{RelocCodeSection, RelocDataSection, SymbolTab};
+use crate::linking::{LinkingSection, RelocSection, SymbolTab};
 
 pub mod parsing;
 mod bytecode;
 mod debug;
 mod instructions_ext;
-mod reloc_sections;
+mod linking;
 
 pub struct State<'s> {
 	module: Module,
@@ -34,8 +33,8 @@ pub struct State<'s> {
 	function_sect: FunctionSection,
 	function_names: NameMap,
 	local_names: IndirectNameMap,
-	reloc_code_sect: RelocCodeSection,
-	reloc_data_sect: RelocDataSection,
+	reloc_code_sect: RelocSection,
+	reloc_data_sect: RelocSection,
 	function_count: u32,
 	code_sect: CodeSection,
 	data_sect: DataSection,
@@ -194,8 +193,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	let function_sect = FunctionSection::new();
 	let code_sect = CodeSection::new();
 	let mut data_sect = DataSection::new();
-	let mut reloc_code_sect = RelocCodeSection::new();
-	let mut reloc_data_sect = RelocDataSection::new();
+	let mut reloc_code_sect = RelocSection::new();
+	let mut reloc_data_sect = RelocSection::new();
 
 	let strings = {
 		let mut offset = 0;
@@ -409,9 +408,14 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	let mut module = state.module;
 
-	state.symbol_table.function(SymbolTab::WASM_SYM_BINDING_LOCAL | SymbolTab::WASM_SYM_NO_STRIP, init_fn, Some("__luant_init_fn"));
+	state.symbol_table.function(SymbolTab::WASM_SYM_BINDING_LOCAL | SymbolTab::WASM_SYM_EXPORTED, init_fn, Some("start"));
 	let function_elements = closures.into_iter().map(|c| c.id).collect();
 	state.element_sect.active(Some(state.call_tab), &ConstExpr::i32_const(0), Elements::Functions(function_elements));
+
+	state.symbol_table.section(10);
+	state.symbol_table.section(11);
+	// state.symbol_table.section(15);
+	// state.symbol_table.section(16);
 
 	let mut names = NameSection::new();
 	names.functions(&state.function_names);
@@ -437,8 +441,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		.section(&state.code_sect)
 		.section(&state.data_sect)
 		.section(LinkingSection::new().symbol_table(&state.symbol_table))
-		.section(&state.reloc_code_sect)
-		.section(&state.reloc_data_sect)
+		.section(&state.reloc_code_sect.finish("reloc.CODE", 10))
+		.section(&state.reloc_data_sect.finish("reloc.DATA", 11))
 		.section(&names)
 		.section(&producers);
 

@@ -1,5 +1,5 @@
 use crate::{
-	State, bytecode::{Loc, Operation as Op, RetKind}, parsing::expressions::{Const, Expr}, reloc_sections::RelocEntry
+	State, bytecode::{Loc, Operation as Op, RetKind}, parsing::expressions::{Const, Expr}, linking::RelocEntry
 };
 use value::Value;
 use wasm_encoder::{BlockType, InstructionSink, MemArg, ValType};
