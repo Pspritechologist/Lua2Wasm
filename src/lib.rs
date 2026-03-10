@@ -18,6 +18,7 @@ mod bytecode;
 mod debug;
 mod instructions_ext;
 mod linking;
+mod runtime_impls;
 
 pub struct State<'s> {
 	module: Module,
@@ -193,8 +194,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	let function_sect = FunctionSection::new();
 	let code_sect = CodeSection::new();
 	let mut data_sect = DataSection::new();
-	let mut reloc_code_sect = RelocSection::new();
-	let mut reloc_data_sect = RelocSection::new();
+	let reloc_code_sect = RelocSection::new();
+	let reloc_data_sect = RelocSection::new();
 
 	let strings = {
 		let mut offset = 0;
@@ -292,102 +293,19 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 			.local_tee(global_tab)
 			.global_set(state.global_table);
 
+		let mut add_fn = |name: &str, key, idx, f: fn(&mut State, &mut InstructionSink, u32)| {
+			let func = compile_function(&mut state, name, idx, f);
+			closures.push(func);
+			seq.push_function(&mut state, func.sym)
+				.local_get(global_tab)
+				.static_str(&mut state, key)
+				.call(state.extern_fns.table_set_name);
+		};
+
 		// Load the 'error' function into it.
-		let error_fn = compile_function(&mut state, "__luant_std_error", 0, |state, seq, _| {
-			seq.global_get(state.shtack_ptr)
-				// .load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 3, offset: 0 })
-				.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem }) //TODO: This assumes the first arg is null if not provided...
-				.throw(0)
-				.i32_const(0);
-		});
-		
-		// let error_fn_sym = state.symbol_table.function(SymbolTab::WASM_SYM_BINDING_LOCAL, error_fn, Some("luant_std_error"));
-		closures.push(error_fn);
-		seq.push_function(&mut state, error_fn.sym)
-			.local_get(global_tab)
-			.static_str(&mut state, internal_strings.error)
-			.call(state.extern_fns.table_set_name);
-		
+		add_fn("__luant_std_error", internal_strings.error, 0, runtime_impls::error);
 		// Load the 'pcall' function into it.
-		let pcall_fn = compile_function(&mut state, "__luant_std_pcall", 1, |state, seq, _| {
-			let arg_cnt = 0;
-			let temp_var = 1;
-
-			seq.global_get(state.shtack_ptr)
-				// .load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 3, offset: 0 })
-				.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem }) //TODO: This assumes the first arg is null if not provided...
-				.local_set(temp_var);
-
-			// Increase the stack pointer by one to remove the first arg.
-			seq.global_get(state.shtack_ptr)
-				.i32_const(1)
-				.i32_add()
-				.global_set(state.shtack_ptr);
-
-			seq.block(BlockType::Result(ValType::I64))
-				.try_table(BlockType::Result(ValType::I64), [Catch::One { tag: 0, label: 0 }]);
-
-			// Write the 'try' block...
-			seq
-				// Pass the current arg count minus one, to a minimum of zero.
-				.i32_const(0)
-				.i32_const(1)
-				.local_get(arg_cnt)
-				.i32_sub()
-				.i32_const(0)
-				.local_get(arg_cnt)
-				.i32_eq()
-				.typed_select(ValType::I32)
-				// Make the call.
-				.local_get(temp_var)
-				.call(state.extern_fns.get_fn)
-				.call_indirect(state.dyn_call_ty, state.call_tab)
-				// Increase the count to return, accounting for the error flag.
-				.i32_const(1)
-				.i32_add()
-				// Reset the shtack pointer.
-				.global_get(state.shtack_ptr)
-				.i32_const(1)
-				.i32_sub()
-				.global_set(state.shtack_ptr)
-				// And prepend the 'success' flag to the return values.
-				.global_get(state.shtack_ptr)
-				.const_val(true)
-				.i64_store(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
-				// Return the new arg count, still on the stack.
-				.return_()
-				.end();
-
-			seq.end();
-
-			// Write the 'catch' block...
-			seq
-				// Store the error object for now.
-				.local_set(temp_var)
-				// Reset the shtack pointer.
-				.global_get(state.shtack_ptr)
-				.i32_const(1)
-				.i32_sub()
-				.global_set(state.shtack_ptr)
-				// Prepend the 'error' flag to the return values.
-				.global_get(state.shtack_ptr)
-				.const_val(false)
-				.i64_store(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
-				// Set the error object as the second return value.
-				.global_get(state.shtack_ptr)
-				.local_get(temp_var)
-				.i64_store(MemArg { align: 3, offset: 8, memory_index: state.shtack_mem })
-				// Return the arg count of two.
-				.i32_const(2)
-				.return_();
-		});
-
-		// let pcall_fn_sym = state.symbol_table.function(SymbolTab::WASM_SYM_BINDING_LOCAL, pcall_fn, Some("luant_std_pcall"));
-		closures.push(pcall_fn);
-		seq.push_function(&mut state, pcall_fn.sym)
-			.local_get(global_tab)
-			.static_str(&mut state, internal_strings.pcall)
-			.call(state.extern_fns.table_set_name);
+		add_fn("__luant_std_pcall", internal_strings.pcall, 1, runtime_impls::pcall);
 
 		// Generate a call to the actual main function.
 		seq.i32_const(0)
