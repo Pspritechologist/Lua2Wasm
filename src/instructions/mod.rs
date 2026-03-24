@@ -275,14 +275,14 @@ impl<'a> InstructionSink<'a> {
 	}
 
 	/// Encode [`Instruction::GlobalGet`].
-	pub fn global_get(&mut self, g: u32) -> &mut Self {
+	fn global_get_raw(&mut self, g: u32) -> &mut Self {
 		self.sink.push(0x23);
 		g.encode(&mut self.sink);
 		self
 	}
 
 	/// Encode [`Instruction::GlobalSet`].
-	pub fn global_set(&mut self, g: u32) -> &mut Self {
+	fn global_set_raw(&mut self, g: u32) -> &mut Self {
 		self.sink.push(0x24);
 		g.encode(&mut self.sink);
 		self

@@ -43,12 +43,12 @@ pub struct State<'s> {
 	shtack_mem: u32,
 	dyn_call_ty: u32,
 	call_tab: u32,
-	shtack_ptr: u32,
+	shtack_ptr: Symbol,
 	strings: Box<[StringRef]>,
 	closures: Box<[Option<ClosureRef>]>,
 	extern_fns: ExternFns,
 	interner: LexInterner<'s>,
-	global_table: u32,
+	global_table: Symbol,
 
 	// Per-function data
 	// relocations: Vec<>,
@@ -216,8 +216,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	global_sect.global(GlobalType { val_type: ValType::I32, mutable: true, shared: false }, &ConstExpr::i32_const(0));
 	global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
-	symbol_table.global(SymbolTab::WASM_SYM_BINDING_LOCAL, 0, Some("__luant_shtack_ptr"));
-	symbol_table.global(SymbolTab::WASM_SYM_BINDING_LOCAL, 1, Some("__luant_global_table"));
+	let shtack_ptr = symbol_table.global(SymbolTab::WASM_SYM_BINDING_LOCAL, 0, Some("__luant_shtack_ptr"));
+	let global_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_LOCAL, 1, Some("__luant_global_table"));
 
 	types_sect.ty().function([ValType::I32], [ValType::I32]);
 
@@ -239,7 +239,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		dyn_call_ty: 0,
 		call_tab: 0,
 		locals: Default::default(),
-		shtack_ptr: 0,
+		shtack_ptr,
 		strings,
 		memory: 0,
 		shtack_mem: 1,
@@ -248,7 +248,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		extern_fns,
 		interner,
 		module: Module::new(),
-		global_table: 1,
+		global_table,
 		symbol_table,
 		types_sect,
 		import_sect,
@@ -296,7 +296,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 			// Initialize the global table.
 			seq.call(state, state.extern_fns.table_load)
 				.local_tee(global_tab)
-				.global_set(state.global_table);
+				.global_set(state, state.global_table);
 
 			let mut add_fn = |name: &str, key, idx, f: fn(&mut State, &mut InstructionSink, u32)| {
 				let func = compile_function(state, name, idx, f);
@@ -432,7 +432,7 @@ fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> 
 					.i32_const(i.into())
 					.i32_le_u()
 					.br_if(0)
-					.global_get(state.shtack_ptr)
+					.global_get(state, state.shtack_ptr)
 					.i64_load(MemArg { align: 3, offset: u64::from(i) * 8, memory_index: state.shtack_mem })
 					.local_set(state.locals[&i]);
 			}

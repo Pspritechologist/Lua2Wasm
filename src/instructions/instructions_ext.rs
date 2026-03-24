@@ -42,7 +42,15 @@ impl InstructionSink<'_> {
 			.reloc(state, RelocEntry::call_type(type_index))
 	}
 
-	// pub fn call_ref
+	pub fn global_get(&mut self, state: &mut State, symbol: Symbol) -> &mut Self {
+		self.global_get_raw(u32::MAX)
+			.reloc(state, RelocEntry::global(symbol))
+	}
+
+	pub fn global_set(&mut self, state: &mut State, symbol: Symbol) -> &mut Self {
+		self.global_set_raw(u32::MAX)
+			.reloc(state, RelocEntry::global(symbol))
+	}
 
 	pub fn const_val(&mut self, value: impl Into<Value>) -> &mut Self {
 		value.into().push(self);
@@ -99,7 +107,7 @@ impl Loc {
 			Loc::Slot(idx) => { seq.local_get(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
 			Loc::Global(idx) => {
-				seq.global_get(state.global_table)
+				seq.global_get(state, state.global_table)
 					.static_str(state, idx)
 					.call(state, state.extern_fns.table_get_name);
 			},
@@ -111,7 +119,7 @@ impl Loc {
 			Loc::Slot(idx) => { seq.local_set(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
 			Loc::Global(idx) => {
-				seq.global_get(state.global_table)
+				seq.global_get(state, state.global_table)
 					.static_str(state, idx)
 					.call(state, state.extern_fns.table_set_name);
 			},
@@ -137,7 +145,7 @@ impl Expr {
 					.if_(BlockType::Result(ValType::I64))
 					.i64_const(Value::nil().as_i64())
 					.else_()
-					.global_get(state.shtack_ptr)
+					.global_get(state, state.shtack_ptr)
 					.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
 					.end();
 			},
@@ -191,7 +199,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		},
 		Op::Ret { ret_slot, ret_cnt } => {
 			for (i, s) in (ret_slot..ret_slot + ret_cnt).enumerate() {
-				seq.global_get(state.shtack_ptr)
+				seq.global_get(state, state.shtack_ptr)
 					.loc_get(state, Loc::Slot(s))
 					.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
 			}
@@ -199,7 +207,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 		},
 		Op::Call { func_slot, arg_cnt, ret_kind } => {
 			for i in 0..arg_cnt {
-				seq.global_get(state.shtack_ptr)
+				seq.global_get(state, state.shtack_ptr)
 					.loc_get(state, Loc::Slot(func_slot + i + 1))
 					.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
 			}
@@ -216,7 +224,7 @@ fn compile_op(state: &mut State, ops: &mut impl Iterator<Item=Op>, seq: &mut Ins
 						.if_(BlockType::Result(ValType::I64))
 						.i64_const(Value::nil().as_i64())
 						.else_()
-						.global_get(state.shtack_ptr)
+						.global_get(state, state.shtack_ptr)
 						.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
 						.loc_set(state, loc);
 				},
