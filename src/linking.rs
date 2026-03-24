@@ -65,7 +65,7 @@ impl SymbolTab {
 		Self { bytes: Vec::new(), count: 0 }
 	}
 	
-	pub fn function(&mut self, flags: u32, index: u32, name: Option<&str>) -> u32 {
+	pub fn function(&mut self, flags: u32, index: u32, name: Option<&str>) -> Symbol {
 		let id = self.count;
 		self.count += 1;
 
@@ -76,10 +76,10 @@ impl SymbolTab {
 			name.encode(&mut self.bytes);
 		}
 
-		id
+		Symbol::new(id)
 	}
 
-	pub fn data(&mut self, flags: u32, name: &str, def: Option<DataSymbolDefinition>) -> u32 {
+	pub fn data(&mut self, flags: u32, name: &str, def: Option<DataSymbolDefinition>) -> Symbol {
 		let id = self.count;
 		self.count += 1;
 		
@@ -92,14 +92,14 @@ impl SymbolTab {
 			def.size.encode(&mut self.bytes);
 		}
 		
-		id
+		Symbol::new(id)
 	}
 
-	pub fn string(&mut self, index: u32, size: u32) -> u32 {
+	pub fn string(&mut self, index: u32, size: u32) -> Symbol {
 		self.data(SymbolTab::WASM_SYM_BINDING_LOCAL, "__luant_string", Some(DataSymbolDefinition { index, size, offset: 0 }))
 	}
 
-	pub fn global(&mut self, flags: u32, index: u32, name: Option<&str>) -> u32 {
+	pub fn global(&mut self, flags: u32, index: u32, name: Option<&str>) -> Symbol {
 		let id = self.count;
 		self.count += 1;
 		
@@ -110,10 +110,10 @@ impl SymbolTab {
 			name.encode(&mut self.bytes);
 		}
 		
-		id
+		Symbol::new(id)
 	}
 
-	pub fn section(&mut self, idx: u32) -> u32 {
+	pub fn section(&mut self, idx: u32) -> Symbol {
 		let id = self.count;
 		self.count += 1;
 		
@@ -121,10 +121,10 @@ impl SymbolTab {
 		SymbolTab::WASM_SYM_BINDING_LOCAL.encode(&mut self.bytes);
 		idx.encode(&mut self.bytes);
 		
-		id
+		Symbol::new(id)
 	}
 
-	pub fn tag(&mut self, flags: u32, index: u32, name: Option<&str>) -> u32 {
+	pub fn tag(&mut self, flags: u32, index: u32, name: Option<&str>) -> Symbol {
 		let id = self.count;
 		self.count += 1;
 		
@@ -135,10 +135,10 @@ impl SymbolTab {
 			name.encode(&mut self.bytes);
 		}
 		
-		id
+		Symbol::new(id)
 	}
 
-	pub fn table(&mut self, flags: u32, index: u32, name: Option<&str>) -> u32 {
+	pub fn table(&mut self, flags: u32, index: u32, name: Option<&str>) -> Symbol {
 		let id = self.count;
 		self.count += 1;
 		
@@ -149,7 +149,7 @@ impl SymbolTab {
 			name.encode(&mut self.bytes);
 		}
 		
-		id
+		Symbol::new(id)
 	}
 
 	//? Forwarded from [`SymbolTable`] for convenience.

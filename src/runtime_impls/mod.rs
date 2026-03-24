@@ -1,5 +1,5 @@
-use crate::{State, instructions_ext::InstructionsExt};
-use wasm_encoder::{BlockType, Catch, InstructionSink, MemArg, ValType};
+use crate::{State, InstructionSink};
+use wasm_encoder::{BlockType, Catch, MemArg, ValType};
 
 pub fn pcall(state: &mut State, seq: &mut InstructionSink, _: u32) {
 	let arg_cnt = 0;
@@ -32,8 +32,8 @@ pub fn pcall(state: &mut State, seq: &mut InstructionSink, _: u32) {
 		.typed_select(ValType::I32)
 		// Make the call.
 		.local_get(temp_var)
-		.call(state.extern_fns.get_fn)
-		.call_indirect(state.dyn_call_ty, state.call_tab)
+		.call(state, state.extern_fns.get_fn)
+		.call_indirect(state, state.dyn_call_ty)
 		// Increase the count to return, accounting for the error flag.
 		.i32_const(1)
 		.i32_add()

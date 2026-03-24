@@ -1,22 +1,22 @@
-use instructions_ext::InstructionsExt;
 use luant_lexer::LexInterner;
 use anyhow::Result;
 use std::collections::BTreeMap;
 use wasm_encoder::{
     BlockType, Catch, CodeSection, ConstExpr, DataSection, ElementSection, Elements,
     EntityType, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
-    IndirectNameMap, Instruction, InstructionSink, MemArg, MemorySection,
+    IndirectNameMap, Instruction, MemArg, MemorySection,
     MemoryType, Module, NameMap, NameSection, ProducersField, ProducersSection, RefType,
     StartSection, TableSection, TableType, TagKind, TagSection, TagType, TypeSection,
     ValType,
 };
 
-use crate::linking::{LinkingSection, RelocSection, SymbolTab};
+use crate::linking::{LinkingSection, RelocSection, Symbol, SymbolTab};
+use crate::instructions::{InstructionSink, FunctionExt};
 
 pub mod parsing;
 mod bytecode;
 mod debug;
-mod instructions_ext;
+mod instructions;
 mod linking;
 mod runtime_impls;
 
@@ -43,20 +43,23 @@ pub struct State<'s> {
 	shtack_mem: u32,
 	dyn_call_ty: u32,
 	call_tab: u32,
-	locals: BTreeMap<u8, u32>,
 	shtack_ptr: u32,
 	strings: Box<[StringRef]>,
 	closures: Box<[Option<ClosureRef>]>,
 	extern_fns: ExternFns,
 	interner: LexInterner<'s>,
 	global_table: u32,
+
+	// Per-function data
+	// relocations: Vec<>,
+	locals: BTreeMap<u8, u32>,
 	/// The distance from the last loop.
 	loop_depth: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ClosureRef {
-	sym: u32,
+	sym: Symbol,
 	id: u32,
 }
 
@@ -64,7 +67,7 @@ struct ClosureRef {
 struct StringRef {
 	addr: u32,
 	len: u32,
-	sym: u32,
+	sym: Symbol,
 }
 
 macro_rules! extern_fns {
@@ -78,7 +81,7 @@ macro_rules! extern_fns {
 			$(
 				$(#[$attr])*
 				#[allow(unused)] //TODO
-				$field: u32,
+				$field: Symbol,
 			)+
 		}
 
@@ -283,35 +286,39 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	let init_fn = {
 		let mut builder = Function::new_with_locals_types([ValType::I64]);
-		let mut seq = builder.instructions();
 
-		let global_tab = 0;
+		{
+			let state = &mut state;
+			let mut seq = builder.sink();
 
-		// Initialize the global table.
-		seq.call(state.extern_fns.table_load)
-			.local_tee(global_tab)
-			.global_set(state.global_table);
+			let global_tab = 0;
 
-		let mut add_fn = |name: &str, key, idx, f: fn(&mut State, &mut InstructionSink, u32)| {
-			let func = compile_function(&mut state, name, idx, f);
-			closures.push(func);
-			seq.push_function(&mut state, func.sym)
-				.local_get(global_tab)
-				.static_str(&mut state, key)
-				.call(state.extern_fns.table_set_name);
-		};
+			// Initialize the global table.
+			seq.call(state, state.extern_fns.table_load)
+				.local_tee(global_tab)
+				.global_set(state.global_table);
 
-		// Load the 'error' function into it.
-		add_fn("__luant_std_error", internal_strings.error, 0, runtime_impls::error);
-		// Load the 'pcall' function into it.
-		add_fn("__luant_std_pcall", internal_strings.pcall, 1, runtime_impls::pcall);
+			let mut add_fn = |name: &str, key, idx, f: fn(&mut State, &mut InstructionSink, u32)| {
+				let func = compile_function(state, name, idx, f);
+				closures.push(func);
+				seq.push_function(state, func)
+					.local_get(global_tab)
+					.static_str(state, key)
+					.call(state, state.extern_fns.table_set_name);
+			};
 
-		// Generate a call to the actual main function.
-		seq.i32_const(0)
-			.call(main_fn.id) //FIXME: Reloc
-			.drop();
+			// Load the 'error' function into it.
+			add_fn("__luant_std_error", internal_strings.error, 0, runtime_impls::error);
+			// Load the 'pcall' function into it.
+			add_fn("__luant_std_pcall", internal_strings.pcall, 1, runtime_impls::pcall);
 
-		seq.end();
+			// Generate a call to the actual main function.
+			seq.i32_const(0)
+				.call(state, main_fn.sym) //FIXME: Reloc
+				.drop();
+
+			seq.end();
+		}
 
 		let id = state.function_count;
 		state.function_count += 1;
@@ -348,7 +355,6 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		.section(&state.tag_sect)
 		.section(&state.global_sect)
 		.section(&state.export_sect)
-		.section(&StartSection { function_index: init_fn })
 		.section(&state.element_sect)
 		.section(&state.code_sect)
 		.section(&state.data_sect)
@@ -366,7 +372,7 @@ fn compile_function(state: &mut State, name: impl AsRef<str>, locals: u32, f: im
 	state.function_count += 1;
 
 	let mut builder = Function::new([(locals, ValType::I64)]);
-	f(state, &mut builder.instructions(), id);
+	f(state, &mut builder.sink(), id);
 	builder.instruction(&Instruction::End);
 	state.code_sect.function(&builder);
 	state.function_sect.function(state.dyn_call_ty);
