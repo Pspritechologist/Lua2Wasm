@@ -277,7 +277,6 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	}
 
 	let main_fn = compile_luant_function(&mut state, &main_fn);
-	// let main_fn_sym = state.symbol_table.function(SymbolTab::WASM_SYM_BINDING_LOCAL, main_fn, Some("luant_main"));
 	state.closures[0] = Some(main_fn);
 
 	let mut closures: Vec<_> = state.closures.iter().copied().map(Option::unwrap).collect();
@@ -326,14 +325,9 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	let mut module = state.module;
 
-	state.symbol_table.function(SymbolTab::WASM_SYM_BINDING_LOCAL | SymbolTab::WASM_SYM_EXPORTED, init_fn, Some("start"));
+	state.symbol_table.function(SymbolTab::WASM_SYM_EXPORTED, init_fn, Some("start"));
 	let function_elements = closures.into_iter().map(|c| c.id).collect();
 	state.element_sect.active(Some(state.call_tab), &ConstExpr::i32_const(0), Elements::Functions(function_elements));
-
-	state.symbol_table.section(10);
-	state.symbol_table.section(11);
-	// state.symbol_table.section(15);
-	// state.symbol_table.section(16);
 
 	let mut names = NameSection::new();
 	names.functions(&state.function_names);
