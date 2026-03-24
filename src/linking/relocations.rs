@@ -80,8 +80,14 @@ impl RelocEntry {
 
 #[derive(Debug, Default)]
 pub struct RelocSection {
-	buf: Vec<u8>,
-	entries: u32,
+	entries: Vec<RelocData>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RelocData {
+	type_: RelocType,
+	offset_pre_len: usize,
+	symbol_index: u32,
 }
 
 impl RelocSection {
@@ -90,29 +96,24 @@ impl RelocSection {
 	}
 
 	pub fn append_entry(&mut self, section_len: usize, entry: RelocEntry) {
-		let offset = section_len - entry.over_length;
-
-		self.buf.push(entry.type_ as u8);
-		offset.encode(&mut self.buf);
-		entry.symbol.index.encode(&mut self.buf);
-
-		if entry.type_ == RelocType::MemoryAddrSleb {
-			// For R_WASM_MEMORY_ADDR_*, R_WASM_FUNCTION_OFFSET_I32, and R_WASM_SECTION_OFFSET_I32 relocations (and their 64-bit counterparts) the following field is additionally present:
-			// addend	varint32	addend to add to the address
-			0.encode(&mut self.buf)
-		}
-
-		self.entries += 1;
+		let offset_pre_len = section_len - entry.over_length;
+		
+		self.entries.push(RelocData {
+			type_: entry.type_,
+			offset_pre_len,
+			symbol_index: entry.symbol.index(),
+		});
 	}
 
-	pub fn finish<'a>(&'a self, name: &'a str, target_section_idx: u32) -> impl Section + 'a {
-		RelocSectionEncode { section: self, name, section_idx: target_section_idx }
+	pub fn finish<'a>(&'a self, name: &'a str, target_section_idx: u32, section_len_bytes_len: usize) -> impl Section + 'a {
+		RelocSectionEncode { section: self, name, section_len_bytes_len, section_idx: target_section_idx }
 	}
 }
 
 struct RelocSectionEncode<'a, 'b> {
 	section: &'a RelocSection,
 	name: &'b str,
+	section_len_bytes_len: usize,
 	section_idx: u32,
 }
 
@@ -121,8 +122,19 @@ impl Encode for RelocSectionEncode<'_, '_> {
 		let mut buf = vec![];
 
 		self.section_idx.encode(&mut buf);
-		self.section.entries.encode(&mut buf);
-		buf.extend_from_slice(&self.section.buf);
+		self.section.entries.len().encode(&mut buf);
+
+		for reloc in &self.section.entries {
+			buf.push(reloc.type_ as u8);
+			(reloc.offset_pre_len + self.section_len_bytes_len).encode(&mut buf);
+			reloc.symbol_index.encode(&mut buf);
+
+			if reloc.type_ == RelocType::MemoryAddrSleb {
+				// For R_WASM_MEMORY_ADDR_*, R_WASM_FUNCTION_OFFSET_I32, and R_WASM_SECTION_OFFSET_I32 relocations (and their 64-bit counterparts) the following field is additionally present:
+				// addend	varint32	addend to add to the address
+				0.encode(&mut buf)
+			}
+		}
 
 		CustomSection {
 			name: self.name.into(),

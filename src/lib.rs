@@ -285,6 +285,17 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	let mut closures: Vec<_> = state.closures.iter().copied().map(Option::unwrap).collect();
 
 	let init_fn = {
+		//? Relocations *must* be emitted in order, so we cannot compile these functions as
+		//? we assign them to the global table.
+		let mut std_fn = |name: &str, idx, f: fn(&mut State, &mut InstructionSink, u32)| {
+			let func = compile_function(&mut state, name, idx, f);
+			closures.push(func);
+			func
+		};
+
+		let std_error = std_fn("__luant_std_error", 0, runtime_impls::error);
+		let std_pcall = std_fn("__luant_std_pcall", 1, runtime_impls::pcall);
+
 		let mut builder = Function::new_with_locals_types([ValType::I64]);
 
 		{
@@ -298,9 +309,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 				.local_tee(global_tab)
 				.global_set(state, state.global_table);
 
-			let mut add_fn = |name: &str, key, idx, f: fn(&mut State, &mut InstructionSink, u32)| {
-				let func = compile_function(state, name, idx, f);
-				closures.push(func);
+			let mut add_fn = |key, func| {
 				seq.push_function(state, func)
 					.local_get(global_tab)
 					.static_str(state, key)
@@ -308,9 +317,9 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 			};
 
 			// Load the 'error' function into it.
-			add_fn("__luant_std_error", internal_strings.error, 0, runtime_impls::error);
+			add_fn(internal_strings.error, std_error);
 			// Load the 'pcall' function into it.
-			add_fn("__luant_std_pcall", internal_strings.pcall, 1, runtime_impls::pcall);
+			add_fn(internal_strings.pcall, std_pcall);
 
 			// Generate a call to the actual main function.
 			seq.i32_const(0)
@@ -346,6 +355,10 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		.field("language", ProducersField::new().value("Lua", "5.5"))
 		.field("processed-by", ProducersField::new().value("luant", env!("CARGO_PKG_VERSION")));
 
+	// Get the number of bytes the encoding the of the item count in the section will use...
+	// Relocations need this information.
+	let (_, code_section_len_len) = leb128fmt::encode_u32(state.code_sect.len()).unwrap();
+
 	module
 		.section(&state.types_sect)
 		.section(&state.import_sect)
@@ -359,8 +372,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		.section(&state.code_sect)
 		.section(&state.data_sect)
 		.section(LinkingSection::new().symbol_table(&state.symbol_table))
-		.section(&state.reloc_code_sect.finish("reloc.CODE", 10))
-		.section(&state.reloc_data_sect.finish("reloc.DATA", 11))
+		.section(&state.reloc_code_sect.finish("reloc.CODE", 9, code_section_len_len))
+		// .section(&state.reloc_data_sect.finish("reloc.DATA", 10))
 		.section(&names)
 		.section(&producers);
 

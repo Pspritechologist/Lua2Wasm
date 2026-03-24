@@ -86,8 +86,8 @@ impl InstructionSink<'_> {
 		self
 	}
 
-	pub fn reloc(&mut self, state: &mut State, entry: RelocEntry) -> &mut Self {
-		state.reloc_code_sect.append_entry(state.code_sect.byte_len(), entry);
+	fn reloc(&mut self, state: &mut State, entry: RelocEntry) -> &mut Self {
+		state.reloc_code_sect.append_entry(state.code_sect.byte_len() + self.byte_len(), entry);
 		self
 	}
 }
