@@ -284,11 +284,19 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	let mut closures: Vec<_> = state.closures.iter().copied().map(Option::unwrap).collect();
 
+	let ty = state.types_sect.len();
+	state.types_sect.ty().function([ValType::I64], []);
+	compile_function(&mut state, "throw", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |_state, seq, _| {
+		seq.local_get(0).throw(0);
+	});
+
 	let init_fn = {
+		let state = &mut state;
+
 		//? Relocations *must* be emitted in order, so we cannot compile these functions as
 		//? we assign them to the global table.
-		let mut std_fn = |name: &str, idx, f: fn(&mut State, &mut InstructionSink, u32)| {
-			let func = compile_function(&mut state, name, idx, f);
+		let mut std_fn = |name: &str, locals, f: fn(&mut State, &mut InstructionSink, u32)| {
+			let func = compile_function(state, name, SymbolTab::WASM_SYM_BINDING_LOCAL, [(locals, ValType::I64)], state.dyn_call_ty, f);
 			closures.push(func);
 			func
 		};
@@ -299,7 +307,6 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		let mut builder = Function::new_with_locals_types([ValType::I64]);
 
 		{
-			let state = &mut state;
 			let mut seq = builder.sink();
 
 			let global_tab = 0;
@@ -380,18 +387,25 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	Ok(module.finish())
 }
 
-fn compile_function(state: &mut State, name: impl AsRef<str>, locals: u32, f: impl FnOnce(&mut State, &mut InstructionSink, u32)) -> ClosureRef {
+fn compile_function<L: IntoIterator<Item = (u32, ValType)>>(
+	state: &mut State,
+	name: impl AsRef<str>,
+	flags: u32,
+	locals: L,
+	signature: u32,
+	f: impl FnOnce(&mut State, &mut InstructionSink, u32),
+) -> ClosureRef where L::IntoIter: ExactSizeIterator {
 	let id = state.function_count;
 	state.function_count += 1;
 
-	let mut builder = Function::new([(locals, ValType::I64)]);
+	let mut builder = Function::new(locals);
 	f(state, &mut builder.sink(), id);
 	builder.instruction(&Instruction::End);
 	state.code_sect.function(&builder);
-	state.function_sect.function(state.dyn_call_ty);
+	state.function_sect.function(signature);
 	state.function_names.append(id, name.as_ref());
 
-	let sym = state.symbol_table.function(SymbolTab::WASM_SYM_BINDING_LOCAL, id, Some(name.as_ref()));
+	let sym = state.symbol_table.function(flags, id, Some(name.as_ref()));
 
 	ClosureRef { sym, id }
 }
@@ -399,7 +413,7 @@ fn compile_function(state: &mut State, name: impl AsRef<str>, locals: u32, f: im
 fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> ClosureRef {
 	let name = func.debug.as_ref().and_then(|d| d.func_name()).unwrap_or("<anonymous closure>");
 	
-	compile_function(state, name, func.frame_size.into(), |state, seq, current_fn| {
+	compile_function(state, name, SymbolTab::WASM_SYM_BINDING_LOCAL, [(func.frame_size.into(), ValType::I64)], state.dyn_call_ty, |state, seq, current_fn| {
 		let arg_cnt = 0;
 
 		{
