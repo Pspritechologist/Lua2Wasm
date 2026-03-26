@@ -31,7 +31,7 @@ impl<'a> InstructionSink<'a> {
 		}
 	}
 
-	/// Gets the length of function so far.
+	/// Gets the length of the generated function so far.
 	pub fn byte_len(&self) -> usize {
 		self.func.byte_len() + self.sink.len()
 	}
@@ -1723,7 +1723,7 @@ impl<'a> InstructionSink<'a> {
 	}
 
 	/// Encode [`Instruction::TableFill`].
-	pub fn table_fill(&mut self, table: u32) -> &mut Self {
+	fn table_fill(&mut self, table: u32) -> &mut Self {
 		self.sink.push(0xfc);
 		self.sink.push(0x11);
 		table.encode(&mut self.sink);
@@ -1731,21 +1731,21 @@ impl<'a> InstructionSink<'a> {
 	}
 
 	/// Encode [`Instruction::TableSet`].
-	pub fn table_set(&mut self, table: u32) -> &mut Self {
+	fn table_set(&mut self, table: u32) -> &mut Self {
 		self.sink.push(0x26);
 		table.encode(&mut self.sink);
 		self
 	}
 
 	/// Encode [`Instruction::TableGet`].
-	pub fn table_get(&mut self, table: u32) -> &mut Self {
+	fn table_get(&mut self, table: u32) -> &mut Self {
 		self.sink.push(0x25);
 		table.encode(&mut self.sink);
 		self
 	}
 
 	/// Encode [`Instruction::TableGrow`].
-	pub fn table_grow(&mut self, table: u32) -> &mut Self {
+	fn table_grow(&mut self, table: u32) -> &mut Self {
 		self.sink.push(0xfc);
 		self.sink.push(0x0f);
 		table.encode(&mut self.sink);
@@ -1753,7 +1753,7 @@ impl<'a> InstructionSink<'a> {
 	}
 
 	/// Encode [`Instruction::TableSize`].
-	pub fn table_size(&mut self, table: u32) -> &mut Self {
+	fn table_size(&mut self, table: u32) -> &mut Self {
 		self.sink.push(0xfc);
 		self.sink.push(0x10);
 		table.encode(&mut self.sink);
@@ -1761,7 +1761,7 @@ impl<'a> InstructionSink<'a> {
 	}
 
 	/// Encode [`Instruction::TableCopy`].
-	pub fn table_copy(&mut self, dst_table: u32, src_table: u32) -> &mut Self {
+	fn table_copy(&mut self, dst_table: u32, src_table: u32) -> &mut Self {
 		self.sink.push(0xfc);
 		self.sink.push(0x0e);
 		dst_table.encode(&mut self.sink);

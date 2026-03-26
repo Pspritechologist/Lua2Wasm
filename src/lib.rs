@@ -42,7 +42,7 @@ pub struct State<'s> {
 	memory: u32,
 	shtack_mem: u32,
 	dyn_call_ty: u32,
-	call_tab: u32,
+	call_tab: Symbol,
 	shtack_ptr: Symbol,
 	strings: Box<[StringRef]>,
 	closures: Box<[Option<ClosureRef>]>,
@@ -221,14 +221,14 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	types_sect.ty().function([ValType::I32], [ValType::I32]);
 
-	import_sect.import("__luant_internal", "__indirect_function_table", TableType {
+	import_sect.import("env", "__indirect_function_table", TableType {
 		element_type: RefType::FUNCREF,
 		table64: false,
 		minimum: 0,
 		maximum: None,
 		shared: false,
 	});
-	symbol_table.table(SymbolTab::WASM_SYM_UNDEFINED, 0, None);
+	let call_tab = symbol_table.table(SymbolTab::WASM_SYM_UNDEFINED, 0, None);
 
 	let (function_count, extern_fns) = ExternFns::init(&mut types_sect, &mut import_sect, &mut symbol_table);
 
@@ -237,7 +237,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	let mut state = State {
 		dyn_call_ty: 0,
-		call_tab: 0,
+		call_tab,
 		locals: Default::default(),
 		shtack_ptr,
 		strings,
@@ -349,8 +349,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	let mut module = state.module;
 
 	state.symbol_table.function(SymbolTab::WASM_SYM_EXPORTED, init_fn, Some("start"));
-	let function_elements = closures.into_iter().map(|c| c.id).collect();
-	state.element_sect.active(Some(state.call_tab), &ConstExpr::i32_const(0), Elements::Functions(function_elements));
+	// let function_elements = closures.into_iter().map(|c| c.id).collect();
+	// state.element_sect.active(Some(state.call_tab), &ConstExpr::i32_const(0), Elements::Functions(function_elements));
 
 	let mut names = NameSection::new();
 	names.functions(&state.function_names);

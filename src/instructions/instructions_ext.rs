@@ -26,30 +26,30 @@ impl InstructionSink<'_> {
 		let string = state.strings[idx];
 		self
 			// We set the address to a placeholder value, MAX to ensure padding.
-			.i32_const(i32::MAX)
 			.reloc(state, RelocEntry::i32const_address(string.sym))
+			.i32_const(i32::MAX)
 			.i32_const(string.len.cast_signed())
 			.call(state, state.extern_fns.static_str)
 	}
 
 	pub fn call(&mut self, state: &mut State, symbol: Symbol) -> &mut Self {
-		self.call_raw(u32::MAX)
-			.reloc(state, RelocEntry::function(symbol))
+		self.reloc(state, RelocEntry::function(symbol))
+			.call_raw(u32::MAX)
 	}
 
 	pub fn call_indirect(&mut self, state: &mut State, type_index: u32) -> &mut Self {
-		self.call_indirect_raw(state.call_tab, u32::MAX)
-			.reloc(state, RelocEntry::call_type(type_index))
+		self.reloc(state, RelocEntry::indirect_call(type_index, state.call_tab))
+			.call_indirect_raw(u32::MAX, u32::MAX)
 	}
 
 	pub fn global_get(&mut self, state: &mut State, symbol: Symbol) -> &mut Self {
-		self.global_get_raw(u32::MAX)
-			.reloc(state, RelocEntry::global(symbol))
+		self.reloc(state, RelocEntry::global(symbol))
+			.global_get_raw(u32::MAX)
 	}
 
 	pub fn global_set(&mut self, state: &mut State, symbol: Symbol) -> &mut Self {
-		self.global_set_raw(u32::MAX)
-			.reloc(state, RelocEntry::global(symbol))
+		self.reloc(state, RelocEntry::global(symbol))
+			.global_set_raw(u32::MAX)
 	}
 
 	pub fn const_val(&mut self, value: impl Into<Value>) -> &mut Self {
@@ -73,8 +73,8 @@ impl InstructionSink<'_> {
 	}
 
 	pub fn push_function(&mut self, state: &mut State, symbol: ClosureRef) -> &mut Self {
-		self.i32_const(i32::MAX)
-			.reloc(state, RelocEntry::i32const_indirect_fn(symbol.sym))
+		self.reloc(state, RelocEntry::i32const_indirect_fn(symbol.sym))
+			.i32_const(i32::MAX)
 			.call(state, state.extern_fns.static_function)
 	}
 
@@ -86,8 +86,11 @@ impl InstructionSink<'_> {
 		self
 	}
 
-	fn reloc(&mut self, state: &mut State, entry: RelocEntry) -> &mut Self {
-		state.reloc_code_sect.append_entry(state.code_sect.byte_len() + self.byte_len(), entry);
+	fn reloc(&mut self, state: &mut State, entries: impl IntoIterator<Item = RelocEntry>) -> &mut Self {
+		let section_length = state.code_sect.byte_len() + self.byte_len();
+		for entry in entries {
+			state.reloc_code_sect.append_entry(section_length, entry);
+		}
 		self
 	}
 }
