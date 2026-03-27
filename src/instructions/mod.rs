@@ -3,15 +3,20 @@ use wasm_encoder::{
 	ValType,
 };
 
-pub use instructions_ext::*;
+use crate::linking::RelocEntry;
 
 mod instructions_ext;
+mod functions;
+
+pub use instructions_ext::*;
+pub use functions::*;
 
 /// An encoder for Wasm instructions.
 #[derive(Debug)]
 pub struct InstructionSink<'a> {
 	func: &'a mut wasm_encoder::Function,
 	sink: Vec<u8>,
+	relocations: &'a mut Vec<RelocEntry>,
 }
 
 impl Drop for InstructionSink<'_> {
@@ -23,11 +28,12 @@ impl Drop for InstructionSink<'_> {
 
 impl<'a> InstructionSink<'a> {
 	/// Create an instruction encoder pointing to the given byte sink.
-	pub fn new(func: &'a mut wasm_encoder::Function) -> Self {
+	pub fn new(func: &'a mut wasm_encoder::Function, relocations: &'a mut Vec<RelocEntry>) -> Self {
 		// This is silly but was just the easiest way to implement it at the time.
 		Self {
 			func,
 			sink: Vec::new(),
+			relocations,
 		}
 	}
 

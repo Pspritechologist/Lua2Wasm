@@ -53,62 +53,50 @@ impl RelocEntry {
 	fn new(type_: RelocType, symbol: Symbol) -> Self {
 		Self { type_, offset: 1, symbol }
 	}
-
-	fn new_offset(type_: RelocType, offset: usize, symbol: Symbol) -> Self {
-		Self { type_, offset, symbol }
+	
+	pub fn offset_by(self, offset: usize) -> Self {
+		Self { offset: offset + self.offset, ..self }
 	}
 
-	/// Emitted immediately after a `call` instruction, `symbol` references the index of a function symbol.
+	/// Emitted immediately before a `call` instruction, `symbol` references the index of a function symbol.
 	pub fn function(symbol: Symbol) -> Self {
-		// `5` is the length of a varuint32 immediate value, coming immediately after the `call` opcode.
 		Self::new(RelocType::FunctionIndexLeb, symbol)
 	}
 
-	/// Emitted immediately after an `i32.const` instruction representing the index of a function into a table, `func` references the index of a function symbol.
+	/// Emitted immediately before an `i32.const` instruction representing the index of a function into a table, `func` references the index of a function symbol.
 	pub fn i32const_indirect_fn(func: Symbol) -> Self {
-		// `5` is the length of a varuint32 immediate value, coming immediately after the `i32.const` opcode.
 		Self::new(RelocType::TableIndexSleb, func)
 	}
 
-	/// Emitted immediately after an `i32.const` instruction representing an address, `symbol` references the index of a data symbol.
+	/// Emitted immediately before an `i32.const` instruction representing an address, `symbol` references the index of a data symbol.
 	pub fn i32const_address(symbol: Symbol) -> Self {
-		// `5` is the length of a varuint32 immediate value, coming immediately after the `i32.const` opcode.
 		Self::new(RelocType::MemoryAddrSleb, symbol)
 	}
 
-	/// Emitted immediately after a `call_indirect` instruction, `type_index` references the index of a type in the WASM type section, *not* a symbol.
+	/// Emitted immediately before a `call_indirect` instruction, `type_index` references the index of a type in the WASM type section, *not* a symbol.
 	pub fn indirect_call(type_index: u32, call_table: Symbol) -> [Self; 2] {
-		// `10` is two varuint32 immediate values back, coming immediately after the `call_indirect` opcode, representing the type index.
-		// `5` is the length of a varuint32 immediate value, coming immediately after the first one, representing the table index.
+		// The type index comes immediately after the opcode and is five bytes long, followed by the table index.
+
 		// Type indexes aren't actually symbols...
-		let type_ = Self::new_offset(RelocType::TypeIndexLeb, 6, Symbol::new(type_index));
-		let table = Self::new(RelocType::TableNumberLeb, call_table);
+		let type_ = Self::new(RelocType::TypeIndexLeb, Symbol::new(type_index));
+		let table = Self::new(RelocType::TableNumberLeb, call_table).offset_by(5);
 		[type_, table]
 	}
 
-	/// Emitted immediately after a `global.get` or `global.set` instruction, `global` references the index of a global symbol.
+	/// Emitted immediately before a `global.get` or `global.set` instruction, `global` references the index of a global symbol.
 	pub fn global(global: Symbol) -> Self {
-		// `5` is the length of a varuint32 immediate value, coming immediately after the `global.get` or `global.set` opcode.
 		Self::new(RelocType::GlobalIndexLeb, global)
 	}
 
-	/// Emitted immediately after a 
+	/// Emitted immediately before a `throw` instruction, `tag` references the index of an event symbol.
 	pub fn tag(tag: Symbol) -> Self {
-		// `5` is the length of a varuint32 immediate value, coming immediately after the `tag` opcode.
 		Self::new(RelocType::EventIndexLeb, tag)
 	}
 }
 
 #[derive(Debug, Default)]
 pub struct RelocSection {
-	entries: Vec<RelocData>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RelocData {
-	type_: RelocType,
-	offset_pre_len: usize,
-	symbol_index: u32,
+	entries: Vec<RelocEntry>,
 }
 
 impl RelocSection {
@@ -116,14 +104,8 @@ impl RelocSection {
 		Self::default()
 	}
 
-	pub fn append_entry(&mut self, section_len: usize, entry: RelocEntry) {
-		let offset_pre_len = section_len + entry.offset;
-		
-		self.entries.push(RelocData {
-			type_: entry.type_,
-			offset_pre_len,
-			symbol_index: entry.symbol.index(),
-		});
+	pub fn append_entries(&mut self, entries: impl IntoIterator<Item = RelocEntry>) {
+		self.entries.extend(entries);
 	}
 
 	pub fn finish<'a>(&'a self, name: &'a str, target_section_idx: u32, section_len_bytes_len: usize) -> impl Section + 'a {
@@ -147,8 +129,8 @@ impl Encode for RelocSectionEncode<'_, '_> {
 
 		for reloc in &self.section.entries {
 			buf.push(reloc.type_ as u8);
-			(reloc.offset_pre_len + self.section_len_bytes_len).encode(&mut buf);
-			reloc.symbol_index.encode(&mut buf);
+			(reloc.offset + self.section_len_bytes_len).encode(&mut buf);
+			reloc.symbol.index().encode(&mut buf);
 
 			if reloc.type_ == RelocType::MemoryAddrSleb {
 				// For R_WASM_MEMORY_ADDR_*, R_WASM_FUNCTION_OFFSET_I32, and R_WASM_SECTION_OFFSET_I32 relocations (and their 64-bit counterparts) the following field is additionally present:

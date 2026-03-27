@@ -11,7 +11,7 @@ use wasm_encoder::{
 };
 
 use crate::linking::{LinkingSection, RelocSection, Symbol, SymbolTab};
-use crate::instructions::{InstructionSink, FunctionExt};
+use crate::instructions::{FunctionBuilder, InstructionSink};
 
 pub mod parsing;
 mod bytecode;
@@ -304,7 +304,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		let std_error = std_fn("__luant_std_error", 0, runtime_impls::error);
 		let std_pcall = std_fn("__luant_std_pcall", 1, runtime_impls::pcall);
 
-		let mut builder = Function::new_with_locals_types([ValType::I64]);
+		let mut builder = FunctionBuilder::new([(1, ValType::I64)]);
 
 		{
 			let mut seq = builder.sink();
@@ -312,15 +312,15 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 			let global_tab = 0;
 
 			// Initialize the global table.
-			seq.call(state, state.extern_fns.table_load)
+			seq.call(state.extern_fns.table_load)
 				.local_tee(global_tab)
-				.global_set(state, state.global_table);
+				.global_set(state.global_table);
 
 			let mut add_fn = |key, func| {
 				seq.push_function(state, func)
 					.local_get(global_tab)
 					.static_str(state, key)
-					.call(state, state.extern_fns.table_set_name);
+					.call(state.extern_fns.table_set_name);
 			};
 
 			// Load the 'error' function into it.
@@ -330,7 +330,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 			// Generate a call to the actual main function.
 			seq.i32_const(0)
-				.call(state, main_fn.sym) //FIXME: Reloc
+				.call(main_fn.sym) //FIXME: Reloc
 				.drop();
 
 			seq.end();
@@ -339,7 +339,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		let id = state.function_count;
 		state.function_count += 1;
 
-		state.code_sect.function(&builder);
+		builder.finish(state); // Encodes the function and the relocations.
+
 		state.function_sect.function(state.types_sect.len());
 		state.types_sect.ty().function([], []);
 
@@ -398,10 +399,12 @@ fn compile_function<L: IntoIterator<Item = (u32, ValType)>>(
 	let id = state.function_count;
 	state.function_count += 1;
 
-	let mut builder = Function::new(locals);
+	let mut builder = FunctionBuilder::new(locals);
 	f(state, &mut builder.sink(), id);
-	builder.instruction(&Instruction::End);
-	state.code_sect.function(&builder);
+	builder.function_mut().instruction(&Instruction::End);
+	
+	builder.finish(state); // Encodes the function and the relocations.
+
 	state.function_sect.function(signature);
 	state.function_names.append(id, name.as_ref());
 
@@ -459,7 +462,7 @@ fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> 
 					.i32_const(i.into())
 					.i32_le_u()
 					.br_if(0)
-					.global_get(state, state.shtack_ptr)
+					.global_get(state.shtack_ptr)
 					.i64_load(MemArg { align: 3, offset: u64::from(i) * 8, memory_index: state.shtack_mem })
 					.local_set(state.locals[&i]);
 			}
