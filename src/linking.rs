@@ -1,7 +1,6 @@
 use wasm_encoder::{CustomSection, DataSymbolDefinition, Encode, Section, SectionId, SymbolTable};
 
 mod relocations;
-mod segment_info;
 
 pub use relocations::*;
 
@@ -60,7 +59,7 @@ impl Encode for SymbolTab {
 const SYMTAB_FUNCTION: u32 = 0;
 const SYMTAB_DATA: u32 = 1;
 const SYMTAB_GLOBAL: u32 = 2;
-const SYMTAB_SECTION: u32 = 3;
+// const SYMTAB_SECTION: u32 = 3;
 const SYMTAB_TAG: u32 = 4;
 const SYMTAB_TABLE: u32 = 5;
 
@@ -113,17 +112,6 @@ impl SymbolTab {
 		if let Some(name) = name {
 			name.encode(&mut self.bytes);
 		}
-		
-		Symbol::new(id)
-	}
-
-	pub fn section(&mut self, idx: u32) -> Symbol {
-		let id = self.count;
-		self.count += 1;
-		
-		SYMTAB_SECTION.encode(&mut self.bytes);
-		SymbolTab::WASM_SYM_BINDING_LOCAL.encode(&mut self.bytes);
-		idx.encode(&mut self.bytes);
 		
 		Symbol::new(id)
 	}

@@ -1,13 +1,10 @@
-use luant_lexer::LexInterner;
 use anyhow::Result;
 use std::collections::BTreeMap;
 use wasm_encoder::{
-    BlockType, Catch, CodeSection, ConstExpr, DataSection, ElementSection, Elements,
-    EntityType, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
-    IndirectNameMap, Instruction, MemArg, MemorySection,
+    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, EntityType, ExportSection, FunctionSection,
+	GlobalSection, GlobalType, ImportSection, IndirectNameMap, Instruction, MemArg, MemorySection,
     MemoryType, Module, NameMap, NameSection, ProducersField, ProducersSection, RefType,
-    StartSection, TableSection, TableType, TagKind, TagSection, TagType, TypeSection,
-    ValType,
+    TableSection, TableType, TagKind, TagSection, TagType, TypeSection, ValType,
 };
 
 use crate::linking::{LinkingSection, RelocSection, Symbol, SymbolTab};
@@ -20,7 +17,7 @@ mod instructions;
 mod linking;
 mod runtime_impls;
 
-pub struct State<'s> {
+pub struct State {
 	module: Module,
 	symbol_table: SymbolTab,
 	types_sect: TypeSection,
@@ -35,7 +32,6 @@ pub struct State<'s> {
 	function_names: NameMap,
 	local_names: IndirectNameMap,
 	reloc_code_sect: RelocSection,
-	reloc_data_sect: RelocSection,
 	function_count: u32,
 	code_sect: CodeSection,
 	data_sect: DataSection,
@@ -48,7 +44,6 @@ pub struct State<'s> {
 	strings: Box<[StringRef]>,
 	closures: Box<[Option<ClosureRef>]>,
 	extern_fns: ExternFns,
-	interner: LexInterner<'s>,
 	global_table: Symbol,
 
 	// Per-function data
@@ -66,7 +61,6 @@ struct ClosureRef {
 
 #[derive(Debug, Clone, Copy)]
 struct StringRef {
-	addr: u32,
 	len: u32,
 	sym: Symbol,
 }
@@ -172,7 +166,7 @@ extern_fns! {
 	}
 }
 
-pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> Result<Vec<u8>> {
+pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 	#[derive(Debug, Clone, Copy)]
 	struct Strings {
 		pub error: usize,
@@ -199,7 +193,6 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	let code_sect = CodeSection::new();
 	let mut data_sect = DataSection::new();
 	let reloc_code_sect = RelocSection::new();
-	let reloc_data_sect = RelocSection::new();
 
 	let strings = {
 		let mut offset = 0;
@@ -208,7 +201,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 			offset += s.len();
 			data_sect.active(0, &ConstExpr::i32_const(addr.cast_signed()), s.iter().copied());
 			let sym = symbol_table.string(i as u32, len);
-			StringRef { addr, len, sym }
+			StringRef { len, sym }
 		}).collect()
 	};
 
@@ -250,7 +243,6 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
 		function_count,
 		extern_fns,
-		interner,
 		module: Module::new(),
 		global_table,
 		symbol_table,
@@ -268,7 +260,6 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		function_names: NameMap::new(),
 		local_names: IndirectNameMap::new(),
 		reloc_code_sect,
-		reloc_data_sect,
 		loop_depth: 0,
 	};
 
