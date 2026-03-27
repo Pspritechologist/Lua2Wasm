@@ -42,6 +42,16 @@ impl InstructionSink<'_> {
 			.global_set_raw(u32::MAX)
 	}
 
+	pub fn try_table(&mut self, ty: BlockType, tag: Symbol, label: u32) -> &mut Self {
+		self.reloc(RelocEntry::catch_table(tag))
+			.try_table_raw(ty, [wasm_encoder::Catch::One { tag: u32::MAX, label }])
+	}
+
+	pub fn throw(&mut self, tag_symbol: Symbol) -> &mut Self {
+		self.reloc(RelocEntry::throw(tag_symbol))
+			.throw_raw(u32::MAX)
+	}
+
 	pub fn const_val(&mut self, value: impl Into<Value>) -> &mut Self {
 		value.into().push(self);
 		self

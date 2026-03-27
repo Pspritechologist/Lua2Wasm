@@ -287,7 +287,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	let ty = state.types_sect.len();
 	state.types_sect.ty().function([ValType::I64], []);
 	compile_function(&mut state, "throw", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |_state, seq, _| {
-		seq.local_get(0).throw(0);
+		seq.local_get(0).throw(Symbol::new(0));
 	});
 
 	let init_fn = {
@@ -365,7 +365,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	// Get the number of bytes the encoding the of the item count in the section will use...
 	// Relocations need this information.
-	let (_, code_section_len_len) = leb128fmt::encode_u32(state.code_sect.len()).unwrap();
+	let code_section_len_len = linking::len_of_encoding_u32(state.code_sect.len());
 
 	module
 		.section(&state.types_sect)

@@ -1,5 +1,5 @@
 use crate::{State, InstructionSink};
-use wasm_encoder::{BlockType, Catch, MemArg, ValType};
+use wasm_encoder::{BlockType, MemArg, ValType};
 
 pub fn pcall(state: &mut State, seq: &mut InstructionSink, _: u32) {
 	let arg_cnt = 0;
@@ -17,7 +17,7 @@ pub fn pcall(state: &mut State, seq: &mut InstructionSink, _: u32) {
 		.global_set(state.shtack_ptr);
 
 	seq.block(BlockType::Result(ValType::I64))
-		.try_table(BlockType::Result(ValType::I64), [Catch::One { tag: 0, label: 0 }]);
+		.try_table(BlockType::Result(ValType::I64), crate::linking::Symbol::new(0), 0);
 
 	// Write the 'try' block...
 	seq
@@ -78,6 +78,6 @@ pub fn error(state: &mut State, seq: &mut InstructionSink, _: u32) {
 	seq.global_get(state.shtack_ptr)
 		// .load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 3, offset: 0 })
 		.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem }) //TODO: This assumes the first arg is null if not provided...
-		.throw(0)
+		.throw(crate::linking::Symbol::new(0))
 		.i32_const(0);
 }

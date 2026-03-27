@@ -5,6 +5,10 @@ mod segment_info;
 
 pub use relocations::*;
 
+pub fn len_of_encoding_u32(num: u32) -> usize {
+	leb128fmt::encode_u32(num).unwrap().1
+}
+
 #[derive(Debug, Clone)]
 pub struct LinkingSection {
 	bytes: Vec<u8>,
@@ -47,7 +51,7 @@ pub struct SymbolTab {
 impl Encode for SymbolTab {
     fn encode(&self, sink: &mut Vec<u8>) {
         sink.push(8); // WASM_SYMBOL_TABLE.
-		(leb128fmt::encode_u32(self.count).unwrap().1 + self.bytes.len()).encode(sink);
+		(len_of_encoding_u32(self.count) + self.bytes.len()).encode(sink);
 		self.count.encode(sink);
 		sink.extend(&self.bytes);
     }

@@ -89,8 +89,16 @@ impl RelocEntry {
 	}
 
 	/// Emitted immediately before a `throw` instruction, `tag` references the index of an event symbol.
-	pub fn tag(tag: Symbol) -> Self {
+	pub fn throw(tag: Symbol) -> Self {
 		Self::new(RelocType::EventIndexLeb, tag)
+	}
+
+	/// Emitted immediately before a `try_table` instruction, `tag` references the index of an event symbol.
+	pub fn catch_table(tag: Symbol) -> Self {
+		//TODO: This assumes the type of the try block and the number of catches are each encoded in one byte.
+		//TODO: This is probably fine for now since it's inherently only used with a single catch arm, but it's something
+		//TODO: to be aware of.
+		Self::new(RelocType::EventIndexLeb, tag).offset_by(2)
 	}
 }
 
