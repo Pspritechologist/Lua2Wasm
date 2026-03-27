@@ -57,21 +57,21 @@ impl<'a> InstructionSink<'a> {
 	}
 
 	/// Encode [`Instruction::Block`].
-	pub(crate) fn block(&mut self, bt: BlockType) -> &mut Self {
+	fn block_raw(&mut self, bt: BlockType) -> &mut Self {
 		self.sink.push(0x02);
 		bt.encode(&mut self.sink);
 		self
 	}
 
 	/// Encode [`Instruction::Loop`].
-	pub(crate) fn loop_(&mut self, bt: BlockType) -> &mut Self {
+	fn loop_raw(&mut self, bt: BlockType) -> &mut Self {
 		self.sink.push(0x03);
 		bt.encode(&mut self.sink);
 		self
 	}
 
 	/// Encode [`Instruction::If`].
-	pub(crate) fn if_(&mut self, bt: BlockType) -> &mut Self {
+	fn if_raw(&mut self, bt: BlockType) -> &mut Self {
 		self.sink.push(0x04);
 		bt.encode(&mut self.sink);
 		self

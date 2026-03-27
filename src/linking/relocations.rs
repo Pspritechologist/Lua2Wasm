@@ -83,6 +83,13 @@ impl RelocEntry {
 		[type_, table]
 	}
 
+	//TODO: I believe this is unused and untested, but it was a hole in the API.
+	/// Emitted immediately before a `block`, `loop`, or `if` instruction, `type_idx` references the index of a type in the WASM type section, *not* a symbol.
+	pub fn typed_block(type_idx: u32) -> Self {
+		// The type comes immediately after the opcode.
+		Self::new(RelocType::TypeIndexLeb, Symbol::new(type_idx))
+	}
+
 	/// Emitted immediately before a `global.get` or `global.set` instruction, `global` references the index of a global symbol.
 	pub fn global(global: Symbol) -> Self {
 		Self::new(RelocType::GlobalIndexLeb, global)

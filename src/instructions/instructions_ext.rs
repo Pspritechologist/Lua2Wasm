@@ -12,6 +12,33 @@ impl InstructionSink<'_> {
 	// 	self
 	// }
 
+	pub fn block(&mut self, ty: BlockType) -> &mut Self {
+		if let BlockType::FunctionType(ty_idx) = ty {
+			return self.reloc(RelocEntry::typed_block(ty_idx))
+				.block_raw(ty);
+		}
+
+		self.block_raw(ty)
+	}
+
+	pub fn loop_(&mut self, ty: BlockType) -> &mut Self {
+		if let BlockType::FunctionType(ty_idx) = ty {
+			return self.reloc(RelocEntry::typed_block(ty_idx))
+				.loop_raw(ty);
+		}
+
+		self.loop_raw(ty)
+	}
+
+	pub fn if_(&mut self, ty: BlockType) -> &mut Self {
+		if let BlockType::FunctionType(ty_idx) = ty {
+			return self.reloc(RelocEntry::typed_block(ty_idx))
+				.if_raw(ty);
+		}
+
+		self.if_raw(ty)
+	}
+
 	pub fn static_str(&mut self, state: &mut State, idx: usize) -> &mut Self {
 		let string = state.strings[idx];
 		self
