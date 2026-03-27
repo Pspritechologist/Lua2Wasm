@@ -42,6 +42,7 @@ pub struct State<'s> {
 	memory: u32,
 	shtack_mem: u32,
 	dyn_call_ty: u32,
+	error_tag: Symbol,
 	call_tab: Symbol,
 	shtack_ptr: Symbol,
 	strings: Box<[StringRef]>,
@@ -233,6 +234,8 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 	let (function_count, extern_fns) = ExternFns::init(&mut types_sect, &mut import_sect, &mut symbol_table);
 
 	tag_sect.tag(TagType { kind: TagKind::Exception, func_type_idx: types_sect.len() });
+	let error_tag = symbol_table.tag(SymbolTab::WASM_SYM_BINDING_LOCAL, 0, Some("__luant_error_tag"));
+
 	types_sect.ty().function([ValType::I64], []);
 
 	let mut state = State {
@@ -240,6 +243,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 		call_tab,
 		locals: Default::default(),
 		shtack_ptr,
+		error_tag,
 		strings,
 		memory: 0,
 		shtack_mem: 1,
@@ -284,11 +288,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>, interner: LexInterner<'s>) -> 
 
 	let mut closures: Vec<_> = state.closures.iter().copied().map(Option::unwrap).collect();
 
-	let ty = state.types_sect.len();
-	state.types_sect.ty().function([ValType::I64], []);
-	compile_function(&mut state, "throw", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |_state, seq, _| {
-		seq.local_get(0).throw(Symbol::new(0));
-	});
+	compile_supporting_functions(&mut state);
 
 	let init_fn = {
 		let state = &mut state;
@@ -478,4 +478,14 @@ fn compile_luant_function(state: &mut State, func: &parsing::ParsedFunction) -> 
 
 		state.locals.clear();
 	})
+}
+
+fn compile_supporting_functions(state: &mut State) {
+	let ty = state.types_sect.len();
+	state.types_sect.ty().function([ValType::I64], []);
+	
+	let tag = state.error_tag;
+	compile_function(state, "throw", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |_state, seq, _| {
+		seq.local_get(0).throw(tag);
+	});
 }
