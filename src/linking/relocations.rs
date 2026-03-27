@@ -98,7 +98,8 @@ impl RelocEntry {
 		//TODO: This assumes the type of the try block and the number of catches are each encoded in one byte.
 		//TODO: This is probably fine for now since it's inherently only used with a single catch arm, but it's something
 		//TODO: to be aware of.
-		Self::new(RelocType::EventIndexLeb, tag).offset_by(2)
+		// Finally, a third byte to account for the type of the first catch.
+		Self::new(RelocType::EventIndexLeb, tag).offset_by(3)
 	}
 }
 
