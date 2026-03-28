@@ -1,6 +1,8 @@
 use crate::{State, InstructionSink};
 use wasm_encoder::{BlockType, MemArg, ValType};
 
+pub mod external_bindings;
+
 pub fn pcall(state: &mut State, seq: &mut InstructionSink, _: u32) {
 	let arg_cnt = 0;
 	let temp_var = 1;
