@@ -18,23 +18,19 @@ mod instructions;
 mod linking;
 mod runtime_impls;
 
-pub struct State {
+struct State {
 	symbol_table: SymbolTab,
 	types_sect: TypeSection,
 	import_sect: ImportSection,
-	table_sect: TableSection,
-	memory_sect: MemorySection,
 	tag_sect: TagSection,
 	global_sect: GlobalSection,
-	export_sect: ExportSection,
-	element_sect: ElementSection,
 	function_sect: FunctionSection,
+	code_sect: CodeSection,
+	data_sect: DataSection,
 	function_names: NameMap,
 	local_names: IndirectNameMap,
 	reloc_code_sect: RelocSection,
 	function_count: u32,
-	code_sect: CodeSection,
-	data_sect: DataSection,
 	linear_memory: u32,
 	shtack_mem: u32,
 	dyn_call_ty: u32,
@@ -64,21 +60,7 @@ struct StringRef {
 	sym: Symbol,
 }
 
-pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
-
-	let internal_strings = {
-		#[derive(Debug, Clone, Copy)]
-		struct Strings {
-			pub error: usize,
-			pub pcall: usize,
-		}
-
-		let error = parsed.constants.get_string("error");
-		let pcall = parsed.constants.get_string("pcall");
-
-		Strings { error, pcall }
-	};
-	
+pub fn produce_lua_obj_file<'s>(parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 	let mut symbol_table = SymbolTab::new();
 	let mut types_sect = TypeSection::new();
 	let mut import_sect = ImportSection::new();
@@ -99,7 +81,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 	};
 
 	import_sect.import("env", "__linear_memory", MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: None });
-	memory_sect.memory(MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: Some(1) });
+	// memory_sect.memory(MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: Some(1) });
 
 	global_sect.global(GlobalType { val_type: ValType::I32, mutable: true, shared: false }, &ConstExpr::i32_const(0));
 	global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
@@ -142,13 +124,9 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 		
 		types_sect,
 		import_sect,
-		memory_sect,
 		tag_sect,
 		global_sect,
 		data_sect,
-		table_sect: TableSection::new(),
-		export_sect: ExportSection::new(),
-		element_sect: ElementSection::new(),
 		function_sect: FunctionSection::new(),
 		code_sect: CodeSection::new(),
 		reloc_code_sect: RelocSection::new(),
@@ -175,65 +153,6 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 	let main_fn = compile_luant_function(&mut state, &main_fn);
 	state.closures[0] = Some(main_fn);
 
-	runtime_impls::external_bindings::compile_supporting_functions(&mut state);
-
-	let init_fn = {
-		let state = &mut state;
-
-		//? Relocations *must* be emitted in order, so we cannot compile these functions as
-		//? we assign them to the global table.
-		let mut std_fn = |name: &str, locals, f: fn(&mut State, &mut InstructionSink, u32)| {
-			compile_function(state, name, SymbolTab::WASM_SYM_BINDING_LOCAL, [(locals, ValType::I64)], state.dyn_call_ty, f)
-		};
-
-		let std_error = std_fn("__luant_std_error", 0, runtime_impls::error);
-		let std_pcall = std_fn("__luant_std_pcall", 1, runtime_impls::pcall);
-
-		let mut builder = FunctionBuilder::new([(1, ValType::I64)]);
-
-		{
-			let mut seq = builder.sink();
-
-			let global_tab = 0;
-
-			// Initialize the global table.
-			seq.call(state.extern_fns.table_load)
-				.local_tee(global_tab)
-				.global_set(state.global_table);
-
-			let mut add_fn = |key, func| {
-				seq.push_function(state, func)
-					.local_get(global_tab)
-					.static_str(state, key)
-					.call(state.extern_fns.table_set_name);
-			};
-
-			// Load the 'error' function into it.
-			add_fn(internal_strings.error, std_error);
-			// Load the 'pcall' function into it.
-			add_fn(internal_strings.pcall, std_pcall);
-
-			// Generate a call to the actual main function.
-			seq.i32_const(0)
-				.call(main_fn.sym) //FIXME: Reloc
-				.drop();
-
-			seq.end();
-		}
-
-		let id = state.function_count;
-		state.function_count += 1;
-
-		builder.finish(state); // Encodes the function and the relocations.
-
-		state.function_sect.function(state.types_sect.len());
-		state.types_sect.ty().function([], []);
-
-		id
-	};
-
-	state.symbol_table.function(SymbolTab::WASM_SYM_EXPORTED, init_fn, Some("start"));
-
 	Ok(build_obj_module(&state)?.finish())
 }
 
@@ -258,16 +177,12 @@ fn build_obj_module(state: &State) -> Result<Module> {
 		.section(&state.types_sect)
 		.section(&state.import_sect)
 		.section(&state.function_sect)
-		.section(&state.table_sect)
-		.section(&state.memory_sect)
 		.section(&state.tag_sect)
 		.section(&state.global_sect)
-		.section(&state.export_sect)
-		.section(&state.element_sect)
 		.section(&state.code_sect)
 		.section(&state.data_sect)
 		.section(LinkingSection::new().symbol_table(&state.symbol_table))
-		.section(&state.reloc_code_sect.finish("reloc.CODE", 9, code_section_len_len))
+		.section(&state.reloc_code_sect.finish("reloc.CODE", 5, code_section_len_len))
 		.section(&names)
 		.section(&producers);
 
