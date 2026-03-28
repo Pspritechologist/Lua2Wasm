@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::collections::BTreeMap;
 use wasm_encoder::{
-    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, EntityType, ExportSection, FunctionSection,
+    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, ExportSection, FunctionSection,
 	GlobalSection, GlobalType, ImportSection, IndirectNameMap, Instruction, MemArg, MemorySection,
     MemoryType, Module, NameMap, NameSection, ProducersField, ProducersSection, RefType,
     TableSection, TableType, TagKind, TagSection, TagType, TypeSection, ValType,
@@ -19,7 +19,6 @@ mod linking;
 mod runtime_impls;
 
 pub struct State {
-	module: Module,
 	symbol_table: SymbolTab,
 	types_sect: TypeSection,
 	import_sect: ImportSection,
@@ -36,7 +35,7 @@ pub struct State {
 	function_count: u32,
 	code_sect: CodeSection,
 	data_sect: DataSection,
-	memory: u32,
+	linear_memory: u32,
 	shtack_mem: u32,
 	dyn_call_ty: u32,
 	error_tag: Symbol,
@@ -48,7 +47,6 @@ pub struct State {
 	global_table: Symbol,
 
 	// Per-function data
-	// relocations: Vec<>,
 	locals: BTreeMap<u8, u32>,
 	/// The distance from the last loop.
 	loop_depth: u32,
@@ -67,13 +65,14 @@ struct StringRef {
 }
 
 pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
-	#[derive(Debug, Clone, Copy)]
-	struct Strings {
-		pub error: usize,
-		pub pcall: usize,
-	}
 
 	let internal_strings = {
+		#[derive(Debug, Clone, Copy)]
+		struct Strings {
+			pub error: usize,
+			pub pcall: usize,
+		}
+
 		let error = parsed.constants.get_string("error");
 		let pcall = parsed.constants.get_string("pcall");
 
@@ -83,16 +82,10 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 	let mut symbol_table = SymbolTab::new();
 	let mut types_sect = TypeSection::new();
 	let mut import_sect = ImportSection::new();
-	let table_sect = TableSection::new();
 	let mut memory_sect = MemorySection::new();
 	let mut tag_sect = TagSection::new();
 	let mut global_sect = GlobalSection::new();
-	let export_sect = ExportSection::new();
-	let element_sect = ElementSection::new();
-	let function_sect = FunctionSection::new();
-	let code_sect = CodeSection::new();
 	let mut data_sect = DataSection::new();
-	let reloc_code_sect = RelocSection::new();
 
 	let strings = {
 		let mut offset = 0;
@@ -132,42 +125,47 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 	types_sect.ty().function([ValType::I64], []);
 
 	let mut state = State {
-		dyn_call_ty: 0,
-		call_tab,
-		locals: Default::default(),
-		shtack_ptr,
-		error_tag,
 		strings,
-		memory: 0,
-		shtack_mem: 1,
-		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
-		function_count,
-		extern_fns,
-		module: Module::new(),
+		
 		global_table,
 		symbol_table,
+		shtack_ptr,
+		error_tag,
+		call_tab,
+		dyn_call_ty: 0,
+		linear_memory: 0,
+		shtack_mem: 1,
+		
+		function_count,
+		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
+		extern_fns,
+		
 		types_sect,
 		import_sect,
-		table_sect,
 		memory_sect,
 		tag_sect,
 		global_sect,
-		export_sect,
-		element_sect,
-		function_sect,
-		code_sect,
 		data_sect,
-		function_names: NameMap::new(),
+		table_sect: TableSection::new(),
+		export_sect: ExportSection::new(),
+		element_sect: ElementSection::new(),
+		function_sect: FunctionSection::new(),
+		code_sect: CodeSection::new(),
+		reloc_code_sect: RelocSection::new(),
 		local_names: IndirectNameMap::new(),
-		reloc_code_sect,
+		
+		function_names: NameMap::new(),
+		locals: Default::default(),
 		loop_depth: 0,
 	};
 
+	// Compile all the functions in the file...
 	for (i, func) in parsed.constants.closures().iter().enumerate().rev() {
 		// 0 is reserved for the main function.
 		state.closures[i + 1] = Some(compile_luant_function(&mut state, func));
 	}
 
+	// As well as the file itself as a function...
 	let mut main_fn = parsed.parsed_func;
 
 	if let Some(debug) = main_fn.debug.as_mut() && debug.func_name().is_none() {
@@ -177,8 +175,6 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 	let main_fn = compile_luant_function(&mut state, &main_fn);
 	state.closures[0] = Some(main_fn);
 
-	let mut closures: Vec<_> = state.closures.iter().copied().map(Option::unwrap).collect();
-
 	runtime_impls::external_bindings::compile_supporting_functions(&mut state);
 
 	let init_fn = {
@@ -187,9 +183,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 		//? Relocations *must* be emitted in order, so we cannot compile these functions as
 		//? we assign them to the global table.
 		let mut std_fn = |name: &str, locals, f: fn(&mut State, &mut InstructionSink, u32)| {
-			let func = compile_function(state, name, SymbolTab::WASM_SYM_BINDING_LOCAL, [(locals, ValType::I64)], state.dyn_call_ty, f);
-			closures.push(func);
-			func
+			compile_function(state, name, SymbolTab::WASM_SYM_BINDING_LOCAL, [(locals, ValType::I64)], state.dyn_call_ty, f)
 		};
 
 		let std_error = std_fn("__luant_std_error", 0, runtime_impls::error);
@@ -238,11 +232,13 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 		id
 	};
 
-	let mut module = state.module;
-
 	state.symbol_table.function(SymbolTab::WASM_SYM_EXPORTED, init_fn, Some("start"));
-	// let function_elements = closures.into_iter().map(|c| c.id).collect();
-	// state.element_sect.active(Some(state.call_tab), &ConstExpr::i32_const(0), Elements::Functions(function_elements));
+
+	Ok(build_obj_module(&state)?.finish())
+}
+
+fn build_obj_module(state: &State) -> Result<Module> {
+	let mut module = Module::new();
 
 	let mut names = NameSection::new();
 	names.functions(&state.function_names);
@@ -254,7 +250,7 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 		.field("language", ProducersField::new().value("Lua", "5.5"))
 		.field("processed-by", ProducersField::new().value("luant", env!("CARGO_PKG_VERSION")));
 
-	// Get the number of bytes the encoding the of the item count in the section will use...
+	// Get the number of bytes used by the encoding of the item count in the section...
 	// Relocations need this information.
 	let code_section_len_len = linking::len_of_encoding_u32(state.code_sect.len());
 
@@ -272,11 +268,10 @@ pub fn lower<'s>(mut parsed: parsing::Parsed<'s>) -> Result<Vec<u8>> {
 		.section(&state.data_sect)
 		.section(LinkingSection::new().symbol_table(&state.symbol_table))
 		.section(&state.reloc_code_sect.finish("reloc.CODE", 9, code_section_len_len))
-		// .section(&state.reloc_data_sect.finish("reloc.DATA", 10))
 		.section(&names)
 		.section(&producers);
 
-	Ok(module.finish())
+	Ok(module)
 }
 
 fn compile_function<L: IntoIterator<Item = (u32, ValType)>>(
