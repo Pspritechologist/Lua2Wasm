@@ -3,7 +3,7 @@ use wasm_encoder::{
 	ValType,
 };
 
-use crate::linking::RelocEntry;
+use crate::object::linking::RelocEntry;
 
 mod instructions_ext;
 mod functions;

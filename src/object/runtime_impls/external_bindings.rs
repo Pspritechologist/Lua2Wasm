@@ -1,4 +1,4 @@
-use crate::{State, linking::{Symbol, SymbolTab}};
+use crate::object::{State, linking::{Symbol, SymbolTab}, compile_function};
 use wasm_encoder::{
     EntityType,
 	ImportSection,
@@ -11,7 +11,7 @@ pub fn compile_supporting_functions(state: &mut State) {
 	state.types_sect.ty().function([ValType::I64], []);
 	
 	let tag = state.error_tag;
-	crate::compile_function(state, "throw", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |_state, seq, _| {
+	compile_function(state, "throw", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |_state, seq, _| {
 		seq.local_get(0).throw(tag);
 	});
 }

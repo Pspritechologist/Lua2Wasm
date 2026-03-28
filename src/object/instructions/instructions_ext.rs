@@ -1,5 +1,7 @@
 use crate::{
-	ClosureRef, State, bytecode::{Loc, Operation as Op, RetKind}, linking::{RelocEntry, Symbol}, parsing::expressions::{Const, Expr}
+	object::{ClosureRef, State, linking::{RelocEntry, Symbol}},
+	bytecode::{Loc, Operation as Op, RetKind},
+	parsing::expressions::{Const, Expr},
 };
 use super::InstructionSink;
 use value::Value;

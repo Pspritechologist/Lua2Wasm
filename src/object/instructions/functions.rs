@@ -1,6 +1,6 @@
 use wasm_encoder::{Function, ValType};
 
-use crate::{State, instructions::InstructionSink, linking::RelocEntry};
+use crate::object::{State, instructions::InstructionSink, linking::RelocEntry};
 
 pub struct FunctionBuilder {
 	wasm_function: Function,

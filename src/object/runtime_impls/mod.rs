@@ -1,4 +1,4 @@
-use crate::{State, InstructionSink};
+use crate::object::{State, InstructionSink};
 use wasm_encoder::{BlockType, MemArg, ValType};
 
 pub mod external_bindings;
