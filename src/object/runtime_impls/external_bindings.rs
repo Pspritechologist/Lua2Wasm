@@ -1,4 +1,4 @@
-use crate::object::{State, linking::{Symbol, SymbolTab}, compile_function};
+use crate::object::{ModuleState, linking::{Symbol, SymbolTab}, compile_function};
 use wasm_encoder::{
     EntityType,
 	ImportSection,
@@ -6,7 +6,7 @@ use wasm_encoder::{
 };
 
 /// Compile functions used only by the runtime Crate.
-pub fn compile_supporting_functions(state: &mut State) {
+pub fn compile_supporting_functions(state: &mut ModuleState) {
 	let ty = state.types_sect.len();
 	state.types_sect.ty().function([ValType::I64], []);
 	

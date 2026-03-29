@@ -1,9 +1,10 @@
-use crate::object::{State, InstructionSink};
+use crate::object::{ModuleState, InstructionSink};
 use wasm_encoder::{BlockType, MemArg, ValType};
 
 pub mod external_bindings;
+pub mod initialize;
 
-pub fn pcall(state: &mut State, seq: &mut InstructionSink, _: u32) {
+pub fn pcall(state: &mut ModuleState, seq: &mut InstructionSink, _: u32) {
 	let arg_cnt = 0;
 	let temp_var = 1;
 
@@ -35,7 +36,7 @@ pub fn pcall(state: &mut State, seq: &mut InstructionSink, _: u32) {
 		// Make the call.
 		.local_get(temp_var)
 		.call(state.extern_fns.get_fn)
-		.call_indirect(state, state.dyn_call_ty)
+		.call_indirect(state)
 		// Increase the count to return, accounting for the error flag.
 		.i32_const(1)
 		.i32_add()
@@ -76,7 +77,7 @@ pub fn pcall(state: &mut State, seq: &mut InstructionSink, _: u32) {
 		.return_();
 }
 
-pub fn error(state: &mut State, seq: &mut InstructionSink, _: u32) {
+pub fn error(state: &mut ModuleState, seq: &mut InstructionSink, _: u32) {
 	seq.global_get(state.shtack_ptr)
 		// .load(state.shtack_mem, LoadKind::I64 { atomic: false }, MemArg { align: 3, offset: 0 })
 		.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem }) //TODO: This assumes the first arg is null if not provided...

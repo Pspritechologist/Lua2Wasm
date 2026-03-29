@@ -1,96 +1,45 @@
-use crate::{
-	bytecode::Operation,
-	parsing::{Parsed, ParsedFunction},
-};
-
-use crate::object::{
-	ClosureRef, State, StringRef, build_obj_module, compile_function,
-	linking::{RelocSection, SymbolTab},
-	runtime_impls::external_bindings::ExternFns,
-};
-
-use wasm_encoder::{
-	BlockType, CodeSection, ConstExpr, DataSection, FunctionSection, GlobalSection, GlobalType,
-    ImportSection, IndirectNameMap, MemArg, MemoryType, NameMap, RefType, TableType, TagKind,
-    TagSection, TagType, TypeSection, ValType,
-};
+use crate::{bytecode::Operation, parsing::{Parsed, ParsedFunction}};
+use crate::object::{ClosureRef, ModuleState, StringRef, compile_function, linking::SymbolTab};
+use wasm_encoder::{BlockType, ConstExpr, MemArg, NameMap, ValType};
 
 use anyhow::Result;
 
-pub fn produce_lua_obj_file<'s>(parsed: Parsed<'s>) -> Result<Vec<u8>> {
-	let mut symbol_table = SymbolTab::new();
-	let mut types_sect = TypeSection::new();
-	let mut import_sect = ImportSection::new();
-	let mut tag_sect = TagSection::new();
-	let mut global_sect = GlobalSection::new();
-	let mut data_sect = DataSection::new();
+mod instructions;
 
-	let strings = {
+struct LuantModuleState {
+	module_state: ModuleState,
+
+	strings: Box<[StringRef]>,
+	closures: Box<[Option<ClosureRef>]>,
+
+	// Per-function data
+	locals: std::collections::BTreeMap<u8, u32>,
+	/// The distance from the last loop.
+	loop_depth: u32,
+}
+
+impl super::HasModuleState for LuantModuleState {
+	fn module_state(&mut self) -> &mut ModuleState { &mut self.module_state }
+}
+
+pub fn produce_lua_obj_file<'s>(parsed: Parsed<'s>) -> Result<Vec<u8>> {
+	let mut state = LuantModuleState {
+		module_state: ModuleState::new_module(),
+		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
+		strings: Default::default(),
+		locals: Default::default(),
+		loop_depth: 0,
+	};
+
+	state.strings = {
 		let mut offset = 0;
 		parsed.constants.strings().iter().enumerate().map(|(i, s)| {
 			let (addr, len) = (offset as u32, s.len() as u32);
 			offset += s.len();
-			data_sect.active(0, &ConstExpr::i32_const(addr.cast_signed()), s.iter().copied());
-			let sym = symbol_table.string(i as u32, len);
+			state.module_state.data_sect.active(0, &ConstExpr::i32_const(addr.cast_signed()), s.iter().copied());
+			let sym = state.module_state.symbol_table.string(i as u32, len);
 			StringRef { len, sym }
 		}).collect()
-	};
-
-	import_sect.import("env", "__linear_memory", MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: None });
-	// memory_sect.memory(MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: Some(1) });
-
-	global_sect.global(GlobalType { val_type: ValType::I32, mutable: true, shared: false }, &ConstExpr::i32_const(0));
-	global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
-	let shtack_ptr = symbol_table.global(SymbolTab::WASM_SYM_BINDING_LOCAL, 0, Some("__luant_shtack_ptr"));
-	let global_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_LOCAL, 1, Some("__luant_global_table"));
-
-	types_sect.ty().function([ValType::I32], [ValType::I32]);
-
-	import_sect.import("env", "__indirect_function_table", TableType {
-		element_type: RefType::FUNCREF,
-		table64: false,
-		minimum: 0,
-		maximum: None,
-		shared: false,
-	});
-	let call_tab = symbol_table.table(SymbolTab::WASM_SYM_UNDEFINED, 0, None);
-
-	let (function_count, extern_fns) = ExternFns::init(&mut types_sect, &mut import_sect, &mut symbol_table);
-
-	tag_sect.tag(TagType { kind: TagKind::Exception, func_type_idx: types_sect.len() });
-	let error_tag = symbol_table.tag(SymbolTab::WASM_SYM_BINDING_LOCAL, 0, Some("__luant_error_tag"));
-
-	types_sect.ty().function([ValType::I64], []);
-
-	let mut state = State {
-		strings,
-		
-		global_table,
-		symbol_table,
-		shtack_ptr,
-		error_tag,
-		call_tab,
-		dyn_call_ty: 0,
-		linear_memory: 0,
-		shtack_mem: 1,
-		
-		function_count,
-		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
-		extern_fns,
-		
-		types_sect,
-		import_sect,
-		tag_sect,
-		global_sect,
-		data_sect,
-		function_sect: FunctionSection::new(),
-		code_sect: CodeSection::new(),
-		reloc_code_sect: RelocSection::new(),
-		local_names: IndirectNameMap::new(),
-		
-		function_names: NameMap::new(),
-		locals: Default::default(),
-		loop_depth: 0,
 	};
 
 	// Compile all the functions in the file...
@@ -109,14 +58,14 @@ pub fn produce_lua_obj_file<'s>(parsed: Parsed<'s>) -> Result<Vec<u8>> {
 	let main_fn = compile_luant_function(&mut state, &main_fn);
 	state.closures[0] = Some(main_fn);
 
-	Ok(build_obj_module(&state)?.finish())
+	Ok(state.module_state.build_object()?.finish())
 }
 
 
-fn compile_luant_function(state: &mut State, func: &ParsedFunction) -> ClosureRef {
+fn compile_luant_function(state: &mut LuantModuleState, func: &ParsedFunction) -> ClosureRef {
 	let name = func.debug.as_ref().and_then(|d| d.func_name()).unwrap_or("<anonymous closure>");
 	
-	compile_function(state, name, SymbolTab::WASM_SYM_BINDING_LOCAL, [(func.frame_size.into(), ValType::I64)], state.dyn_call_ty, |state, seq, current_fn| {
+	compile_function(state, name, SymbolTab::WASM_SYM_BINDING_LOCAL, [(func.frame_size.into(), ValType::I64)], state.module_state.dyn_call_ty, |state, seq, current_fn| {
 		let arg_cnt = 0;
 
 		{
@@ -136,7 +85,7 @@ fn compile_luant_function(state: &mut State, func: &ParsedFunction) -> ClosureRe
 				}
 			}
 
-			state.local_names.append(current_fn, &local_names);
+			state.module_state.local_names.append(current_fn, &local_names);
 		}
 
 		if func.param_count > 0 {
@@ -162,8 +111,8 @@ fn compile_luant_function(state: &mut State, func: &ParsedFunction) -> ClosureRe
 					.i32_const(i.into())
 					.i32_le_u()
 					.br_if(0)
-					.global_get(state.shtack_ptr)
-					.i64_load(MemArg { align: 3, offset: u64::from(i) * 8, memory_index: state.shtack_mem })
+					.global_get(state.module_state.shtack_ptr)
+					.i64_load(MemArg { align: 3, offset: u64::from(i) * 8, memory_index: state.module_state.shtack_mem })
 					.local_set(state.locals[&i]);
 			}
 			seq.end();
@@ -172,8 +121,7 @@ fn compile_luant_function(state: &mut State, func: &ParsedFunction) -> ClosureRe
 		seq.operations(state, func.operations.iter().copied());
 
 		if func.operations.last().is_none_or(|op| !matches!(op, Operation::Ret { .. })) {
-			seq.i32_const(0)
-				.return_();
+			seq.i32_const(0).return_();
 		}
 
 		state.locals.clear();

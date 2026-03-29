@@ -1,6 +1,6 @@
 use wasm_encoder::{Function, ValType};
 
-use crate::object::{State, instructions::InstructionSink, linking::RelocEntry};
+use crate::object::{ModuleState, instructions::InstructionSink, linking::RelocEntry};
 
 pub struct FunctionBuilder {
 	wasm_function: Function,
@@ -27,7 +27,7 @@ impl FunctionBuilder {
 		&mut self.wasm_function
 	}
 
-	pub fn finish(self, state: &mut State) {
+	pub fn finish(self, state: &mut ModuleState) {
 		let function_size = self.wasm_function.byte_len();
 
 		state.code_sect.function(&self.wasm_function);

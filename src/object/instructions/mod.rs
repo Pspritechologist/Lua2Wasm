@@ -8,7 +8,6 @@ use crate::object::linking::RelocEntry;
 mod instructions_ext;
 mod functions;
 
-pub use instructions_ext::*;
 pub use functions::*;
 
 /// An encoder for Wasm instructions.

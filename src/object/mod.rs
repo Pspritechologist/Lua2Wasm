@@ -1,9 +1,8 @@
 use anyhow::Result;
-use std::collections::BTreeMap;
 use wasm_encoder::{
-    CodeSection, DataSection, FunctionSection, GlobalSection, ImportSection, IndirectNameMap,
-    Instruction, Module, NameMap, NameSection, ProducersField, ProducersSection, TagSection,
-    TypeSection, ValType,
+    CodeSection, ConstExpr, DataSection, FunctionSection, GlobalSection, GlobalType, ImportSection,
+    IndirectNameMap, Instruction, MemoryType, Module, NameMap, NameSection, ProducersField,
+    ProducersSection, RefType, TableType, TagKind, TagSection, TagType, TypeSection, ValType,
 };
 
 use instructions::{FunctionBuilder, InstructionSink};
@@ -18,7 +17,7 @@ mod runtime_impls;
 //TODO
 pub use lua_modules::produce_lua_obj_file;
 
-struct State {
+struct ModuleState {
 	symbol_table: SymbolTab,
 	types_sect: TypeSection,
 	import_sect: ImportSection,
@@ -37,15 +36,107 @@ struct State {
 	error_tag: Symbol,
 	call_tab: Symbol,
 	shtack_ptr: Symbol,
-	strings: Box<[StringRef]>,
-	closures: Box<[Option<ClosureRef>]>,
 	extern_fns: ExternFns,
 	global_table: Symbol,
+}
 
-	// Per-function data
-	locals: BTreeMap<u8, u32>,
-	/// The distance from the last loop.
-	loop_depth: u32,
+impl Default for ModuleState {
+	fn default() -> Self { Self::new_module() }
+}
+
+impl ModuleState {
+	pub fn new_module() -> Self {
+		let mut symbol_table = SymbolTab::new();
+		let mut types_sect = TypeSection::new();
+		let mut import_sect = ImportSection::new();
+		let mut tag_sect = TagSection::new();
+		let mut global_sect = GlobalSection::new();
+
+		import_sect.import("env", "__linear_memory", MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: None });
+		// memory_sect.memory(MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: Some(1) });
+
+		global_sect.global(GlobalType { val_type: ValType::I32, mutable: true, shared: false }, &ConstExpr::i32_const(0));
+		global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
+		let shtack_ptr = symbol_table.global(SymbolTab::WASM_SYM_BINDING_LOCAL, 0, Some("__luant_shtack_ptr"));
+		let global_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_LOCAL, 1, Some("__luant_global_table"));
+
+		types_sect.ty().function([ValType::I32], [ValType::I32]);
+
+		import_sect.import("env", "__indirect_function_table", TableType {
+			element_type: RefType::FUNCREF,
+			table64: false,
+			minimum: 0,
+			maximum: None,
+			shared: false,
+		});
+		let call_tab = symbol_table.table(SymbolTab::WASM_SYM_UNDEFINED, 0, None);
+
+		let (function_count, extern_fns) = ExternFns::init(&mut types_sect, &mut import_sect, &mut symbol_table);
+
+		tag_sect.tag(TagType { kind: TagKind::Exception, func_type_idx: types_sect.len() });
+		let error_tag = symbol_table.tag(SymbolTab::WASM_SYM_BINDING_LOCAL, 0, Some("__luant_error_tag"));
+
+		types_sect.ty().function([ValType::I64], []);
+
+		Self {
+			global_table,
+			symbol_table,
+			shtack_ptr,
+			error_tag,
+			call_tab,
+			dyn_call_ty: 0,
+			linear_memory: 0,
+			shtack_mem: 1,
+			
+			function_count,
+			extern_fns,
+			
+			types_sect,
+			import_sect,
+			tag_sect,
+			global_sect,
+			data_sect: DataSection::new(),
+			function_sect: FunctionSection::new(),
+			code_sect: CodeSection::new(),
+			reloc_code_sect: RelocSection::new(),
+
+			local_names: IndirectNameMap::new(),
+			function_names: NameMap::new(),
+		}
+	}
+
+	pub fn build_object(&self) -> Result<Module> {
+		let mut module = Module::new();
+
+		let mut names = NameSection::new();
+		names.functions(&self.function_names);
+		names.locals(&self.local_names);
+		names.tag(&{ let mut map = NameMap::new(); map.append(0, "lua_error"); map });
+
+		let mut producers = ProducersSection::new();
+		producers
+			.field("language", ProducersField::new().value("Lua", "5.5"))
+			.field("processed-by", ProducersField::new().value("luant", env!("CARGO_PKG_VERSION")));
+
+		// Get the number of bytes used by the encoding of the item count in the section...
+		// Relocations need this information.
+		let code_section_len_len = linking::len_of_encoding_u32(self.code_sect.len());
+
+		module
+			.section(&self.types_sect)
+			.section(&self.import_sect)
+			.section(&self.function_sect)
+			.section(&self.tag_sect)
+			.section(&self.global_sect)
+			.section(&self.code_sect)
+			.section(&self.data_sect)
+			.section(LinkingSection::new().symbol_table(&self.symbol_table))
+			.section(&self.reloc_code_sect.finish("reloc.CODE", 5, code_section_len_len))
+			.section(&names)
+			.section(&producers);
+
+		Ok(module)
+	}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -60,52 +151,32 @@ struct StringRef {
 	sym: Symbol,
 }
 
-fn build_obj_module(state: &State) -> Result<Module> {
-	let mut module = Module::new();
-
-	let mut names = NameSection::new();
-	names.functions(&state.function_names);
-	names.locals(&state.local_names);
-	names.tag(&{ let mut map = NameMap::new(); map.append(0, "lua_error"); map });
-
-	let mut producers = ProducersSection::new();
-	producers
-		.field("language", ProducersField::new().value("Lua", "5.5"))
-		.field("processed-by", ProducersField::new().value("luant", env!("CARGO_PKG_VERSION")));
-
-	// Get the number of bytes used by the encoding of the item count in the section...
-	// Relocations need this information.
-	let code_section_len_len = linking::len_of_encoding_u32(state.code_sect.len());
-
-	module
-		.section(&state.types_sect)
-		.section(&state.import_sect)
-		.section(&state.function_sect)
-		.section(&state.tag_sect)
-		.section(&state.global_sect)
-		.section(&state.code_sect)
-		.section(&state.data_sect)
-		.section(LinkingSection::new().symbol_table(&state.symbol_table))
-		.section(&state.reloc_code_sect.finish("reloc.CODE", 5, code_section_len_len))
-		.section(&names)
-		.section(&producers);
-
-	Ok(module)
+pub trait HasModuleState {
+	fn module_state(&mut self) -> &mut ModuleState;
 }
 
-fn compile_function<L: IntoIterator<Item = (u32, ValType)>>(
-	state: &mut State,
+impl HasModuleState for ModuleState {
+	fn module_state(&mut self) -> &mut ModuleState { self }
+}
+
+fn compile_function<S: HasModuleState, L: IntoIterator<Item = (u32, ValType)>>(
+	has_state: &mut S,
 	name: impl AsRef<str>,
 	flags: u32,
 	locals: L,
 	signature: u32,
-	f: impl FnOnce(&mut State, &mut InstructionSink, u32),
+	f: impl FnOnce(&mut S, &mut InstructionSink, u32),
 ) -> ClosureRef where L::IntoIter: ExactSizeIterator {
+	let state = has_state.module_state();
+
 	let id = state.function_count;
 	state.function_count += 1;
 
 	let mut builder = FunctionBuilder::new(locals);
-	f(state, &mut builder.sink(), id);
+	f(has_state, &mut builder.sink(), id);
+
+	let state = has_state.module_state();
+
 	builder.function_mut().instruction(&Instruction::End);
 	
 	builder.finish(state); // Encodes the function and the relocations.
