@@ -105,6 +105,21 @@ impl ModuleState {
 		}
 	}
 
+	pub fn add_data<D: IntoIterator<Item = u8>>(&mut self, flags: u32, name: &str, data: D) -> Symbol
+	where D::IntoIter: ExactSizeIterator {
+		let data = data.into_iter();
+		let size = data.len().try_into().unwrap();
+
+		let index = self.data_sect.len();
+
+		let def = wasm_encoder::DataSymbolDefinition { index, size, offset: 0 };
+		let sym = self.symbol_table.data(flags, name, Some(def));
+
+		self.data_sect.active(0, &ConstExpr::i32_const(0), data);
+
+		sym
+	}
+
 	pub fn build_object(&self) -> Result<Module> {
 		let mut module = Module::new();
 

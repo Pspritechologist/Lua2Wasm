@@ -37,7 +37,7 @@ pub fn produce_lua_obj_file<'s>(parsed: Parsed<'s>) -> Result<Vec<u8>> {
 			let (addr, len) = (offset as u32, s.len() as u32);
 			offset += s.len();
 			state.module_state.data_sect.active(0, &ConstExpr::i32_const(addr.cast_signed()), s.iter().copied());
-			let sym = state.module_state.symbol_table.string(i as u32, len);
+			let sym = state.module_state.symbol_table.luant_string(i as u32, len);
 			StringRef { len, sym }
 		}).collect()
 	};

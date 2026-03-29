@@ -98,7 +98,7 @@ impl SymbolTab {
 		Symbol::new(id)
 	}
 
-	pub fn string(&mut self, index: u32, size: u32) -> Symbol {
+	pub fn luant_string(&mut self, index: u32, size: u32) -> Symbol {
 		self.data(SymbolTab::WASM_SYM_BINDING_LOCAL, "__luant_string", Some(DataSymbolDefinition { index, size, offset: 0 }))
 	}
 

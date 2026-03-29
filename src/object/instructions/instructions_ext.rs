@@ -9,6 +9,13 @@ impl InstructionSink<'_> {
 	// 	self
 	// }
 
+	pub fn static_str(&mut self, state: &mut ModuleState, symbol: Symbol, len: u32) -> &mut Self {
+		self
+			.push_addr(symbol)
+			.i32_const(len.cast_signed())
+			.call(state.extern_fns.static_str)
+	}
+
 	pub fn push_addr(&mut self, symbol: Symbol) -> &mut Self {
 		self
 			// We set the address to a placeholder value, MAX to ensure padding.

@@ -8,12 +8,9 @@ use wasm_encoder::{BlockType, MemArg, ValType};
 use super::LuantModuleState;
 
 impl InstructionSink<'_> {
-	pub fn static_str(&mut self, state: &mut LuantModuleState, idx: usize) -> &mut Self {
+	pub fn luant_str(&mut self, state: &mut LuantModuleState, idx: usize) -> &mut Self {
 		let string = state.strings[idx];
-		self
-			.push_addr(string.sym)
-			.i32_const(string.len.cast_signed())
-			.call(state.module_state.extern_fns.static_str)
+		self.static_str(&mut state.module_state, string.sym, string.len)
 	}
 
 	pub fn const_val(&mut self, value: impl Into<Value>) -> &mut Self {
@@ -61,7 +58,7 @@ impl Loc {
 			Loc::UpValue(idx) => todo!(),
 			Loc::Global(idx) => {
 				seq.global_get(state.module_state.global_table)
-					.static_str(state, idx)
+					.luant_str(state, idx)
 					.call(state.module_state.extern_fns.table_get_name);
 			},
 		};
@@ -73,7 +70,7 @@ impl Loc {
 			Loc::UpValue(idx) => todo!(),
 			Loc::Global(idx) => {
 				seq.global_get(state.module_state.global_table)
-					.static_str(state, idx)
+					.luant_str(state, idx)
 					.call(state.module_state.extern_fns.table_set_name);
 			},
 		};
@@ -87,7 +84,7 @@ impl Expr {
 			Expr::Constant(Const::Bool(b)) => Value::bool(b).push(seq),
 			Expr::Constant(Const::Number(n)) => Value::float(n.val()).push(seq),
 			Expr::Constant(Const::String(idx)) => {
-				seq.static_str(state, idx);
+				seq.luant_str(state, idx);
 			},
 			Expr::Slot(idx) => Loc::Slot(idx).push_get(state, seq),
 			Expr::UpValue(idx) => Loc::UpValue(idx).push_get(state, seq),
