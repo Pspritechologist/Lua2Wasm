@@ -1,5 +1,5 @@
 use crate::{
-	object::InstructionSink,
+	object::{ClosureRef, InstructionSink, ValueExt},
 	bytecode::{Loc, Operation as Op, RetKind},
 	parsing::expressions::{Const, Expr},
 };
@@ -7,47 +7,41 @@ use value::Value;
 use wasm_encoder::{BlockType, MemArg, ValType};
 use super::LuantModuleState;
 
-impl InstructionSink<'_> {
-	pub fn luant_str(&mut self, state: &mut LuantModuleState, idx: usize) -> &mut Self {
+pub trait LuantInstSinkExt {
+	fn luant_str(&mut self, state: &mut LuantModuleState, idx: usize) -> &mut Self;
+	fn expr(&mut self, state: &mut LuantModuleState, expr: Expr) -> &mut Self;
+	fn loc_get(&mut self, state: &mut LuantModuleState, loc: Loc) -> &mut Self;
+	fn loc_set(&mut self, state: &mut LuantModuleState, loc: Loc) -> &mut Self;
+	fn operations(&mut self, state: &mut LuantModuleState, ops: impl IntoIterator<Item = Op>) -> &mut Self;
+}
+
+impl LuantInstSinkExt for InstructionSink<'_> {
+	fn luant_str(&mut self, state: &mut LuantModuleState, idx: usize) -> &mut Self {
 		let string = state.strings[idx];
 		self.static_str(&mut state.module_state, string.sym, string.len)
 	}
 
-	pub fn const_val(&mut self, value: impl Into<Value>) -> &mut Self {
-		value.into().push(self);
-		self
-	}
-
-	pub fn expr(&mut self, state: &mut LuantModuleState, expr: Expr) -> &mut Self {
+	fn expr(&mut self, state: &mut LuantModuleState, expr: Expr) -> &mut Self {
 		expr.push(state, self);
 		self
 	}
 
-	pub fn loc_get(&mut self, state: &mut LuantModuleState, loc: Loc) -> &mut Self {
+	fn loc_get(&mut self, state: &mut LuantModuleState, loc: Loc) -> &mut Self {
 		loc.push_get(state, self);
 		self
 	}
 
-	pub fn loc_set(&mut self, state: &mut LuantModuleState, loc: Loc) -> &mut Self {
+	fn loc_set(&mut self, state: &mut LuantModuleState, loc: Loc) -> &mut Self {
 		loc.push_set(state, self);
 		self
 	}
 
-	pub fn operations(&mut self, state: &mut LuantModuleState, ops: impl IntoIterator<Item = Op>) -> &mut Self {
+	fn operations(&mut self, state: &mut LuantModuleState, ops: impl IntoIterator<Item = Op>) -> &mut Self {
 		let mut ops = ops.into_iter();
 		while let Some(op) = ops.next() {
 			compile_op(state, &mut ops, self, op);
 		}
 		self
-	}
-}
-
-pub trait ValueExt {
-	fn push(self, seq: &mut InstructionSink);
-}
-impl ValueExt for Value {
-	fn push(self, seq: &mut InstructionSink) {
-		seq.i64_const(self.as_i64());
 	}
 }
 
@@ -133,7 +127,7 @@ fn compile_op(state: &mut LuantModuleState, ops: &mut impl Iterator<Item=Op>, se
 		Op::Len(dst, lhs) => { seq.expr(state, lhs).call(state.module_state.extern_fns.len).loc_set(state, dst); },
 		
 		Op::Copy(dst, val) => { val.push(state, seq); dst.push_set(state, seq); },
-		Op::LoadClosure(dst, idx) => { seq.push_function(&mut state.module_state, state.closures[idx].unwrap()); dst.push_set(state, seq); },
+		Op::LoadClosure(dst, idx) => { seq.push_function(&mut state.module_state, state.closures[idx].unwrap().sym); dst.push_set(state, seq); },
 		Op::LoadTab(dst) => { seq.call(state.module_state.extern_fns.table_load); dst.push_set(state, seq); },
 		Op::Get(dst, tab, key) => { tab.push(state, seq); key.push(state, seq); seq.call(state.module_state.extern_fns.table_get); dst.push_set(state, seq); },
 		Op::Set(tab, key, val) => { tab.push(state, seq); key.push(state, seq); val.push(state, seq); seq.call(state.module_state.extern_fns.table_set); },
@@ -163,8 +157,7 @@ fn compile_op(state: &mut LuantModuleState, ops: &mut impl Iterator<Item=Op>, se
 			}
 			seq.i32_const(arg_cnt.into())
 				.loc_get(state, Loc::Slot(func_slot))
-				.call(state.module_state.extern_fns.get_fn)
-				.call_indirect(&mut state.module_state);
+				.call_as_luant_fn(&mut state.module_state);
 
 			match ret_kind {
 				RetKind::None => { seq.drop(); },

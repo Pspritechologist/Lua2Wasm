@@ -26,7 +26,6 @@ macro_rules! extern_fns {
 		pub struct $StructName {
 			$(
 				$(#[$attr])*
-				#[allow(unused)] //TODO
 				pub $field: Symbol,
 			)+
 		}

@@ -9,13 +9,21 @@ use instructions::{FunctionBuilder, InstructionSink};
 use linking::{LinkingSection, RelocSection, Symbol, SymbolTab};
 use runtime_impls::external_bindings::ExternFns;
 
+pub use lua_modules::produce_lua_obj_file;
+pub use runtime_impls::initialize::generate_runtime_object;
+
 mod lua_modules;
 mod instructions;
 mod linking;
 mod runtime_impls;
 
-//TODO
-pub use lua_modules::produce_lua_obj_file;
+use crate::object::linking::InitFunctions;
+
+struct InitPriorities;
+impl InitPriorities {
+	const REGISTER_MODULES: u32 = 50;
+	const INIT_RUNTIME: u32 = 100;
+}
 
 struct ModuleState {
 	symbol_table: SymbolTab,
@@ -26,6 +34,7 @@ struct ModuleState {
 	function_sect: FunctionSection,
 	code_sect: CodeSection,
 	data_sect: DataSection,
+	init_fns: InitFunctions,
 	function_names: NameMap,
 	local_names: IndirectNameMap,
 	reloc_code_sect: RelocSection,
@@ -38,6 +47,7 @@ struct ModuleState {
 	shtack_ptr: Symbol,
 	extern_fns: ExternFns,
 	global_table: Symbol,
+	module_table: Symbol,
 }
 
 impl Default for ModuleState {
@@ -57,8 +67,10 @@ impl ModuleState {
 
 		global_sect.global(GlobalType { val_type: ValType::I32, mutable: true, shared: false }, &ConstExpr::i32_const(0));
 		global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
-		let shtack_ptr = symbol_table.global(SymbolTab::WASM_SYM_BINDING_LOCAL, 0, Some("__luant_shtack_ptr"));
-		let global_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_LOCAL, 1, Some("__luant_global_table"));
+		global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
+		let shtack_ptr = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 0, Some("__luant_shtack_ptr"));
+		let global_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 1, Some("__luant_global_table"));
+		let module_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 2, Some("__luant_module_table"));
 
 		types_sect.ty().function([ValType::I32], [ValType::I32]);
 
@@ -80,7 +92,7 @@ impl ModuleState {
 
 		Self {
 			global_table,
-			symbol_table,
+			module_table,
 			shtack_ptr,
 			error_tag,
 			call_tab,
@@ -98,6 +110,9 @@ impl ModuleState {
 			data_sect: DataSection::new(),
 			function_sect: FunctionSection::new(),
 			code_sect: CodeSection::new(),
+			
+			symbol_table,
+			init_fns: InitFunctions::new(),
 			reloc_code_sect: RelocSection::new(),
 
 			local_names: IndirectNameMap::new(),
@@ -137,6 +152,11 @@ impl ModuleState {
 		// Relocations need this information.
 		let code_section_len_len = linking::len_of_encoding_u32(self.code_sect.len());
 
+		let mut init_sect = LinkingSection::new();
+		init_sect
+			.symbol_table(&self.symbol_table)
+			.init_functions(&self.init_fns);
+
 		module
 			.section(&self.types_sect)
 			.section(&self.import_sect)
@@ -145,7 +165,7 @@ impl ModuleState {
 			.section(&self.global_sect)
 			.section(&self.code_sect)
 			.section(&self.data_sect)
-			.section(LinkingSection::new().symbol_table(&self.symbol_table))
+			.section(&init_sect)
 			.section(&self.reloc_code_sect.finish("reloc.CODE", 5, code_section_len_len))
 			.section(&names)
 			.section(&producers);
@@ -157,7 +177,7 @@ impl ModuleState {
 #[derive(Debug, Clone, Copy)]
 struct ClosureRef {
 	sym: Symbol,
-	id: u32,
+	index: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -166,7 +186,7 @@ struct StringRef {
 	sym: Symbol,
 }
 
-pub trait HasModuleState {
+trait HasModuleState {
 	fn module_state(&mut self) -> &mut ModuleState;
 }
 
@@ -201,5 +221,14 @@ fn compile_function<S: HasModuleState, L: IntoIterator<Item = (u32, ValType)>>(
 
 	let sym = state.symbol_table.function(flags, id, Some(name.as_ref()));
 
-	ClosureRef { sym, id }
+	ClosureRef { sym, index: id }
+}
+
+pub trait ValueExt {
+	fn push(self, seq: &mut InstructionSink);
+}
+impl ValueExt for value::Value {
+	fn push(self, seq: &mut InstructionSink) {
+		seq.i64_const(self.as_i64());
+	}
 }

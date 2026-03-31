@@ -1,6 +1,7 @@
-use crate::{bytecode::Operation, parsing::{Parsed, ParsedFunction}};
+use crate::{bytecode::Operation, object::InitPriorities, parsing::{Parsed, ParsedFunction}};
 use crate::object::{ClosureRef, ModuleState, StringRef, compile_function, linking::SymbolTab};
 use wasm_encoder::{BlockType, ConstExpr, MemArg, NameMap, ValType};
+use instructions::LuantInstSinkExt;
 
 use anyhow::Result;
 
@@ -22,7 +23,7 @@ impl super::HasModuleState for LuantModuleState {
 	fn module_state(&mut self) -> &mut ModuleState { &mut self.module_state }
 }
 
-pub fn produce_lua_obj_file<'s>(parsed: Parsed<'s>) -> Result<Vec<u8>> {
+pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, parsed: Parsed<'s>) -> Result<wasm_encoder::Module> {
 	let mut state = LuantModuleState {
 		module_state: ModuleState::new_module(),
 		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
@@ -58,7 +59,24 @@ pub fn produce_lua_obj_file<'s>(parsed: Parsed<'s>) -> Result<Vec<u8>> {
 	let main_fn = compile_luant_function(&mut state, &main_fn);
 	state.closures[0] = Some(main_fn);
 
-	Ok(state.module_state.build_object()?.finish())
+	// Generate an initialization function that registers the module in the module table,
+	// allowing it to be looked up by `require` implementations.
+
+	let module_name = module_name.as_ref();
+	let module_name_sym = state.module_state.add_data(SymbolTab::WASM_SYM_BINDING_LOCAL, "__luant_module_name", module_name.iter().copied());
+
+	let reg_sig = state.module_state.types_sect.len();
+	state.module_state.types_sect.ty().function([], []);
+	let register_module_fn = compile_function(&mut state, "__luant_register_module", SymbolTab::WASM_SYM_BINDING_LOCAL, [], reg_sig, |state, seq, _| {
+		seq.push_function(&mut state.module_state, main_fn.sym)
+			.global_get(state.module_state.module_table)
+			.static_str(&mut state.module_state, module_name_sym, module_name.len().try_into().unwrap())
+			.call(state.module_state.extern_fns.table_set_name);
+	});
+
+	state.module_state.init_fns.add(register_module_fn.sym, InitPriorities::REGISTER_MODULES);
+
+	state.module_state.build_object()
 }
 
 

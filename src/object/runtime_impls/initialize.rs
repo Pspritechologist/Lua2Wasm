@@ -1,8 +1,8 @@
 use wasm_encoder::ValType;
 
 use crate::object::{
-	ModuleState, StringRef, runtime_impls,
-	instructions::{FunctionBuilder, InstructionSink},
+	ModuleState, StringRef, InitPriorities, runtime_impls, compile_function,
+	instructions::InstructionSink,
 	linking::SymbolTab,
 };
 
@@ -42,12 +42,14 @@ pub fn generate_runtime_object() -> Vec<u8> {
 	let std_error = std_fn("__luant_std_error", 0, runtime_impls::error);
 	let std_pcall = std_fn("__luant_std_pcall", 1, runtime_impls::pcall);
 
-	let mut builder = FunctionBuilder::new([(1, ValType::I64)]);
-
-	{
-		let mut seq = builder.sink();
-
+	let sig = state.types_sect.len();
+	state.types_sect.ty().function([], []);
+	let init_fn = compile_function(state, "name", SymbolTab::WASM_SYM_BINDING_LOCAL, [(1, ValType::I64)], sig, |state, seq, _| {
 		let global_tab = 0;
+
+		// Initialize the module lookup table.
+		seq.call(state.extern_fns.table_load)
+			.global_set(state.module_table);
 
 		// Initialize the global table.
 		seq.call(state.extern_fns.table_load)
@@ -62,17 +64,12 @@ pub fn generate_runtime_object() -> Vec<u8> {
 		};
 
 		// Load the 'error' function into it.
-		add_fn(internal_strings.error, std_error);
+		add_fn(internal_strings.error, std_error.sym);
 		// Load the 'pcall' function into it.
-		add_fn(internal_strings.pcall, std_pcall);
+		add_fn(internal_strings.pcall, std_pcall.sym);
+	});
 
-		seq.end();
-	}
-
-	builder.finish(state); // Encodes the function and the relocations.
-
-	state.function_sect.function(state.types_sect.len());
-	state.types_sect.ty().function([], []);
+	state.init_fns.add(init_fn.sym, InitPriorities::INIT_RUNTIME);
 
 	state.build_object().unwrap().finish()
 }

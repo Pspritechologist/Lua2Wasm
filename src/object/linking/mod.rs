@@ -24,6 +24,11 @@ impl LinkingSection {
 		symbol_table.encode(&mut self.bytes);
 		self
 	}
+
+	pub fn init_functions(&mut self, init_functions: &InitFunctions) -> &mut Self {
+		init_functions.encode(&mut self.bytes);
+		self
+	}
 }
 
 impl Encode for LinkingSection {
@@ -38,6 +43,34 @@ impl Encode for LinkingSection {
 impl Section for LinkingSection {
 	fn id(&self) -> u8 {
 		SectionId::Custom.into()
+	}
+}
+
+#[derive(Debug)]
+pub struct InitFunctions {
+	buf: Vec<u8>,
+	count: u32,
+}
+
+impl Encode for InitFunctions {
+	fn encode(&self, sink: &mut Vec<u8>) {
+		6u32.encode(sink); // WASM_INIT_FUNCS.
+		(len_of_encoding_u32(self.count) + self.buf.len()).encode(sink);
+		self.count.encode(sink);
+		sink.extend(&self.buf);
+	}
+}
+
+impl InitFunctions {
+	pub fn new() -> Self {
+		Self { buf: Vec::new(), count: 0 }
+	}
+
+	pub fn add(&mut self, sym: Symbol, priority: u32) -> &mut Self {
+		priority.encode(&mut self.buf);
+		sym.index().encode(&mut self.buf);
+		self.count += 1;
+		self
 	}
 }
 

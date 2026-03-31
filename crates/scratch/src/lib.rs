@@ -19,7 +19,7 @@ mod table;
 extern crate alloc;
 
 mod binds {
-	#[link(wasm_import_module = "__luant")]
+	// #[link(wasm_import_module = "__luant")]
 	unsafe extern "C" {
 		fn throw(object: i64) -> !;
 	}
