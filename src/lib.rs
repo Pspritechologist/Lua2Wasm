@@ -1,4 +1,4 @@
-use std::{borrow::Cow, ffi::OsStr, hash::BuildHasher, path::{Path, PathBuf}, process::Command};
+use std::{borrow::Cow, ffi::OsStr, io::Write, path::{Path, PathBuf}, process::Command};
 use anyhow::{Context, Result};
 
 pub mod parsing;
@@ -10,10 +10,12 @@ static RUST_RUNTIME_LIB: &[u8] = include_bytes!("../target/wasm32-unknown-unknow
 
 #[derive(Debug)]
 pub struct Config<'c> {
-	pub obj_path: Cow<'c, Path>,
+	pub target_path: Cow<'c, Path>,
 	pub cleanup_objects: bool,
 	pub wasm_ld_path: Cow<'c, OsStr>,
 	pub output_module_path: Cow<'c, Path>,
+
+	pub wasm_opt_path: Option<Cow<'c, OsStr>>,
 }
 
 /// A trait for representing a Lua file from which both a name and contents can be obtained.\
@@ -29,38 +31,123 @@ pub fn process_files<I: IntoIterator>(config: &Config, files: I) -> anyhow::Resu
 	let mut cmd = Command::new(&config.wasm_ld_path);
 	cmd.arg("--no-entry");
 
-	std::fs::create_dir_all(&config.obj_path).with_context(|| format!("Failed to create object directory '{}'", config.obj_path.display()))?;
+	let obj_path = config.target_path.join("obj");
+
+	std::fs::create_dir_all(&obj_path).with_context(|| format!("Failed to create object directory '{}'", config.target_path.display()))?;
 
 	// Generate the runtime object.
-	let runtime_obj_path = config.obj_path.join("runtime.o");
+	let runtime_obj_path = config.target_path.join("runtime.o");
 	let runtime_obj = object::generate_runtime_object();
 	std::fs::write(&runtime_obj_path, runtime_obj).with_context(|| format!("Failed to write runtime object file '{}'", runtime_obj_path.display()))?;
 	cmd.arg(runtime_obj_path);
 
 	// Generate the rust library.
-	let lib_path = config.obj_path.join("libwasm_scratch.a");
+	let lib_path = config.target_path.join("libwasm_scratch.a");
 	std::fs::write(&lib_path, RUST_RUNTIME_LIB).with_context(|| format!("Failed to write runtime library '{}'", lib_path.display()))?;
 	cmd.arg(lib_path);
 
 	for file in files {
 		let obj = parse_lua_file(&file)?.finish();
 		
-		let mut obj_path = PathBuf::from(file.name()?.into_owned());
-		obj_path.set_extension("o");
-		let obj_path = config.obj_path.join(obj_path);
+		let mut file_obj_path = PathBuf::from(file.name()?.into_owned());
+		file_obj_path.set_extension("o");
+		let obj_path = obj_path.join(file_obj_path);
 
 		std::fs::write(&obj_path, obj).with_context(|| format!("Failed to write object file '{}'", obj_path.display()))?;
 		cmd.arg(obj_path);
 	}
 
-	cmd.arg("-o").arg(config.output_module_path.as_ref());
+	let temp_module_path = config.target_path.join("linked_module.wasm");
+
+	cmd.arg("-o").arg(&temp_module_path);
 
 	let status = cmd.status().with_context(|| format!("Failed to execute wasm-ld at '{}'", config.wasm_ld_path.display()))?;
 	if !status.success() {
 		return Err(anyhow::anyhow!("wasm-ld failed with status code: {status}"));
 	}
 
+	let old_module = std::fs::read(&temp_module_path).with_context(|| format!("Failed to read output module file '{}'", config.output_module_path.display()))?;
+
+	let new_module = add_second_memory(&old_module)?;
+
+	let Some(wasm_opt_path) = &config.wasm_opt_path else {
+		std::fs::write(&config.output_module_path, new_module).with_context(|| format!("Failed to write output module file '{}'", config.output_module_path.display()))?;
+		return Ok(())
+	};
+
+	let mut wasm_opt_proc = Command::new(wasm_opt_path)
+		.arg("-O4").arg("-c").arg("-g")
+		.arg("--enable-multimemory")
+		.arg("--enable-exception-handling")
+		.arg("-o").arg(config.output_module_path.as_ref())
+		.stdin(std::process::Stdio::piped())
+		.spawn()
+		.with_context(|| format!("Failed to execute wasm-opt at '{}'", wasm_opt_path.display()))?;
+
+	wasm_opt_proc.stdin.take().context("Failed to open stdin for wasm-opt")?.write_all(&new_module).context("Failed to write module to wasm-opt stdin")?;
+	let opt_status = wasm_opt_proc.wait().context("Failed to wait for wasm-opt process")?;
+
+	if !opt_status.success() {
+		return Err(anyhow::anyhow!("wasm-opt failed with status code: {opt_status}"));
+	}
+
 	Ok(())
+}
+
+/// Finds the tail of the memory section in a wasm module, where new memories can be inserted.
+fn add_second_memory(wasm: &[u8]) -> Result<Vec<u8>> {
+	const MEMORY_SECTION_ID: u8 = 5;
+
+	if wasm.len() < 8 {
+		return Err(anyhow::anyhow!("Wasm module is too small to be valid"));
+	}
+
+	// Find the tail end of the memory section.
+	let mut cursor = 8usize;
+	let mem_offset = loop {
+		if cursor >= wasm.len() {
+			return Err(anyhow::anyhow!("Failed to find memory section in wasm module"));
+		}
+
+		let section_id = wasm[cursor];
+		cursor += 1;
+
+		if section_id == MEMORY_SECTION_ID {
+			break cursor;
+		}
+
+		let content_len = leb128fmt::decode_uint_slice::<u32, 32>(wasm, &mut cursor).context("Failed to decode value while looking for memory")? as usize;
+
+		cursor += content_len;
+	};
+	
+	let len_offset = mem_offset;
+	let mem_len = leb128fmt::decode_uint_slice::<u32, 32>(wasm, &mut cursor).context("Failed to decode memory section length")? as usize;
+
+	let mem_count = wasm[cursor] as usize;
+	assert_eq!(mem_count, 1, "Expected exactly one memory in the output module");
+
+	let mem_end_offset = cursor + mem_len;
+
+	cursor += 1;
+
+	let content_offset = cursor;
+
+	let mut new_module = Vec::with_capacity(wasm.len() + 3);
+	new_module.extend_from_slice(&wasm[..len_offset]);
+
+	// Encode the new length of the memory section, which is the old length + 3 (the size of one memory entry).
+	wasm_encoder::Encode::encode(&(mem_len + 3), &mut new_module);
+
+	new_module.push(2); // The new memory count, which is the old count + 1.
+
+	new_module.extend_from_slice(&wasm[content_offset..mem_end_offset]);
+
+	wasm_encoder::Encode::encode(&wasm_encoder::MemoryType { minimum: 1, maximum: Some(1), memory64: false, shared: false, page_size_log2: None }, &mut new_module);
+
+	new_module.extend_from_slice(&wasm[mem_end_offset..]);
+
+	Ok(new_module)
 }
 
 fn parse_lua_file(lua_file: &impl LuaFile) -> Result<wasm_encoder::Module> {

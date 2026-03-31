@@ -1,4 +1,4 @@
-use std::{borrow::Cow, ffi::{OsStr, OsString}, path::Path};
+use std::{borrow::Cow, ffi::{OsStr, OsString}, path::{Path, PathBuf}};
 use anyhow::{Context, Result};
 use luant::{Config, LuaFile};
 
@@ -25,14 +25,17 @@ impl LuaFile for LuaPath {
 
 fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 	// Takes the first param as a file path;
-	let path = std::env::args_os().nth(1).unwrap_or_else(|| "test.lua".into());
+	let in_path = std::env::args_os().nth(1).unwrap_or_else(|| "test.lua".into());
+	let out_path = std::env::args_os().nth(2).unwrap_or_else(|| "out.wasm".into());
+	let opt = std::env::args_os().nth(3).is_some_and(|arg| arg == "--opt" || arg == "-o");
 
 	luant::process_files(&Config {
-		obj_path: Path::new("obj").into(),
+		target_path: Path::new("output").into(),
 		cleanup_objects: true,
 		wasm_ld_path: OsStr::new("wasm-ld").into(),
-		output_module_path: Path::new("out.wasm").into(),
-	}, [LuaPath(path)])?;
+		output_module_path: PathBuf::from(out_path).into(),
+		wasm_opt_path: opt.then_some(OsStr::new("wasm-opt").into()),
+	}, [LuaPath(in_path)])?;
 
 	Ok(())
 }
