@@ -1,6 +1,8 @@
 use std::{borrow::Cow, ffi::OsStr, io::Write, path::{Path, PathBuf}, process::Command};
 use anyhow::{Context, Result};
 
+pub use object::ExportData;
+
 pub mod parsing;
 mod bytecode;
 mod debug;
@@ -16,6 +18,8 @@ pub struct Config<'c> {
 	pub output_module_path: Cow<'c, Path>,
 
 	pub wasm_opt_path: Option<Cow<'c, OsStr>>,
+
+	pub exports: Vec<object::ExportData<'static>>,
 }
 
 /// A trait for representing a Lua file from which both a name and contents can be obtained.\
@@ -45,6 +49,12 @@ pub fn process_files<I: IntoIterator>(config: &Config, files: I) -> anyhow::Resu
 	let lib_path = config.target_path.join("libwasm_scratch.a");
 	std::fs::write(&lib_path, RUST_RUNTIME_LIB).with_context(|| format!("Failed to write runtime library '{}'", lib_path.display()))?;
 	cmd.arg(lib_path);
+
+	// Generate the export object, which contains the exports of the module.
+	let export_obj_path = config.target_path.join("exports.o");
+	let export_obj = object::generate_exports_object(&config.exports)?;
+	std::fs::write(&export_obj_path, export_obj).with_context(|| format!("Failed to write export object file '{}'", export_obj_path.display()))?;
+	cmd.arg(export_obj_path);
 
 	for file in files {
 		let obj = parse_lua_file(&file)?.finish();

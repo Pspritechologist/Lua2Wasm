@@ -5,6 +5,7 @@ use instructions::LuantInstSinkExt;
 
 use anyhow::Result;
 
+pub mod exports;
 mod instructions;
 
 struct LuantModuleState {

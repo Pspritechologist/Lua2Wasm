@@ -9,7 +9,7 @@ use instructions::{FunctionBuilder, InstructionSink};
 use linking::{LinkingSection, RelocSection, Symbol, SymbolTab};
 use runtime_impls::external_bindings::ExternFns;
 
-pub use lua_modules::produce_lua_obj_file;
+pub use lua_modules::{produce_lua_obj_file, exports::{generate_exports_object, ExportData}};
 pub use runtime_impls::initialize::generate_runtime_object;
 
 mod lua_modules;
@@ -194,21 +194,21 @@ impl HasModuleState for ModuleState {
 	fn module_state(&mut self) -> &mut ModuleState { self }
 }
 
-fn compile_function<S: HasModuleState, L: IntoIterator<Item = (u32, ValType)>>(
+fn try_compile_function<E, S: HasModuleState, L: IntoIterator<Item = (u32, ValType)>>(
 	has_state: &mut S,
 	name: impl AsRef<str>,
 	flags: u32,
 	locals: L,
 	signature: u32,
-	f: impl FnOnce(&mut S, &mut InstructionSink, u32),
-) -> ClosureRef where L::IntoIter: ExactSizeIterator {
+	f: impl FnOnce(&mut S, &mut InstructionSink, u32) -> Result<(), E>,
+) -> Result<ClosureRef, E> where L::IntoIter: ExactSizeIterator {
 	let state = has_state.module_state();
 
 	let id = state.function_count;
 	state.function_count += 1;
 
 	let mut builder = FunctionBuilder::new(locals);
-	f(has_state, &mut builder.sink(), id);
+	f(has_state, &mut builder.sink(), id)?;
 
 	let state = has_state.module_state();
 
@@ -221,7 +221,21 @@ fn compile_function<S: HasModuleState, L: IntoIterator<Item = (u32, ValType)>>(
 
 	let sym = state.symbol_table.function(flags, id, Some(name.as_ref()));
 
-	ClosureRef { sym, index: id }
+	Ok(ClosureRef { sym, index: id })
+}
+
+fn compile_function<S: HasModuleState, L: IntoIterator<Item = (u32, ValType)>>(
+	has_state: &mut S,
+	name: impl AsRef<str>,
+	flags: u32,
+	locals: L,
+	signature: u32,
+	f: impl FnOnce(&mut S, &mut InstructionSink, u32),
+) -> ClosureRef where L::IntoIter: ExactSizeIterator {
+	try_compile_function(has_state, name, flags, locals, signature, |s, seq, id| {
+		f(s, seq, id);
+		Ok::<_, std::convert::Infallible>(())
+	}).unwrap()
 }
 
 pub trait ValueExt {
