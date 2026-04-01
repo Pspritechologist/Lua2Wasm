@@ -12,26 +12,28 @@ use crate::table::TabValueExt;
 use alloc::vec::Vec;
 use macro_rules_attribute::apply;
 use value::{Value, ValueTag};
-use core::{arch::wasm32, bstr::ByteStr};
+use core::bstr::ByteStr;
 
 mod table;
 
 extern crate alloc;
 
 mod binds {
-	// #[link(wasm_import_module = "__luant")]
+	use super::Value;
+
 	unsafe extern "C" {
-		fn throw(object: i64) -> !;
+		fn throw(object: Value) -> !;
 	}
 
 	#[inline]
-	pub fn error(object: i64) -> ! {
+	pub fn error(object: Value) -> ! {
 		unsafe { throw(object) }
 	}
 }
 
 macro_rules! internal {
-	(pub fn $name:ident ($($args:tt)*) $(-> $ret:ty)? { $($body:tt)* }) => { pastey::paste! {
+	( $(#[$attr:meta])* pub fn $name:ident ($($args:tt)*) $(-> $ret:ty)? { $($body:tt)* } ) => { pastey::paste! {
+		$(#[$attr])*
 		#[unsafe(no_mangle)]
 		// #[linkage = "internal"]
 		pub extern "C" fn [< __luant_ $name >] ($($args)*) $(-> $ret)? {
@@ -53,243 +55,210 @@ trait ValExt {
 impl ValExt for Value {}
 
 #[apply(internal)]
-pub fn static_str(addr: u32, len: u32) -> i64 {
-	Value::string(addr, len).as_i64()
+pub fn static_str(addr: u32, len: u32) -> Value {
+	Value::string(addr, len)
 }
 
 #[apply(internal)]
-pub fn static_function(addr: usize) -> i64 {
-	Value::function(addr).as_i64()
+pub fn static_function(addr: usize) -> Value {
+	Value::function(addr)
 }
 
 #[apply(internal)]
-pub fn add(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn add(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() + b.to_num()).as_i64(),
-		_ => binds::error(Value::str("Attempted to add incompatible values").as_i64()),
+		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() + b.to_num()),
+		_ => binds::error(Value::str("Attempted to add incompatible values")),
 	}
 }
 
 #[apply(internal)]
-pub fn sub(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn sub(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() - b.to_num()).as_i64(),
-		_ => binds::error(Value::str("Attempted to subtract incompatible values").as_i64()),
+		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() - b.to_num()),
+		_ => binds::error(Value::str("Attempted to subtract incompatible values")),
 	}
 }
 
 #[apply(internal)]
-pub fn mul(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn mul(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() * b.to_num()).as_i64(),
-		_ => binds::error(Value::str("Attempted to multiply incompatible values").as_i64()),
+		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() * b.to_num()),
+		_ => binds::error(Value::str("Attempted to multiply incompatible values")),
 	}
 }
 
 #[apply(internal)]
-pub fn div(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn div(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() / b.to_num()).as_i64(),
-		_ => binds::error(Value::str("Attempted to divide incompatible values").as_i64()),
+		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() / b.to_num()),
+		_ => binds::error(Value::str("Attempted to divide incompatible values")),
 	}
 }
 
 #[apply(internal)]
-pub fn modulo(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn modulo(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() % b.to_num()).as_i64(),
-		_ => binds::error(Value::str("Attempted to modulo incompatible values").as_i64()),
+		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() % b.to_num()),
+		_ => binds::error(Value::str("Attempted to modulo incompatible values")),
 	}
 }
 
 #[apply(internal)]
-pub fn pow(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn pow(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::Number, ValueTag::Number) => Value::float(libm::pow(a.to_num(), b.to_num())).as_i64(),
-		_ => binds::error(Value::str("Attempted to exponentiate incompatible values").as_i64()),
+		(ValueTag::Number, ValueTag::Number) => Value::float(libm::pow(a.to_num(), b.to_num())),
+		_ => binds::error(Value::str("Attempted to exponentiate incompatible values")),
 	}
 }
 
 #[apply(internal)]
-pub fn neg(a: i64) -> i64 {
-	let a = Value::from_i64(a);
-
+pub fn neg(a: Value) -> Value {
 	match a.get_tag() {
-		ValueTag::Number => Value::float(-a.to_num()).as_i64(),
-		_ => binds::error(Value::str("Attempted to negate an incompatible value").as_i64()),
+		ValueTag::Number => Value::float(-a.to_num()),
+		_ => binds::error(Value::str("Attempted to negate an incompatible value")),
 	}
 }
 
 
 #[apply(internal)]
-pub fn eq(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn eq(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() == b.to_str()).as_i64(),
-		_ => Value::bool(a == b).as_i64(),
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() == b.to_str()),
+		_ => Value::bool(a == b),
 	}
 }
 
 #[apply(internal)]
-pub fn neq(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn neq(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() != b.to_str()).as_i64(),
-		_ => Value::bool(a != b).as_i64(),
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() != b.to_str()),
+		_ => Value::bool(a != b),
 	}
 }
 
 #[apply(internal)]
-pub fn lt(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn lt(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() < b.to_str()).as_i64(),
-		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() < b.to_num()).as_i64(),
-		_ => binds::error(Value::str("Attempted to compare incompatible values").as_i64()),
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() < b.to_str()),
+		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() < b.to_num()),
+		_ => binds::error(Value::str("Attempted to compare incompatible values")),
 	}
 }
 
 #[apply(internal)]
-pub fn lte(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn lte(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() <= b.to_str()).as_i64(),
-		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() <= b.to_num()).as_i64(),
-		_ => binds::error(Value::str("Attempted to compare incompatible values").as_i64()),
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() <= b.to_str()),
+		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() <= b.to_num()),
+		_ => binds::error(Value::str("Attempted to compare incompatible values")),
 	}
 }
 
 
 #[apply(internal)]
-pub fn gt(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn gt(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() > b.to_str()).as_i64(),
-		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() > b.to_num()).as_i64(),
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() > b.to_str()),
+		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() > b.to_num()),
 		_ => {
-			binds::error(Value::str("Attempted to compare unsupported values").as_i64());
+			binds::error(Value::str("Attempted to compare unsupported values"));
 		},
 	}
 }
 
 #[apply(internal)]
-pub fn gte(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn gte(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() >= b.to_str()).as_i64(),
-		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() >= b.to_num()).as_i64(),
-		_ => binds::error(Value::str("Attempted to compare incompatible values").as_i64()),
+		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() >= b.to_str()),
+		(ValueTag::Number, ValueTag::Number) => Value::bool(a.to_num() >= b.to_num()),
+		_ => binds::error(Value::str("Attempted to compare incompatible values")),
 	}
 }
 
 #[apply(internal)]
-pub fn not(a: i64) -> i64 {
-	Value::bool(__luant_get_truthy(a) != 1).as_i64()
+pub fn not(a: Value) -> Value {
+	Value::bool(__luant_get_truthy(a) != 1)
 }
 
 
 #[apply(internal)]
-pub fn bit_and(a: i64, b: i64) -> i64 {
-	0
+pub fn bit_and(a: Value, b: Value) -> Value {
+	Value::nil()
 }
 
 #[apply(internal)]
-pub fn bit_or(a: i64, b: i64) -> i64 {
-	0
+pub fn bit_or(a: Value, b: Value) -> Value {
+	Value::nil()
 }
 
 #[apply(internal)]
-pub fn bit_xor(a: i64, b: i64) -> i64 {
-	0
+pub fn bit_xor(a: Value, b: Value) -> Value {
+	Value::nil()
 }
 
 #[apply(internal)]
-pub fn bit_sh_l(a: i64, b: i64) -> i64 {
-	0
+pub fn bit_sh_l(a: Value, b: Value) -> Value {
+	Value::nil()
 }
 
 #[apply(internal)]
-pub fn bit_sh_r(a: i64, b: i64) -> i64 {
-	0
+pub fn bit_sh_r(a: Value, b: Value) -> Value {
+	Value::nil()
 }
 
 #[apply(internal)]
-pub fn bit_not(a: i64) -> i64 {
-	0
+pub fn bit_not(a: Value) -> Value {
+	Value::nil()
 }
 
 
 #[apply(internal)]
-pub fn concat(a: i64, b: i64) -> i64 {
-	let (a, b) = (Value::from_i64(a), Value::from_i64(b));
-
+pub fn concat(a: Value, b: Value) -> Value {
 	let mut a_buf = zmij::Buffer::new();
 	let a = match a.get_tag() {
 		ValueTag::String => a.to_str(),
 		ValueTag::Number => ByteStr::new(a_buf.format(a.to_num())),
-		_ => binds::error(Value::str("Attempted to concatenate incompatible values").as_i64()),
+		_ => binds::error(Value::str("Attempted to concatenate incompatible values")),
 	};
 	
 	let mut b_buf = zmij::Buffer::new();
 	let b = match b.get_tag() {
 		ValueTag::String => b.to_str(),
 		ValueTag::Number => ByteStr::new(b_buf.format(b.to_num())),
-		_ => binds::error(Value::str("Attempted to concatenate incompatible values").as_i64()),
+		_ => binds::error(Value::str("Attempted to concatenate incompatible values")),
 	};
 
 	let res = Vec::leak([&**a, &**b].concat());
 
-	Value::str(res).as_i64()
+	Value::str(res)
 }
 
 #[apply(internal)]
-pub fn len(a: i64) -> i64 {
-	let a = Value::from_i64(a);
-
+pub fn len(a: Value) -> Value {
 	match a.get_tag() {
-		ValueTag::String => Value::float(a.to_str().len() as f64).as_i64(),
-		ValueTag::Table => Value::float(a.to_table().len() as f64).as_i64(),
-		_ => binds::error(Value::str("Attempted to get the length of an unsupported value").as_i64()),
+		ValueTag::String => Value::float(a.to_str().len() as f64),
+		ValueTag::Table => Value::float(a.to_table().len() as f64),
+		_ => binds::error(Value::str("Attempted to get the length of an unsupported value")),
 	}
 }
 
 
 #[apply(internal)]
-pub fn get_fn(func: i64) -> extern "C" fn(usize) -> usize {
-	let func = Value::from_i64(func);
-
+pub fn get_fn(func: Value) -> extern "C" fn(usize) -> usize {
 	match func.get_tag() {
 		ValueTag::Function => {
 			func.to_function()
 		},
 		ValueTag::Closure => {
-			binds::error(Value::str("Attempted to call a closure, which is not supported yet").as_i64());
+			binds::error(Value::str("Attempted to call a closure, which is not supported yet"));
 		},
-		_ => binds::error(Value::str("Attempted to call a non-function value").as_i64()),
+		_ => binds::error(Value::str("Attempted to call a non-function value")),
 	}
 }
 
 #[apply(internal)]
-pub fn get_truthy(value: i64) -> i32 {
-	let value = Value::from_i64(value);
+pub fn get_truthy(value: Value) -> i32 {
 	match value.get_tag() {
 		ValueTag::Nil => 0,
 		ValueTag::Bool => if value.to_bool() { 1 } else { 0 },
@@ -298,86 +267,75 @@ pub fn get_truthy(value: i64) -> i32 {
 }
 
 #[apply(internal)]
-pub fn val_to_i64(value: i64) -> i64 {
-	let value = Value::from_i64(value);
+pub fn val_to_i64(value: Value) -> i64 {
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as i64,
-		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number")),
 	}
 }
 
 #[apply(internal)]
-pub fn i64_to_val(value: i64) -> i64 {
-	Value::float(value as f64).as_i64()
+pub fn i64_to_val(value: i64) -> Value {
+	Value::float(value as f64)
 }
 
 #[apply(internal)]
-pub fn val_to_f64(value: i64) -> f64 {
-	let value = Value::from_i64(value);
+pub fn val_to_f64(value: Value) -> f64 {
 	match value.get_tag() {
 		ValueTag::Number => value.to_num(),
-		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number")),
 	}
 }
 
 #[apply(internal)]
-pub fn f64_to_val(value: f64) -> i64 {
-	Value::float(value).as_i64()
+pub fn f64_to_val(value: f64) -> Value {
+	Value::float(value)
 }
 
 #[apply(internal)]
-pub fn val_to_i32(value: i64) -> i32 {
-	let value = Value::from_i64(value);
+pub fn val_to_i32(value: Value) -> i32 {
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as i32,
-		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number")),
 	}
 }
 
 #[apply(internal)]
-pub fn i32_to_val(value: i32) -> i64 {
-	Value::float(value as f64).as_i64()
+pub fn i32_to_val(value: i32) -> Value {
+	Value::float(value as f64)
 }
 
 #[apply(internal)]
-pub fn val_to_f32(value: i64) -> f32 {
-	let value = Value::from_i64(value);
+pub fn val_to_f32(value: Value) -> f32 {
 	match value.get_tag() {
 		ValueTag::Number => value.to_num() as f32,
-		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number").as_i64()),
+		_ => binds::error(Value::str("Attempted to convert a non-string, non-number value to a number")),
 	}
 }
 
 #[apply(internal)]
-pub fn f32_to_val(value: f32) -> i64 {
-	Value::float(value as f64).as_i64()
+pub fn f32_to_val(value: f32) -> Value {
+	Value::float(value as f64)
 }
 
 #[apply(internal)]
-pub fn init_tab() -> i64 {
-	Value::new_table().as_i64()
+pub fn init_tab() -> Value {
+	Value::new_table()
 }
 
 #[apply(internal)]
-pub fn tab_get(table: i64, key: i64) -> i64 {
-	let table = Value::from_i64(table);
-	let key = Value::from_i64(key);
-
+pub fn tab_get(table: Value, key: Value) -> Value {
 	let Some(table) = table.as_table() else {
-		binds::error(Value::str("Attempted to index into a non-table value").as_i64());
+		binds::error(Value::str("Attempted to index into a non-table value"));
 	};
 
-	table.get(&key).unwrap_or(Value::nil()).as_i64()
+	table.get(&key).unwrap_or(Value::nil())
 }
 
 #[apply(internal)]
-pub fn tab_set(table: i64, key: i64, value: i64) {
-	let table = Value::from_i64(table);
-	let key = Value::from_i64(key);
-	let value = Value::from_i64(value);
-
+pub fn tab_set(table: Value, key: Value, value: Value) {
 	let Some(mut table) = table.as_table() else {
-		binds::error(Value::str("Attempted to index into a non-table value").as_i64());
+		binds::error(Value::str("Attempted to index into a non-table value"));
 	};
 
 	if value.get_tag() == ValueTag::Nil {
@@ -388,12 +346,9 @@ pub fn tab_set(table: i64, key: i64, value: i64) {
 }
 
 #[apply(internal)]
-pub fn tab_get_name(table: i64, key: i64) -> i64 {
-	let table = Value::from_i64(table);
-	let key = Value::from_i64(key);
-	
+pub fn tab_get_name(table: Value, key: Value) -> Value {
 	match key.get_tag() {
-		ValueTag::String => table.to_table().get(&key).unwrap_or(Value::nil()).as_i64(),
+		ValueTag::String => table.to_table().get(&key).unwrap_or(Value::nil()),
 		_ if cfg!(debug_assertions) => panic!("Attempted to get_name with non-string key"),
 		_ => unsafe { core::hint::unreachable_unchecked() },
 	}
@@ -401,11 +356,7 @@ pub fn tab_get_name(table: i64, key: i64) -> i64 {
 
 //? `value` is the first param here for impl reasons on the WASM side...
 #[apply(internal)]
-pub fn tab_set_name(value: i64, table: i64, key: i64) {
-	let table = Value::from_i64(table);
-	let key = Value::from_i64(key);
-	let value = Value::from_i64(value);
-
+pub fn tab_set_name(value: Value, table: Value, key: Value) {
 	match key.get_tag() {
 		ValueTag::String => {
 			let mut table = table.to_table();
@@ -423,9 +374,5 @@ pub fn tab_set_name(value: i64, table: i64, key: i64) {
 
 #[panic_handler]
 fn on_panic(_info: &core::panic::PanicInfo) -> ! {
-	if cfg!(debug_assertions) {
-		wasm32::unreachable();
-	} else {
-		unsafe { core::hint::unreachable_unchecked() }
-	}
+	unsafe { core::hint::unreachable_unchecked() }
 }

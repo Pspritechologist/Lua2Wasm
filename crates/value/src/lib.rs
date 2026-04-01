@@ -39,28 +39,26 @@ impl ValueTag {
 	}
 }
 
-// const _: () = if size_of::<usize>() != size_of::<u32>() {
-// 	panic!("pointer is expected to be 32bits");
-// };
-
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Value {
-	data: [u8; 8],
+	data: i64,
 }
 impl Value {
 	pub fn as_i64(self) -> i64 {
-		i64::from_ne_bytes(self.data)
+		self.data
 	}
 	pub fn from_i64(n: i64) -> Self {
-		Self { data: n.to_ne_bytes() }
+		Self { data: n }
 	}
 
 	pub fn set_tag(&mut self, tag: ValueTag) {
-		self.data[0] = (self.data[0] & 0xF0) | (tag as u8 & 0x0F);
+		let mut data = self.data.to_ne_bytes();
+		data[0] = (data[0] & 0xF0) | (tag as u8 & 0x0F);
+		self.data = i64::from_ne_bytes(data);
 	}
 	pub fn get_tag(&self) -> ValueTag {
-		ValueTag::from_u8(self.data[0] & 0x0F)
+		ValueTag::from_u8(self.data.to_ne_bytes()[0] & 0x0F)
 	}
 
 	pub fn is_nil(self) -> bool {
@@ -69,7 +67,7 @@ impl Value {
 	}
 
 	pub fn nil() -> Self {
-		Self { data: [0u8; 8] }
+		Self { data: 0 }
 	}
 	// fn int(n: i64) -> Self {
 	// 	let mut v = Self::from_i64(n);
@@ -77,7 +75,7 @@ impl Value {
 	// 	v
 	// }
 	pub fn float(n: f64) -> Self {
-		let mut v = Self { data: n.to_ne_bytes() };
+		let mut v = Self { data: i64::from_ne_bytes(n.to_ne_bytes()) };
 		v.set_tag(ValueTag::Number);
 		v
 	}
@@ -109,9 +107,10 @@ impl Value {
 		Self::from_i64(i64::from_ne_bytes(bytes))
 	}
 
-	pub fn meaningful_bits(mut self) -> [u8; 8] {
-		self.data[0] &= 0xF0; // Clear the tag bits.
-		self.data
+	pub fn meaningful_bits(self) -> [u8; 8] {
+		let mut data = self.data.to_ne_bytes();
+		data[0] &= 0xF0; // Clear the tag bits.
+		data
 	}
 
 	pub fn as_num(self) -> Option<f64> {
@@ -132,7 +131,7 @@ impl Value {
 	}
 	pub fn to_bool(self) -> bool {
 		// Checks if the first non-tag bit is set.
-		(self.data[0] & 0x10) != 0
+		(self.data.to_ne_bytes()[0] & 0x10) != 0
 	}
 	pub fn to_str(&self) -> &ByteStr {
 		let bytes = self.meaningful_bits();
