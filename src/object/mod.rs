@@ -19,10 +19,12 @@ mod runtime_impls;
 
 use crate::object::linking::InitFunctions;
 
+pub const ENTRY_POINT_NAME: &str = "__luant_main_entry";
+
 struct InitPriorities;
 impl InitPriorities {
-	const REGISTER_MODULES: u32 = 50;
-	const INIT_RUNTIME: u32 = 100;
+	const REGISTER_MODULES: u32 = 100;
+	const INIT_RUNTIME: u32 = 50;
 }
 
 struct ModuleState {
@@ -63,7 +65,6 @@ impl ModuleState {
 		let mut global_sect = GlobalSection::new();
 
 		import_sect.import("env", "__linear_memory", MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: None });
-		// memory_sect.memory(MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: Some(1) });
 
 		global_sect.global(GlobalType { val_type: ValType::I32, mutable: true, shared: false }, &ConstExpr::i32_const(0));
 		global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
@@ -128,7 +129,7 @@ impl ModuleState {
 		let index = self.data_sect.len();
 
 		let def = wasm_encoder::DataSymbolDefinition { index, size, offset: 0 };
-		let sym = self.symbol_table.data(flags, name, Some(def));
+		let sym = self.symbol_table.data(flags, &[".rodata_", name].concat(), Some(def));
 
 		self.data_sect.active(0, &ConstExpr::i32_const(0), data);
 

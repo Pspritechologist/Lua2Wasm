@@ -36,6 +36,8 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 		output_module_path: PathBuf::from(out_path).into(),
 		wasm_opt_path: opt.then_some(OsStr::new("wasm-opt").into()),
 
+		entry_point: "init".into(),
+
 		exports: vec![
 			ExportData {
 				export_name: "add_one".into(),

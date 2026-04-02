@@ -65,11 +65,6 @@ impl InstructionSink<'_> {
 			.call_indirect_raw(u32::MAX, u32::MAX)
 	}
 
-	pub fn call_luant_fn(&mut self, state: &mut ModuleState, closure: Symbol) -> &mut Self {
-		self.push_function(state, closure)
-			.call_as_luant_fn(state)
-	}
-
 	pub fn call_as_luant_fn(&mut self, state: &mut ModuleState) -> &mut Self {
 		self.call(state.extern_fns.get_fn)
 			.call_indirect(state)

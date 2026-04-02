@@ -1,5 +1,5 @@
 use crate::{bytecode::Operation, object::InitPriorities, parsing::{Parsed, ParsedFunction}};
-use crate::object::{ClosureRef, ModuleState, StringRef, compile_function, linking::SymbolTab};
+use crate::object::{ClosureRef, ModuleState, StringRef, InstructionSink, compile_function, linking::SymbolTab};
 use wasm_encoder::{BlockType, ConstExpr, MemArg, NameMap, ValType};
 use instructions::LuantInstSinkExt;
 
@@ -24,8 +24,8 @@ impl super::HasModuleState for LuantModuleState {
 	fn module_state(&mut self) -> &mut ModuleState { &mut self.module_state }
 }
 
-pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, parsed: Parsed<'s>) -> Result<wasm_encoder::Module> {
-	let mut state = LuantModuleState {
+pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, parsed: Parsed<'s>) -> Result<wasm_encoder::Module> {
+	let mut state = &mut LuantModuleState {
 		module_state: ModuleState::new_module(),
 		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
 		strings: Default::default(),
@@ -47,7 +47,7 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, parsed: Parsed<'s
 	// Compile all the functions in the file...
 	for (i, func) in parsed.constants.closures().iter().enumerate().rev() {
 		// 0 is reserved for the main function.
-		state.closures[i + 1] = Some(compile_luant_function(&mut state, func));
+		state.closures[i + 1] = Some(compile_luant_function(state, func));
 	}
 
 	// As well as the file itself as a function...
@@ -57,26 +57,33 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, parsed: Parsed<'s
 		debug.set_func_name("<main>");
 	}
 
-	let main_fn = compile_luant_function(&mut state, &main_fn);
+	let main_fn = compile_function(
+		state,
+		crate::object::ENTRY_POINT_NAME,
+		SymbolTab::WASM_SYM_BINDING_EMPTY,
+		[(main_fn.frame_size.into(), ValType::I64)],
+		state.module_state.dyn_call_ty,
+		luant_function_compiler(&main_fn)
+	);
 	state.closures[0] = Some(main_fn);
 
 	// Generate an initialization function that registers the module in the module table,
 	// allowing it to be looked up by `require` implementations.
-
+	
 	let module_name = module_name.as_ref();
 	let module_name_sym = state.module_state.add_data(SymbolTab::WASM_SYM_BINDING_LOCAL, "__luant_module_name", module_name.iter().copied());
-
+	
 	let reg_sig = state.module_state.types_sect.len();
 	state.module_state.types_sect.ty().function([], []);
-	let register_module_fn = compile_function(&mut state, "__luant_register_module", SymbolTab::WASM_SYM_BINDING_LOCAL, [], reg_sig, |state, seq, _| {
+	let register_module_fn = compile_function(state, "__luant_register_module", SymbolTab::WASM_SYM_BINDING_LOCAL, [], reg_sig, |state, seq, _| {
 		seq.push_function(&mut state.module_state, main_fn.sym)
-			.global_get(state.module_state.module_table)
-			.static_str(&mut state.module_state, module_name_sym, module_name.len().try_into().unwrap())
-			.call(state.module_state.extern_fns.table_set_name);
+		.global_get(state.module_state.module_table)
+		.static_str(&mut state.module_state, module_name_sym, module_name.len().try_into().unwrap())
+		.call(state.module_state.extern_fns.table_set_name);
 	});
-
+	
 	state.module_state.init_fns.add(register_module_fn.sym, InitPriorities::REGISTER_MODULES);
-
+	
 	state.module_state.build_object()
 }
 
@@ -84,65 +91,74 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, parsed: Parsed<'s
 fn compile_luant_function(state: &mut LuantModuleState, func: &ParsedFunction) -> ClosureRef {
 	let name = func.debug.as_ref().and_then(|d| d.func_name()).unwrap_or("<anonymous closure>");
 	
-	compile_function(state, name, SymbolTab::WASM_SYM_BINDING_LOCAL, [(func.frame_size.into(), ValType::I64)], state.module_state.dyn_call_ty, |state, seq, current_fn| {
-		let arg_cnt = 0;
-
-		{
-			let mut temps = 0;
-			let mut name_buf = String::new();
-			let mut local_names = NameMap::new();
-			for (i, slot) in (0..func.frame_size).enumerate() {
-				state.locals.insert(slot, i as u32 + 1); // Account for the argument slot at 0.
-				if let Some(debug) = func.debug.as_ref() {
-					local_names.append(i as u32 + 1, debug.get_local_name(slot).unwrap_or_else(|| {
-						use std::fmt::Write;
-						temps += 1;
-						name_buf.clear();
-						write!(&mut name_buf, "temp_{temps}").unwrap();
-						&name_buf
-					}));
-				}
-			}
-
-			state.module_state.local_names.append(current_fn, &local_names);
-		}
-
-		if func.param_count > 0 {
-			seq
-				// Get the number of arguments passed...
-				.local_get(arg_cnt)
-				// And the number of arguments expected...
-				.i32_const(func.param_count.into())
-				// ... And then both again
-				.local_get(arg_cnt)
-				.i32_const(func.param_count.into())
-				// Check if the number of arguments passed is less than the number of arguments expected.
-				.i32_lt_u()
-				// Choose the lower value.
-				.typed_select(ValType::I32)
-				// And store it for later use.
-				.local_set(arg_cnt);
-
-			seq.block(BlockType::Empty);
-			for i in 0..func.param_count {
-				seq
-					.local_get(arg_cnt)
-					.i32_const(i.into())
-					.i32_le_u()
-					.br_if(0)
-					.global_get(state.module_state.shtack_ptr)
-					.i64_load(MemArg { align: 3, offset: u64::from(i) * 8, memory_index: state.module_state.shtack_mem })
-					.local_set(state.locals[&i]);
-			}
-			seq.end();
-		}
-
-		seq.operations(state, func.operations.iter().copied());
-
-		if func.operations.last().is_none_or(|op| !matches!(op, Operation::Ret { .. })) {
-			seq.i32_const(0).return_();
-		}
-
-		state.locals.clear();
-	})
+	compile_function(
+		state,
+		name,
+		SymbolTab::WASM_SYM_BINDING_LOCAL,
+		[(func.frame_size.into(), ValType::I64)],
+		state.module_state.dyn_call_ty,
+		luant_function_compiler(func)
+	)
 }
+
+fn luant_function_compiler(func: &ParsedFunction) -> impl FnOnce(&mut LuantModuleState, &mut InstructionSink<'_>, u32) { |state, seq, current_fn| {
+	let arg_cnt = 0;
+
+	{
+		let mut temps = 0;
+		let mut name_buf = String::new();
+		let mut local_names = NameMap::new();
+		for (i, slot) in (0..func.frame_size).enumerate() {
+			state.locals.insert(slot, i as u32 + 1); // Account for the argument slot at 0.
+			if let Some(debug) = func.debug.as_ref() {
+				local_names.append(i as u32 + 1, debug.get_local_name(slot).unwrap_or_else(|| {
+					use std::fmt::Write;
+					temps += 1;
+					name_buf.clear();
+					write!(&mut name_buf, "temp_{temps}").unwrap();
+					&name_buf
+				}));
+			}
+		}
+
+		state.module_state.local_names.append(current_fn, &local_names);
+	}
+
+	if func.param_count > 0 {
+		seq
+			// Get the number of arguments passed...
+			.local_get(arg_cnt)
+			// And the number of arguments expected...
+			.i32_const(func.param_count.into())
+			// ... And then both again
+			.local_get(arg_cnt)
+			.i32_const(func.param_count.into())
+			// Check if the number of arguments passed is less than the number of arguments expected.
+			.i32_lt_u()
+			// Choose the lower value.
+			.typed_select(ValType::I32)
+			// And store it for later use.
+			.local_set(arg_cnt);
+
+		seq.block(BlockType::Empty);
+		for i in 0..func.param_count {
+			seq
+				.local_get(arg_cnt)
+				.i32_const(i.into())
+				.i32_le_u()
+				.br_if(0)
+				.global_get(state.module_state.shtack_ptr)
+				.i64_load(MemArg { align: 3, offset: u64::from(i) * 8, memory_index: state.module_state.shtack_mem })
+				.local_set(state.locals[&i]);
+		}
+		seq.end();
+	}
+
+	seq.operations(state, func.operations.iter().copied());
+
+	if func.operations.last().is_none_or(|op| !matches!(op, Operation::Ret { .. })) {
+		seq.i32_const(0).return_();
+	}
+
+	state.locals.clear();
+} }

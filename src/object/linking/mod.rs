@@ -132,7 +132,7 @@ impl SymbolTab {
 	}
 
 	pub fn luant_string(&mut self, index: u32, size: u32) -> Symbol {
-		self.data(SymbolTab::WASM_SYM_BINDING_LOCAL, "__luant_string", Some(DataSymbolDefinition { index, size, offset: 0 }))
+		self.data(SymbolTab::WASM_SYM_BINDING_LOCAL, ".rodata_luant_string", Some(DataSymbolDefinition { index, size, offset: 0 }))
 	}
 
 	pub fn global(&mut self, flags: u32, index: u32, name: Option<&str>) -> Symbol {
@@ -178,6 +178,9 @@ impl SymbolTab {
 	}
 
 	//? Forwarded from [`SymbolTable`] for convenience.
+
+	/// This symbol has no special binding or visibility flags.
+	pub const WASM_SYM_BINDING_EMPTY: u32 = 0;
 
 	/// This is a weak symbol.
 	///

@@ -17,9 +17,47 @@ pub struct Config<'c> {
 	pub wasm_ld_path: Cow<'c, OsStr>,
 	pub output_module_path: Cow<'c, Path>,
 
+	pub entry_point: EntryPoint<'c>,
+
 	pub wasm_opt_path: Option<Cow<'c, OsStr>>,
 
 	pub exports: Vec<object::ExportData<'static>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum EntryPoint<'a> {
+	None,
+	Start,
+	Export(Cow<'a, str>),
+}
+impl<'c> EntryPoint<'c> {
+	pub fn as_export(&self) -> Option<&str> {
+		match self {
+			Self::Export(name) => Some(name),
+			_ => None,
+		}
+	}
+
+	pub fn is_start(&self) -> bool {
+		matches!(self, Self::Start)
+	}
+
+	pub fn is_none(&self) -> bool {
+		matches!(self, Self::None)
+	}
+}
+impl<'c> From<&'c str> for EntryPoint<'c> {
+	fn from(value: &'c str) -> Self {
+		Self::Export(value.into())
+	}
+}
+impl<'c> From<Option<&'c str>> for EntryPoint<'c> {
+	fn from(value: Option<&'c str>) -> Self {
+		match value {
+			Some(s) => Self::Export(s.into()),
+			None => Self::None,
+		}
+	}
 }
 
 /// A trait for representing a Lua file from which both a name and contents can be obtained.\
@@ -52,12 +90,27 @@ pub fn process_files<I: IntoIterator>(config: &Config, files: I) -> anyhow::Resu
 
 	// Generate the export object, which contains the exports of the module.
 	let export_obj_path = config.target_path.join("exports.o");
-	let export_obj = object::generate_exports_object(&config.exports)?;
+	let export_obj = object::generate_exports_object(config)?;
 	std::fs::write(&export_obj_path, export_obj).with_context(|| format!("Failed to write export object file '{}'", export_obj_path.display()))?;
 	cmd.arg(export_obj_path);
 
+	let mut files = files.into_iter();
+
+	if !config.entry_point.is_none() {
+		let main_file = files.next().context("At least one Lua file must be provided")?;
+
+		let main_obj = parse_lua_file(&main_file, true)?.finish();
+
+		let mut main_obj_path = PathBuf::from(main_file.name()?.into_owned());
+		main_obj_path.set_extension("o");
+		let main_obj_path = obj_path.join(main_obj_path);
+
+		std::fs::write(&main_obj_path, main_obj).with_context(|| format!("Failed to write object file '{}'", main_obj_path.display()))?;
+		cmd.arg(main_obj_path);
+	}
+
 	for file in files {
-		let obj = parse_lua_file(&file)?.finish();
+		let obj = parse_lua_file(&file, false)?.finish();
 		
 		let mut file_obj_path = PathBuf::from(file.name()?.into_owned());
 		file_obj_path.set_extension("o");
@@ -160,11 +213,11 @@ fn add_second_memory(wasm: &[u8]) -> Result<Vec<u8>> {
 	Ok(new_module)
 }
 
-fn parse_lua_file(lua_file: &impl LuaFile) -> Result<wasm_encoder::Module> {
+fn parse_lua_file(lua_file: &impl LuaFile, as_main: bool) -> Result<wasm_encoder::Module> {
 	let contents = lua_file.contents()?;
 	let name = lua_file.name()?;
 
 	//TODO: Unwrap.
 	let parsed = parsing::parse(contents.as_ref()).unwrap().0;
-	object::produce_lua_obj_file(name.as_encoded_bytes(), parsed)
+	object::produce_lua_obj_file(name.as_encoded_bytes(), as_main, parsed)
 }
