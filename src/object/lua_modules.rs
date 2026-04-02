@@ -5,7 +5,6 @@ use instructions::LuantInstSinkExt;
 
 use anyhow::Result;
 
-pub mod exports;
 mod instructions;
 
 struct LuantModuleState {
@@ -25,7 +24,7 @@ impl super::HasModuleState for LuantModuleState {
 }
 
 pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, parsed: Parsed<'s>) -> Result<wasm_encoder::Module> {
-	let mut state = &mut LuantModuleState {
+	let state = &mut LuantModuleState {
 		module_state: ModuleState::new_module(),
 		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
 		strings: Default::default(),
@@ -60,7 +59,7 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, pa
 	let main_fn = compile_function(
 		state,
 		crate::object::ENTRY_POINT_NAME,
-		SymbolTab::WASM_SYM_BINDING_EMPTY,
+		if as_main { SymbolTab::WASM_SYM_BINDING_EMPTY } else { SymbolTab::WASM_SYM_BINDING_LOCAL },
 		[(main_fn.frame_size.into(), ValType::I64)],
 		state.module_state.dyn_call_ty,
 		luant_function_compiler(&main_fn)

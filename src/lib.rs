@@ -1,7 +1,7 @@
 use std::{borrow::Cow, ffi::OsStr, io::Write, path::{Path, PathBuf}, process::Command};
 use anyhow::{Context, Result};
 
-pub use object::ExportData;
+pub use object::exports::ExportData;
 
 pub mod parsing;
 mod bytecode;
@@ -21,7 +21,7 @@ pub struct Config<'c> {
 
 	pub wasm_opt_path: Option<Cow<'c, OsStr>>,
 
-	pub exports: Vec<object::ExportData<'static>>,
+	pub exports: Vec<ExportData<'static>>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,7 +90,7 @@ pub fn process_files<I: IntoIterator>(config: &Config, files: I) -> anyhow::Resu
 
 	// Generate the export object, which contains the exports of the module.
 	let export_obj_path = config.target_path.join("exports.o");
-	let export_obj = object::generate_exports_object(config)?;
+	let export_obj = object::exports::generate_exports_object(config)?;
 	std::fs::write(&export_obj_path, export_obj).with_context(|| format!("Failed to write export object file '{}'", export_obj_path.display()))?;
 	cmd.arg(export_obj_path);
 

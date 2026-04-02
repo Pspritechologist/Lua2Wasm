@@ -9,9 +9,10 @@ use instructions::{FunctionBuilder, InstructionSink};
 use linking::{LinkingSection, RelocSection, Symbol, SymbolTab};
 use runtime_impls::external_bindings::ExternFns;
 
-pub use lua_modules::{produce_lua_obj_file, exports::{generate_exports_object, ExportData}};
+pub use lua_modules::produce_lua_obj_file;
 pub use runtime_impls::initialize::generate_runtime_object;
 
+pub mod exports;
 mod lua_modules;
 mod instructions;
 mod linking;
