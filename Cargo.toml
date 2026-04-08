@@ -27,8 +27,7 @@ bstr.workspace = true
 
 auto_impl = "1.3.0"
 anyhow = "1.0.101"
-# walrus = "0.25.1"
-wasm-encoder = "0.245.1"
+wasm-encoder = { version = "0.245.1", default-features = false, features = ["std"] }
 leb128fmt = "0.1.0"
 
 [profile.release]
