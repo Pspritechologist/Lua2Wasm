@@ -8,7 +8,7 @@ mod bytecode;
 mod debug;
 mod object;
 
-static RUST_RUNTIME_LIB: &[u8] = include_bytes!("../target/wasm32-unknown-unknown/release/libwasm_scratch.a");
+static RUST_RUNTIME_LIB: &[u8] = include_bytes!("../target/wasm32-unknown-unknown/release/libcamento_runtime.a");
 
 #[derive(Debug)]
 pub struct Config<'c> {
@@ -84,7 +84,7 @@ pub fn process_files<I: IntoIterator>(config: &Config, files: I) -> anyhow::Resu
 	cmd.arg(runtime_obj_path);
 
 	// Generate the rust library.
-	let lib_path = config.target_path.join("libwasm_scratch.a");
+	let lib_path = config.target_path.join("libcamento_runtime.a");
 	std::fs::write(&lib_path, RUST_RUNTIME_LIB).with_context(|| format!("Failed to write runtime library '{}'", lib_path.display()))?;
 	cmd.arg(lib_path);
 

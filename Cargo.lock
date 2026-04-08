@@ -209,6 +209,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "camento_runtime"
+version = "0.1.0"
+dependencies = [
+ "hashbrown 0.16.1",
+ "libm",
+ "macro_rules_attribute",
+ "pastey",
+ "talc",
+ "value",
+ "zmij",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.59"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1865,19 +1878,6 @@ dependencies = [
  "indexmap",
  "wasm-encoder 0.244.0",
  "wasmparser 0.244.0",
-]
-
-[[package]]
-name = "wasm_scratch"
-version = "0.1.0"
-dependencies = [
- "hashbrown 0.16.1",
- "libm",
- "macro_rules_attribute",
- "pastey",
- "talc",
- "value",
- "zmij",
 ]
 
 [[package]]
