@@ -11,7 +11,7 @@ fn main() -> Result<()> {
 		.status()
 		.context("Running output_wasm.sh")?;
 
-	let bytes = std::fs::read("luant.wasm").context("Reading WASM file")?;
+	let bytes = std::fs::read("output/luant.wasm").context("Reading WASM file")?;
 	// let bytes = std::fs::read("luant-opt.wasm").context("Reading optimized WASM file")?;
 
 	let mut store = Store::new(EngineBuilder::new(Cranelift::default()).set_features(Some(Features::all())));
