@@ -32,6 +32,9 @@ pub fn generate_exports_object(config: &Config) -> Result<Vec<u8>> {
 			try_compile_function(state, &export.export_name, SymbolTab::WASM_SYM_EXPORTED, [(1, ValType::I32)], sig, |state, seq, _| {
 				let tmp_local: u32 = export.func_sig.params().len().try_into().unwrap();
 
+				seq.block(wasm_encoder::BlockType::Result(ValType::I64))
+					.try_table(wasm_encoder::BlockType::Empty, state.error_tag, 0);
+
 				cast_args(state, seq, export.func_sig.params())?;
 
 				seq.i32_const(export.func_sig.params().len().try_into().unwrap())
@@ -40,6 +43,12 @@ pub fn generate_exports_object(config: &Config) -> Result<Vec<u8>> {
 				seq.local_set(tmp_local);
 
 				cast_results(state, seq, tmp_local, export.func_sig.results())?;
+
+				seq.return_().end().unreachable().end();
+
+				//TODO: This is currently hardcoded to support the error API of our
+				//TODO: testing binary. This should allow custom top-level error handling.
+				seq.call(state.extern_fns.put_error).unreachable(); // Error case.
 
 				Ok(())
 			})?;
@@ -80,6 +89,9 @@ fn generate_export_function(state: &mut ModuleState, export: &ExportData) -> Res
 	try_compile_function(state, &export.export_name, SymbolTab::WASM_SYM_EXPORTED, [(1, ValType::I32)], sig, |state, seq, _| {
 		let tmp_local: u32 = export.func_sig.params().len().try_into().unwrap();
 
+		seq.block(wasm_encoder::BlockType::Result(ValType::I64))
+			.try_table(wasm_encoder::BlockType::Empty, state.error_tag, 0);
+
 		cast_args(state, seq, export.func_sig.params())?;
 
 		seq.i32_const(export.func_sig.params().len().try_into().unwrap())
@@ -91,6 +103,12 @@ fn generate_export_function(state: &mut ModuleState, export: &ExportData) -> Res
 		seq.local_set(tmp_local);
 
 		cast_results(state, seq, tmp_local, export.func_sig.results())?;
+
+		seq.return_().end().unreachable().end();
+
+		//TODO: This is currently hardcoded to support the error API of our
+		//TODO: testing binary. This should allow custom top-level error handling.
+		seq.call(state.extern_fns.put_error).unreachable(); // Error case.
 
 		Ok(())
 	}).map(|_| ())

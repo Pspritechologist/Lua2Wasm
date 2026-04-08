@@ -9,6 +9,8 @@ use crate::object::{
 pub fn generate_runtime_object() -> Vec<u8> {
 	let state = &mut ModuleState::new_module();
 
+	let is_init = state.new_global(SymbolTab::WASM_SYM_BINDING_LOCAL, Some("__luant_is_init"), ValType::I32, &wasm_encoder::ConstExpr::i32_const(0));
+
 	super::external_bindings::compile_supporting_functions(state);
 
 	let internal_strings = {
@@ -44,8 +46,16 @@ pub fn generate_runtime_object() -> Vec<u8> {
 
 	let sig = state.types_sect.len();
 	state.types_sect.ty().function([], []);
-	let init_fn = compile_function(state, "name", SymbolTab::WASM_SYM_BINDING_LOCAL, [(1, ValType::I64)], sig, |state, seq, _| {
+	let init_fn = compile_function(state, "__luant_init_rt", SymbolTab::WASM_SYM_BINDING_LOCAL, [(1, ValType::I64)], sig, |state, seq, _| {
 		let global_tab = 0;
+
+		// Check if we're already initialized, and if so return early.
+		seq.global_get(is_init)
+			.if_(wasm_encoder::BlockType::Empty)
+			.return_()
+			.end()
+			.i32_const(1)
+			.global_set(is_init);
 
 		// Initialize the module lookup table.
 		seq.call(state.extern_fns.table_load)

@@ -88,7 +88,7 @@ impl ModuleState {
 		let (function_count, extern_fns) = ExternFns::init(&mut types_sect, &mut import_sect, &mut symbol_table);
 
 		tag_sect.tag(TagType { kind: TagKind::Exception, func_type_idx: types_sect.len() });
-		let error_tag = symbol_table.tag(SymbolTab::WASM_SYM_BINDING_LOCAL, 0, Some("__luant_error_tag"));
+		let error_tag = symbol_table.tag(SymbolTab::WASM_SYM_BINDING_WEAK, 0, Some("__luant_error_tag"));
 
 		types_sect.ty().function([ValType::I64], []);
 
@@ -120,6 +120,12 @@ impl ModuleState {
 			local_names: IndirectNameMap::new(),
 			function_names: NameMap::new(),
 		}
+	}
+
+	pub fn new_global(&mut self, flags: u32, name: Option<&str>, ty: ValType, init_val: &ConstExpr) -> Symbol {
+		let idx = self.global_sect.len();
+		self.global_sect.global(GlobalType { val_type: ty, mutable: true, shared: false }, init_val);
+		self.symbol_table.global(flags, idx, name)
 	}
 
 	pub fn add_data<D: IntoIterator<Item = u8>>(&mut self, flags: u32, name: &str, data: D) -> Symbol

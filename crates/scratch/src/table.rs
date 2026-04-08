@@ -2,7 +2,7 @@ use super::{Value, ValueTag};
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 use hashbrown::HashTable;
-use core::arch::wasm32;
+use core::iter;
 
 extern crate alloc;
 
@@ -66,7 +66,7 @@ pub struct Table {
 	inner: *const TableInner,
 }
 
-fn hash_impl(value: &Value) -> u64 {
+fn hash_impl(value: Value) -> u64 {
 	match value.get_tag() {
 		ValueTag::Nil => 0,
 		ValueTag::Number => value.to_num().to_bits(),
@@ -124,7 +124,7 @@ fn as_usize(value: f64) -> Option<usize> {
 	(value == 0.0 || (value.is_sign_positive() && value == libm::trunc(value))).then_some(value as usize)
 }
 
-fn as_index(value: &Value) -> Option<usize> {
+fn as_index(value: Value) -> Option<usize> {
 	value.as_num().and_then(as_usize).and_then(|i| i.checked_sub(1))
 }
 
@@ -133,21 +133,9 @@ impl Table {
 		Self { inner: Box::into_raw(Default::default()) }
 	}
 
-	// pub fn from_iter<I, K, V>(state: &super::LuantState, iter: I) -> Self
-	// where
-	// 	I: IntoIterator<Item = (K, V)>,
-	// 	K: super::ToValue,
-	// 	V: super::ToValue,
-	// {
-	// 	let mut table = Table::new();
-	// 	for (k, v) in iter {
-	// 		table.set(k.to_value(state), v.to_value(state));
-	// 	}
-	// 	table
-	// }
-
+	#[inline(never)]
 	pub fn set(&mut self, key: Value, value: Value) {
-		if let Some(index) = as_index(&key) {
+		if let Some(index) = as_index(key) {
 			if self.inner().array_contents.len() == index {
 				self.inner_mut().array_contents.push(value);
 			} else {
@@ -157,35 +145,37 @@ impl Table {
 			return;
 		}
 
-		let hash = hash_impl(&key);
+		let hash = hash_impl(key);
 
 		#[allow(unused_mut)]
 		let mut inner = self.inner_mut();
-		match inner.hash_contents.find_mut(hash, |(k, _)| k == &key) {
+		match inner.hash_contents.find_mut(hash, |(k, _)| k.equals(key)) {
 			Some(entry) => *entry = (key, value),
-			None => { inner.hash_contents.insert_unique(hash, (key, value), |(k, _)| hash_impl(k)); },
+			None => { inner.hash_contents.insert_unique(hash, (key, value), |(k, _)| hash_impl(*k)); },
 		}
 	}
 
-	pub fn get(&self, key: &Value) -> Option<Value> {
+	#[inline(never)]
+	pub fn get(&self, key: Value) -> Option<Value> {
 		if let Some(index) = as_index(key) {
 			return self.inner().array_contents.get(index).copied();
 		}
 
 		let hash = hash_impl(key);
-		self.inner().hash_contents.find(hash, |(k, _)| k == key).map(|(_, v)| *v)
+		self.inner().hash_contents.find(hash, |(k, _)| k.equals(key)).map(|(_, v)| *v)
 	}
 
-	pub fn contains(&self, key: &Value) -> bool {
+	pub fn contains(&self, key: Value) -> bool {
 		if let Some(index) = as_index(key) {
 			return self.inner().array_contents.get(index).is_some();
 		}
 
 		let hash = hash_impl(key);
-		self.inner().hash_contents.find(hash, |(k, _)| k == key).is_some()
+		self.inner().hash_contents.find(hash, |(k, _)| k.equals(key)).is_some()
 	}
 
-	pub fn remove(&mut self, key: &Value) -> Option<Value> {
+	#[inline(never)]
+	pub fn remove(&mut self, key: Value) -> Option<Value> {
 		if let Some(index) = as_index(key) {
 			return self.inner_mut().array_contents.get_mut(index).map(|v| {
 				let val = *v;
@@ -195,7 +185,7 @@ impl Table {
 		}
 
 		let hash = hash_impl(key);
-		self.inner_mut().hash_contents.find_entry(hash, |(k, _)| k == key)
+		self.inner_mut().hash_contents.find_entry(hash, |(k, _)| k.equals(key))
 			.map(|e| e.remove().0.1)
 			.ok()
 	}
@@ -209,7 +199,7 @@ impl Table {
 	}
 
 	pub fn meta_table(&self) -> Option<Table> {
-		self.inner().meta_table.clone()
+		self.inner().meta_table
 	}
 	pub fn set_meta_table(&mut self, table: Table) {
 		self.inner_mut().meta_table = Some(table);
@@ -233,60 +223,98 @@ impl Table {
 		Self { inner: ptr.cast() }
 	}
 
-	// pub fn iter(&self) -> impl iter::ExactSizeIterator<Item = (Value, Value)> + iter::FusedIterator + Clone + core::fmt::Debug {
-	// 	self.iter_raw()
-	// }
-	// pub fn keys(&self) -> impl iter::ExactSizeIterator<Item = Value> + iter::FusedIterator + Clone + core::fmt::Debug {
-	// 	self.iter_raw().map(|(k, _)| k)
-	// }
-	// pub fn values(&self) -> impl iter::ExactSizeIterator<Item = Value> + iter::FusedIterator + Clone + core::fmt::Debug {
-	// 	self.iter_raw().map(|(_, v)| v)
-	// }
-	// pub fn iter_array(&self) -> impl iter::ExactSizeIterator<Item = (usize, Value)> + iter::FusedIterator + Clone + core::fmt::Debug {
-		
-	// }
-
-	// fn iter_raw(&self) -> impl iter::ExactSizeIterator<Item = (Value, Value)> + iter::FusedIterator + Clone + core::fmt::Debug {
-	// 	use hashbrown::hash_table::Iter;
-	// 	let inner = self.inner();
-	// 	let iter = inner.hash_contents.iter();
-	// 	let iter: Iter<'static, (Value, Value)> = unsafe {
-	// 		core::mem::transmute(iter)
-	// 	};
-	// 	iter.cloned().map(|(k, v)| (k, v))
-	// }
+	pub fn iter(&self) -> Iter<'_> {
+		Iter::new(self)
+	}
+	pub fn keys(&self) -> impl iter::ExactSizeIterator<Item = Value> + Clone {
+		Iter::new(self).map(|(k, _)| k)
+	}
+	pub fn values(&self) -> impl iter::ExactSizeIterator<Item = Value> + Clone {
+		Iter::new(self).map(|(_, v)| v)
+	}
+	pub fn iter_array(&self) -> ArrayIter<'_> {
+		ArrayIter::new(self)
+	}
 }
 
-// struct Iter
+pub struct Iter<'a> {
+	table: &'a Table,
+	hash_iter: hashbrown::hash_table::Iter<'a, (Value, Value)>,
+	array_index: usize,
+}
+impl<'a> Iter<'a> {
+	fn new(table: &'a Table) -> Self {
+		Self {
+			hash_iter: table.inner().hash_contents.iter(),
+			table,
+			array_index: 1,
+		}
+	}
+}
+impl<'a> Clone for Iter<'a> {
+	fn clone(&self) -> Self {
+		Self {
+			hash_iter: self.hash_iter.clone(),
+			table: self.table,
+			array_index: self.array_index,
+		}
+	}
+}
+impl<'a> ExactSizeIterator for Iter<'a> {
+	fn len(&self) -> usize {
+		self.table.inner().hash_contents.len() + self.table.inner().array_contents.len().saturating_sub(self.array_index)
+	}
+}
+impl<'a> Iterator for Iter<'a> {
+	type Item = (Value, Value);
 
-// impl IntoIterator for Table {
-// 	type Item = (Value, Value);
-// 	type IntoIter = hashbrown::hash_table::IntoIter<(Value, Value)>;
+	fn next(&mut self) -> Option<Self::Item> {
+		if let Some(v) = self.table.inner().array_contents.get(self.array_index).copied() {
+			let idx = self.array_index;
+			self.array_index += 1;
+			return Some((Value::float((idx + 1) as f64), v));
+		}
 
-// 	fn into_iter(self) -> Self::IntoIter {
-// 		self.inner().hash_contents.into_iter()
-// 	}
-// }
+		self.hash_iter.next().copied()
+	}
+}
 
-// impl<'a> IntoIterator for &'a Table {
-// 	type Item = &'a (Value, Value);
-// 	type IntoIter = hashbrown::hash_table::Iter<'a, (Value, Value)>;
+impl<'a> IntoIterator for &'a Table {
+	type Item = (Value, Value);
+	type IntoIter = Iter<'a>;
 
-// 	fn into_iter(self) -> Self::IntoIter {
-// 		self.inner().hash_contents.iter()
-// 	}
-// }
+	fn into_iter(self) -> Self::IntoIter {
+		Iter::new(self)
+	}
+}
 
-// impl core::fmt::Debug for Table {
-// 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-// 		let mut dbg = f.debug_struct("Table");
+pub struct ArrayIter<'a> {
+	table: &'a Table,
+	index: usize,
+}
+impl<'a> ArrayIter<'a> {
+	fn new(table: &'a Table) -> Self {
+		Self { table, index: 1 }
+	}
+}
+impl<'a> Clone for ArrayIter<'a> {
+	fn clone(&self) -> Self {
+		Self { table: self.table, index: self.index }
+	}
+}
+impl<'a> ExactSizeIterator for ArrayIter<'a> {
+	fn len(&self) -> usize {
+		self.table.inner().array_contents.len().saturating_sub(self.index)
+	}
+}
+impl<'a> Iterator for ArrayIter<'a> {
+	type Item = (usize, Value);
 
-// 		dbg.field("contents", &self.inner().hash_contents);
-
-// 		if let Some(mt) = &self.inner().meta_table {
-// 			dbg.field("meta_table", mt);
-// 		}
-
-// 		dbg.finish()
-// 	}
-// }
+	fn next(&mut self) -> Option<Self::Item> {
+		self.table.inner().array_contents.get(self.index).copied().map(|v| {
+			let idx = self.index;
+			self.index += 1;
+			(idx, v)
+		})
+	}
+}

@@ -40,7 +40,7 @@ impl ValueTag {
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct Value {
 	data: i64,
 }
@@ -63,7 +63,7 @@ impl Value {
 
 	pub fn is_nil(self) -> bool {
 		// Nil is always represented as all zeroes.
-		self == Self::nil()
+		self.data == Self::nil().data
 	}
 
 	pub fn nil() -> Self {
@@ -151,6 +151,13 @@ impl Value {
 	pub fn to_idx(self) -> u32 {
 		let bytes = self.meaningful_bits();
 		u32::from_ne_bytes(bytes[4..8].try_into().unwrap())
+	}
+
+	pub fn equals(self, other: Self) -> bool {
+		match (self.get_tag(), other.get_tag()) {
+			(ValueTag::String, ValueTag::String) => self.to_str() == other.to_str(),
+			_ => self.data == other.data,
+		}
 	}
 }
 

@@ -2,6 +2,7 @@
 #![feature(
 	linkage,
 	trim_prefix_suffix,
+	slice_concat_ext,
 	bstr,
 )]
 
@@ -9,7 +10,7 @@
 static ALLOCATOR: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
 use crate::table::TabValueExt;
-use alloc::vec::Vec;
+use alloc::{bstr::ByteString, vec::Vec};
 use macro_rules_attribute::apply;
 use value::{Value, ValueTag};
 use core::bstr::ByteStr;
@@ -25,9 +26,53 @@ mod binds {
 		fn throw(object: Value) -> !;
 	}
 
-	#[inline]
+	#[link(wasm_import_module = "debug")]
+	unsafe extern "C" {
+		#[link_name = "put_error"]
+		fn _put_error(ptr: *const u8, len: usize);
+	}
+
+	#[link(wasm_import_module = "env")]
+	unsafe extern "C" {
+		fn put_str(ptr: *const u8, len: usize);
+	}
+
 	pub fn error(object: Value) -> ! {
 		unsafe { throw(object) }
+	}
+
+	pub fn put_error(string: &[u8]) {
+		let ptr = string.as_ptr();
+		let len = string.len();
+		unsafe { _put_error(ptr, len) }
+	}
+
+	pub fn print(string: impl AsRef<[u8]>) {
+		let string = string.as_ref();
+		let ptr = string.as_ptr();
+		let len = string.len();
+		unsafe { put_str(ptr, len) }
+	}
+}
+
+fn new_string(string: impl Into<Vec<u8>>) -> Value {
+	let bytes = string.into().leak();
+
+	let ptr = bytes.as_ptr().addr();
+	let len = bytes.len();
+
+	Value::string(ptr as u32, len as u32)
+}
+
+fn fmt_value<'a>(value: &'a Value, buf: &'a mut zmij::Buffer) -> &'a ByteStr {
+	match value.get_tag() {
+		ValueTag::String => value.to_str(),
+		ValueTag::Nil => "<nil>".as_ref(),
+		ValueTag::Bool => if value.to_bool() { "true" } else { "false" }.as_ref(),
+		ValueTag::Number => buf.format(value.to_num()).as_ref(),
+		ValueTag::Table => "<table>".as_ref(),
+		ValueTag::Function => "<function>".as_ref(),
+		ValueTag::Closure => "<closure>".as_ref(),
 	}
 }
 
@@ -123,18 +168,12 @@ pub fn neg(a: Value) -> Value {
 
 #[apply(internal)]
 pub fn eq(a: Value, b: Value) -> Value {
-	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() == b.to_str()),
-		_ => Value::bool(a == b),
-	}
+	a.equals(b).into()
 }
 
 #[apply(internal)]
 pub fn neq(a: Value, b: Value) -> Value {
-	match (a.get_tag(), b.get_tag()) {
-		(ValueTag::String, ValueTag::String) => Value::bool(a.to_str() != b.to_str()),
-		_ => Value::bool(a != b),
-	}
+	(!a.equals(b)).into()
 }
 
 #[apply(internal)]
@@ -253,7 +292,7 @@ pub fn get_fn(func: Value) -> extern "C" fn(usize) -> usize {
 		ValueTag::Closure => {
 			binds::error(Value::str("Attempted to call a closure, which is not supported yet"));
 		},
-		_ => binds::error(Value::str("Attempted to call a non-function value")),
+		_ => binds::error(new_string(["Attempted to call a non-function value: ".as_bytes(), fmt_value(&func, &mut Default::default())].concat())),
 	}
 }
 
@@ -329,7 +368,7 @@ pub fn tab_get(table: Value, key: Value) -> Value {
 		binds::error(Value::str("Attempted to index into a non-table value"));
 	};
 
-	table.get(&key).unwrap_or(Value::nil())
+	table.get(key).unwrap_or(Value::nil())
 }
 
 #[apply(internal)]
@@ -339,7 +378,7 @@ pub fn tab_set(table: Value, key: Value, value: Value) {
 	};
 
 	if value.get_tag() == ValueTag::Nil {
-		table.remove(&key);
+		table.remove(key);
 	} else {
 		table.set(key, value);
 	}
@@ -348,7 +387,7 @@ pub fn tab_set(table: Value, key: Value, value: Value) {
 #[apply(internal)]
 pub fn tab_get_name(table: Value, key: Value) -> Value {
 	match key.get_tag() {
-		ValueTag::String => table.to_table().get(&key).unwrap_or(Value::nil()),
+		ValueTag::String => table.to_table().get(key).unwrap_or(Value::nil()),
 		_ if cfg!(debug_assertions) => panic!("Attempted to get_name with non-string key"),
 		_ => unsafe { core::hint::unreachable_unchecked() },
 	}
@@ -362,7 +401,7 @@ pub fn tab_set_name(value: Value, table: Value, key: Value) {
 			let mut table = table.to_table();
 		
 			if value.get_tag() == ValueTag::Nil {
-				table.remove(&key);
+				table.remove(key);
 			} else {
 				table.set(key, value);
 			}
@@ -370,6 +409,36 @@ pub fn tab_set_name(value: Value, table: Value, key: Value) {
 		_ if cfg!(debug_assertions) => panic!("Attempted to set_name with non-string key"),
 		_ => unsafe { core::hint::unreachable_unchecked() },
 	}
+}
+
+#[apply(internal)]
+pub fn put_error(value: Value) {
+	binds::put_error(fmt_value(&value, &mut Default::default()));
+}
+#[apply(internal)]
+pub fn format_table(value: Value) -> Value {
+	let table = match value.get_tag() {
+		ValueTag::Table => value.to_table(),
+		_ => binds::error(Value::str("Attempted to format a non-table value as a table")),
+	};
+
+	let mut buf = ByteString::default();
+	buf.extend_from_slice(b"{");
+	for (i, (k, v)) in table.iter().enumerate() {
+		if i > 0 {
+			buf.extend_from_slice(b", ");
+		}
+		buf.extend_from_slice(fmt_value(&k, &mut Default::default()));
+		buf.extend_from_slice(b": ");
+		buf.extend_from_slice(fmt_value(&v, &mut Default::default()));
+	}
+	buf.extend_from_slice(b"}");
+
+	new_string(buf)
+}
+#[apply(internal)]
+pub fn print_str(value: Value) {
+	binds::print(fmt_value(&value, &mut Default::default()));
 }
 
 #[panic_handler]

@@ -10,9 +10,8 @@ pub fn compile_supporting_functions(state: &mut ModuleState) {
 	let ty = state.types_sect.len();
 	state.types_sect.ty().function([ValType::I64], []);
 	
-	let tag = state.error_tag;
-	compile_function(state, "throw", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |_state, seq, _| {
-		seq.local_get(0).throw(tag);
+	compile_function(state, "throw", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |state, seq, _| {
+		seq.local_get(0).throw(state.error_tag);
 	});
 }
 
@@ -113,5 +112,13 @@ extern_fns! {
 		/// Doesn't type check input as a table, and assumes a string key. For internal use.\
 		/// This takes `value, table, key` unlike other functions for impl reasons.
 		table_set_name: tab_set_name(I64, I64, I64);
+
+		// These aren't real. Testing.
+		put_error(I64);
+		// Used in debugging.
+		#[allow(dead_code)]
+		format_table(I64) -> I64;
+		#[allow(dead_code)]
+		print_str(I64);
 	}
 }
