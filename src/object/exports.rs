@@ -76,7 +76,7 @@ pub fn generate_exports_object(config: &Config) -> Result<Vec<u8>> {
 fn generate_main_fn_symbol(state: &mut ModuleState) -> Symbol {
 	let id = state.function_count;
 	state.function_count += 1;
-	state.import_sect.import("__luant_internal", crate::object::ENTRY_POINT_NAME, EntityType::Function(state.dyn_call_ty));
+	state.import_sect.import("__camento_internal", crate::object::ENTRY_POINT_NAME, EntityType::Function(state.dyn_call_ty));
 	state.symbol_table.function(SymbolTab::WASM_SYM_UNDEFINED, id, None)
 }
 
@@ -84,7 +84,7 @@ fn generate_export_function(state: &mut ModuleState, export: &ExportData) -> Res
 	let sig = state.types_sect.len();
 	state.types_sect.ty().func_type(&export.func_sig);
 
-	let luant_global_name = state.add_data(SymbolTab::WASM_SYM_BINDING_LOCAL, &export.export_name, export.global_name.iter().copied());
+	let lua_global_name = state.add_data(SymbolTab::WASM_SYM_BINDING_LOCAL, &export.export_name, export.global_name.iter().copied());
 
 	try_compile_function(state, &export.export_name, SymbolTab::WASM_SYM_EXPORTED, [(1, ValType::I32)], sig, |state, seq, _| {
 		let tmp_local: u32 = export.func_sig.params().len().try_into().unwrap();
@@ -96,9 +96,9 @@ fn generate_export_function(state: &mut ModuleState, export: &ExportData) -> Res
 
 		seq.i32_const(export.func_sig.params().len().try_into().unwrap())
 			.global_get(state.global_table)
-			.static_str(state, luant_global_name, export.global_name.len().try_into().unwrap())
+			.static_str(state, lua_global_name, export.global_name.len().try_into().unwrap())
 			.call(state.extern_fns.table_get_name)
-			.call_as_luant_fn(state);
+			.call_as_lua_fn(state);
 
 		seq.local_set(tmp_local);
 

@@ -3,7 +3,7 @@ use crate::bytecode::{Loc, RetKind};
 use super::{LexerExt, Error, ParseScope, Named, IdentKey, Op, expect_tok};
 use super::{Expr, FuncState};
 use super::postfix_ops::{CallType, IndexType, ParsedCall};
-use luant_lexer::{Lexer, Token};
+use camento_lexer::{Lexer, Token};
 
 #[derive(Debug, Clone, Copy)]
 pub enum PlaceExpr {

@@ -1,6 +1,6 @@
 use crate::{bytecode::Loc, debug::{DebugInfo, SrcMap}};
 use super::{debug::InfoCollector, VariableScope, ParseScope, Named, LexerExt, Error, Op, expect_tok};
-use luant_lexer::{Lexer, Token, IdentKey};
+use camento_lexer::{Lexer, Token, IdentKey};
 use bstr::BStr;
 
 #[derive(Debug)]

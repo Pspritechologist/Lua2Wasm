@@ -81,7 +81,7 @@ macro_rules! internal {
 		$(#[$attr])*
 		#[unsafe(no_mangle)]
 		// #[linkage = "internal"]
-		pub extern "C" fn [< __luant_ $name >] ($($args)*) $(-> $ret)? {
+		pub extern "C" fn [< __camento_ $name >] ($($args)*) $(-> $ret)? {
 			$($body)*
 		}
 	} };
@@ -217,7 +217,7 @@ pub fn gte(a: Value, b: Value) -> Value {
 
 #[apply(internal)]
 pub fn not(a: Value) -> Value {
-	Value::bool(__luant_get_truthy(a) != 1)
+	Value::bool(__camento_get_truthy(a) != 1)
 }
 
 

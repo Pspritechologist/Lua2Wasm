@@ -1,13 +1,13 @@
 use crate::{bytecode::Operation, object::InitPriorities, parsing::{Parsed, ParsedFunction}};
 use crate::object::{ClosureRef, ModuleState, StringRef, InstructionSink, compile_function, linking::SymbolTab};
 use wasm_encoder::{BlockType, ConstExpr, MemArg, NameMap, ValType};
-use instructions::LuantInstSinkExt;
+use instructions::LuaInstSinkExt;
 
 use anyhow::Result;
 
 mod instructions;
 
-struct LuantModuleState {
+struct LuaModuleState {
 	module_state: ModuleState,
 
 	strings: Box<[StringRef]>,
@@ -19,12 +19,12 @@ struct LuantModuleState {
 	loop_depth: u32,
 }
 
-impl super::HasModuleState for LuantModuleState {
+impl super::HasModuleState for LuaModuleState {
 	fn module_state(&mut self) -> &mut ModuleState { &mut self.module_state }
 }
 
 pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, parsed: Parsed<'s>) -> Result<wasm_encoder::Module> {
-	let state = &mut LuantModuleState {
+	let state = &mut LuaModuleState {
 		module_state: ModuleState::new_module(),
 		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
 		strings: Default::default(),
@@ -38,7 +38,7 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, pa
 			let (addr, len) = (offset as u32, s.len() as u32);
 			offset += s.len();
 			state.module_state.data_sect.active(0, &ConstExpr::i32_const(addr.cast_signed()), s.iter().copied());
-			let sym = state.module_state.symbol_table.luant_string(i as u32, len);
+			let sym = state.module_state.symbol_table.lua_string(i as u32, len);
 			StringRef { len, sym }
 		}).collect()
 	};
@@ -46,7 +46,7 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, pa
 	// Compile all the functions in the file...
 	for (i, func) in parsed.constants.closures().iter().enumerate().rev() {
 		// 0 is reserved for the main function.
-		state.closures[i + 1] = Some(compile_luant_function(state, func));
+		state.closures[i + 1] = Some(compile_lua_function(state, func));
 	}
 
 	// As well as the file itself as a function...
@@ -62,7 +62,7 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, pa
 		if as_main { SymbolTab::WASM_SYM_BINDING_EMPTY } else { SymbolTab::WASM_SYM_BINDING_LOCAL },
 		[(main_fn.frame_size.into(), ValType::I64)],
 		state.module_state.dyn_call_ty,
-		luant_function_compiler(&main_fn)
+		lua_function_compiler(&main_fn)
 	);
 	state.closures[0] = Some(main_fn);
 
@@ -70,11 +70,11 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, pa
 	// allowing it to be looked up by `require` implementations.
 	
 	let module_name = module_name.as_ref();
-	let module_name_sym = state.module_state.add_data(SymbolTab::WASM_SYM_BINDING_LOCAL, "__luant_module_name", module_name.iter().copied());
+	let module_name_sym = state.module_state.add_data(SymbolTab::WASM_SYM_BINDING_LOCAL, "__camento_module_name", module_name.iter().copied());
 	
 	let reg_sig = state.module_state.types_sect.len();
 	state.module_state.types_sect.ty().function([], []);
-	let register_module_fn = compile_function(state, "__luant_register_module", SymbolTab::WASM_SYM_BINDING_LOCAL, [], reg_sig, |state, seq, _| {
+	let register_module_fn = compile_function(state, "__camento_register_module", SymbolTab::WASM_SYM_BINDING_LOCAL, [], reg_sig, |state, seq, _| {
 		seq.push_function(&mut state.module_state, main_fn.sym)
 		.global_get(state.module_state.module_table)
 		.static_str(&mut state.module_state, module_name_sym, module_name.len().try_into().unwrap())
@@ -87,7 +87,7 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, pa
 }
 
 
-fn compile_luant_function(state: &mut LuantModuleState, func: &ParsedFunction) -> ClosureRef {
+fn compile_lua_function(state: &mut LuaModuleState, func: &ParsedFunction) -> ClosureRef {
 	let name = func.debug.as_ref().and_then(|d| d.func_name()).unwrap_or("<anonymous closure>");
 	
 	compile_function(
@@ -96,11 +96,11 @@ fn compile_luant_function(state: &mut LuantModuleState, func: &ParsedFunction) -
 		SymbolTab::WASM_SYM_BINDING_LOCAL,
 		[(func.frame_size.into(), ValType::I64)],
 		state.module_state.dyn_call_ty,
-		luant_function_compiler(func)
+		lua_function_compiler(func)
 	)
 }
 
-fn luant_function_compiler(func: &ParsedFunction) -> impl FnOnce(&mut LuantModuleState, &mut InstructionSink<'_>, u32) { |state, seq, current_fn| {
+fn lua_function_compiler(func: &ParsedFunction) -> impl FnOnce(&mut LuaModuleState, &mut InstructionSink<'_>, u32) { |state, seq, current_fn| {
 	let arg_cnt = 0;
 
 	{

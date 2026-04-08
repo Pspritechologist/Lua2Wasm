@@ -40,12 +40,12 @@ macro_rules! extern_fns {
 					let name = stringify!($field);
 					$(let name = stringify!($name);)?
 					#[allow(unused)]
-					let symbol_name = concat!("__luant_", stringify!($field));
-					$(let symbol_name = concat!("__luant_", stringify!($name));)?
+					let symbol_name = concat!("__camento_", stringify!($field));
+					$(let symbol_name = concat!("__camento_", stringify!($name));)?
 
 					let fn_type = types_section.len();
 					types_section.ty().function([ $($in),* ], [ $($($ret),+)? ]);
-					import_sect.import("__luant_internal", name, EntityType::Function(fn_type));
+					import_sect.import("__camento_internal", name, EntityType::Function(fn_type));
 					let fn_idx = count;
 					let $field = symbol_table.function(SymbolTab::WASM_SYM_UNDEFINED | SymbolTab::WASM_SYM_EXPLICIT_NAME, fn_idx, Some(symbol_name));
 

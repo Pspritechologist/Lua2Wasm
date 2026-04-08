@@ -20,7 +20,7 @@ mod runtime_impls;
 
 use crate::object::linking::InitFunctions;
 
-pub const ENTRY_POINT_NAME: &str = "__luant_main_entry";
+pub const ENTRY_POINT_NAME: &str = "__camento_main_entry";
 
 struct InitPriorities;
 impl InitPriorities {
@@ -70,9 +70,9 @@ impl ModuleState {
 		global_sect.global(GlobalType { val_type: ValType::I32, mutable: true, shared: false }, &ConstExpr::i32_const(0));
 		global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
 		global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
-		let shtack_ptr = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 0, Some("__luant_shtack_ptr"));
-		let global_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 1, Some("__luant_global_table"));
-		let module_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 2, Some("__luant_module_table"));
+		let shtack_ptr = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 0, Some("__camento_shtack_ptr"));
+		let global_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 1, Some("__camento_global_table"));
+		let module_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 2, Some("__camento_module_table"));
 
 		types_sect.ty().function([ValType::I32], [ValType::I32]);
 
@@ -88,7 +88,7 @@ impl ModuleState {
 		let (function_count, extern_fns) = ExternFns::init(&mut types_sect, &mut import_sect, &mut symbol_table);
 
 		tag_sect.tag(TagType { kind: TagKind::Exception, func_type_idx: types_sect.len() });
-		let error_tag = symbol_table.tag(SymbolTab::WASM_SYM_BINDING_WEAK, 0, Some("__luant_error_tag"));
+		let error_tag = symbol_table.tag(SymbolTab::WASM_SYM_BINDING_WEAK, 0, Some("__camento_error_tag"));
 
 		types_sect.ty().function([ValType::I64], []);
 
@@ -154,7 +154,7 @@ impl ModuleState {
 		let mut producers = ProducersSection::new();
 		producers
 			.field("language", ProducersField::new().value("Lua", "5.5"))
-			.field("processed-by", ProducersField::new().value("luant", env!("CARGO_PKG_VERSION")));
+			.field("processed-by", ProducersField::new().value("camento", env!("CARGO_PKG_VERSION")));
 
 		// Get the number of bytes used by the encoding of the item count in the section...
 		// Relocations need this information.

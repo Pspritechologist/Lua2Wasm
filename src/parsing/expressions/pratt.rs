@@ -3,7 +3,7 @@ use crate::parsing::LexerExt;
 use super::{Error, ParseScope, Op, expect_tok};
 use super::{Expr, Const, FuncState, parse_table_init};
 use super::postfix_ops::{CallType, IndexType};
-use luant_lexer::{Lexer, Token};
+use camento_lexer::{Lexer, Token};
 
 type Num = real_float::Finite<f64>;
 

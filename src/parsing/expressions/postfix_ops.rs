@@ -2,7 +2,7 @@ use crate::bytecode::{Loc, RetKind};
 use crate::parsing::LexerExt;
 use super::{Error, ParseScope, Op, expect_tok};
 use super::{Expr, Const, FuncState};
-use luant_lexer::{Lexer, Token};
+use camento_lexer::{Lexer, Token};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedCall {

@@ -179,6 +179,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6bd91ee7b2422bcb158d90ef4d14f75ef67f340943fc4149891dcce8f8b972a3"
 
 [[package]]
+name = "camento"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auto_impl",
+ "bstr",
+ "camento_lexer",
+ "hashbrown 0.16.1",
+ "leb128fmt",
+ "real_float",
+ "slotmap",
+ "strum",
+ "value",
+ "wasm-encoder 0.245.1",
+]
+
+[[package]]
+name = "camento_lexer"
+version = "0.1.0"
+dependencies = [
+ "bstr",
+ "hashbrown 0.16.1",
+ "lexical-parse-float",
+ "logos",
+ "real_float",
+ "slotmap",
+ "strum",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.59"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -915,36 +945,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d151b2ae667f69e10b8738f5cac0c746faa22b2e15ea7e83b55476afec3767dc"
 dependencies = [
  "logos-codegen",
-]
-
-[[package]]
-name = "luant"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "auto_impl",
- "bstr",
- "hashbrown 0.16.1",
- "leb128fmt",
- "luant_lexer",
- "real_float",
- "slotmap",
- "strum",
- "value",
- "wasm-encoder 0.245.1",
-]
-
-[[package]]
-name = "luant_lexer"
-version = "0.1.0"
-dependencies = [
- "bstr",
- "hashbrown 0.16.1",
- "lexical-parse-float",
- "logos",
- "real_float",
- "slotmap",
- "strum",
 ]
 
 [[package]]

@@ -35,7 +35,7 @@ pub fn pcall(state: &mut ModuleState, seq: &mut InstructionSink, _: u32) {
 		.typed_select(ValType::I32)
 		// Make the call.
 		.local_get(temp_var)
-		.call_as_luant_fn(state)
+		.call_as_lua_fn(state)
 		// Increase the count to return, accounting for the error flag.
 		.i32_const(1)
 		.i32_add()

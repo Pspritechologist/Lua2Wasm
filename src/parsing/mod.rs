@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::bytecode::{Loc, Operation as Op, RetKind};
 use crate::debug::DebugInfo;
-use luant_lexer::{IdentKey, LexInterner, Lexer, Token};
+use camento_lexer::{IdentKey, LexInterner, Lexer, Token};
 
 use functions::FuncState;
 use scopes::{ParseScope, Named, RootScope, VariableScope};
@@ -35,7 +35,7 @@ impl ParseSrc for str {
 pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<(Parsed<'s>, LexInterner<'s>), Error<'s>> {
 	let mut constants = ConstantMap::default();
 	let mut state = functions::FuncState::new(&mut constants);
-	let mut lexer = luant_lexer::lexer(src.bytes());
+	let mut lexer = camento_lexer::lexer(src.bytes());
 	let mut root_scope = RootScope::new_root(&mut lexer);
 
 	let mut parse = || {

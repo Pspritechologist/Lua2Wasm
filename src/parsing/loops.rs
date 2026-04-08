@@ -1,6 +1,6 @@
 use crate::parsing::LexerExt;
 use super::{Error, ParseScope, Op, VariableScope, FuncState, expect_tok};
-use luant_lexer::{Lexer, Token};
+use camento_lexer::{Lexer, Token};
 
 struct LoopScope<'a, 's> {
 	parent: &'a mut dyn ParseScope<'s>,

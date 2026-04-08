@@ -1,7 +1,7 @@
 use crate::bytecode::Loc;
 
 use super::{Error, Op, functions::FuncState};
-use luant_lexer::{IdentKey, Lexer};
+use camento_lexer::{IdentKey, Lexer};
 use slotmap::SparseSecondaryMap;
 use std::num::NonZero;
 

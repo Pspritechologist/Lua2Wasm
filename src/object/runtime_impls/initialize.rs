@@ -9,7 +9,7 @@ use crate::object::{
 pub fn generate_runtime_object() -> Vec<u8> {
 	let state = &mut ModuleState::new_module();
 
-	let is_init = state.new_global(SymbolTab::WASM_SYM_BINDING_LOCAL, Some("__luant_is_init"), ValType::I32, &wasm_encoder::ConstExpr::i32_const(0));
+	let is_init = state.new_global(SymbolTab::WASM_SYM_BINDING_LOCAL, Some("__camento_is_init"), ValType::I32, &wasm_encoder::ConstExpr::i32_const(0));
 
 	super::external_bindings::compile_supporting_functions(state);
 
@@ -41,12 +41,12 @@ pub fn generate_runtime_object() -> Vec<u8> {
 		crate::object::compile_function(state, name, SymbolTab::WASM_SYM_BINDING_LOCAL, [(locals, ValType::I64)], state.dyn_call_ty, f)
 	};
 
-	let std_error = std_fn("__luant_std_error", 0, runtime_impls::error);
-	let std_pcall = std_fn("__luant_std_pcall", 1, runtime_impls::pcall);
+	let std_error = std_fn("__camento_std_error", 0, runtime_impls::error);
+	let std_pcall = std_fn("__camento_std_pcall", 1, runtime_impls::pcall);
 
 	let sig = state.types_sect.len();
 	state.types_sect.ty().function([], []);
-	let init_fn = compile_function(state, "__luant_init_rt", SymbolTab::WASM_SYM_BINDING_LOCAL, [(1, ValType::I64)], sig, |state, seq, _| {
+	let init_fn = compile_function(state, "__camento_init_rt", SymbolTab::WASM_SYM_BINDING_LOCAL, [(1, ValType::I64)], sig, |state, seq, _| {
 		let global_tab = 0;
 
 		// Check if we're already initialized, and if so return early.

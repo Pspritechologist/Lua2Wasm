@@ -1,5 +1,5 @@
 use crate::debug::{DebugInfo, SrcMap};
-use luant_lexer::{IdentKey, LexInterner};
+use camento_lexer::{IdentKey, LexInterner};
 
 #[derive(Debug, Clone, Default)]
 pub struct InfoCollector {

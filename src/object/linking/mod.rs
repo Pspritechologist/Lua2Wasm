@@ -131,8 +131,8 @@ impl SymbolTab {
 		Symbol::new(id)
 	}
 
-	pub fn luant_string(&mut self, index: u32, size: u32) -> Symbol {
-		self.data(SymbolTab::WASM_SYM_BINDING_LOCAL, ".rodata_luant_string", Some(DataSymbolDefinition { index, size, offset: 0 }))
+	pub fn lua_string(&mut self, index: u32, size: u32) -> Symbol {
+		self.data(SymbolTab::WASM_SYM_BINDING_LOCAL, ".rodata_camento_string", Some(DataSymbolDefinition { index, size, offset: 0 }))
 	}
 
 	pub fn global(&mut self, flags: u32, index: u32, name: Option<&str>) -> Symbol {

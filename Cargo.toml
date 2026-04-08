@@ -2,12 +2,12 @@
 members = [ "crates/*" ]
 
 [package]
-name = "luant"
+name = "camento"
 version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-luant_lexer.path = "crates/lexer"
+camento_lexer.path = "crates/lexer"
 value.path = "crates/value"
 
 real_float = "0.3.0"
@@ -17,7 +17,7 @@ hashbrown = "0.16.1"
 bstr = "1.12.1"
 
 [dependencies]
-luant_lexer.workspace = true
+camento_lexer.workspace = true
 value.workspace = true
 real_float.workspace = true
 slotmap.workspace = true

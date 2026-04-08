@@ -2,7 +2,7 @@ use crate::bytecode::Loc;
 
 use super::{Error, ParseScope, Named, LexerExt, Op, IdentKey, expect_tok};
 use super::functions::FuncState;
-use luant_lexer::{Lexer, Token};
+use camento_lexer::{Lexer, Token};
 
 type Num = real_float::Finite<f64>;
 

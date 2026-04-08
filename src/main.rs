@@ -1,6 +1,6 @@
 use std::{borrow::Cow, ffi::{OsStr, OsString}, path::{Path, PathBuf}};
 use anyhow::{Context, Result};
-use luant::{Config, ExportData, LuaFile};
+use camento::{Config, ExportData, LuaFile};
 
 fn main() -> std::process::ExitCode {
 	if let Err(e) = try_main() {
@@ -29,7 +29,7 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 	let out_path = std::env::args_os().nth(2).unwrap_or_else(|| "out.wasm".into());
 	let opt = std::env::args_os().nth(3).is_some_and(|arg| arg == "--opt" || arg == "-o");
 
-	luant::process_files(&Config {
+	camento::process_files(&Config {
 		target_path: Path::new("output").into(),
 		cleanup_objects: true,
 		wasm_ld_path: OsStr::new("wasm-ld").into(),

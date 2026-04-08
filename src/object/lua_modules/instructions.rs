@@ -5,38 +5,38 @@ use crate::{
 };
 use value::Value;
 use wasm_encoder::{BlockType, MemArg, ValType};
-use super::LuantModuleState;
+use super::LuaModuleState;
 
-pub trait LuantInstSinkExt {
-	fn luant_str(&mut self, state: &mut LuantModuleState, idx: usize) -> &mut Self;
-	fn expr(&mut self, state: &mut LuantModuleState, expr: Expr) -> &mut Self;
-	fn loc_get(&mut self, state: &mut LuantModuleState, loc: Loc) -> &mut Self;
-	fn loc_set(&mut self, state: &mut LuantModuleState, loc: Loc) -> &mut Self;
-	fn operations(&mut self, state: &mut LuantModuleState, ops: impl IntoIterator<Item = Op>) -> &mut Self;
+pub trait LuaInstSinkExt {
+	fn lua_str(&mut self, state: &mut LuaModuleState, idx: usize) -> &mut Self;
+	fn expr(&mut self, state: &mut LuaModuleState, expr: Expr) -> &mut Self;
+	fn loc_get(&mut self, state: &mut LuaModuleState, loc: Loc) -> &mut Self;
+	fn loc_set(&mut self, state: &mut LuaModuleState, loc: Loc) -> &mut Self;
+	fn operations(&mut self, state: &mut LuaModuleState, ops: impl IntoIterator<Item = Op>) -> &mut Self;
 }
 
-impl LuantInstSinkExt for InstructionSink<'_> {
-	fn luant_str(&mut self, state: &mut LuantModuleState, idx: usize) -> &mut Self {
+impl LuaInstSinkExt for InstructionSink<'_> {
+	fn lua_str(&mut self, state: &mut LuaModuleState, idx: usize) -> &mut Self {
 		let string = state.strings[idx];
 		self.static_str(&mut state.module_state, string.sym, string.len)
 	}
 
-	fn expr(&mut self, state: &mut LuantModuleState, expr: Expr) -> &mut Self {
+	fn expr(&mut self, state: &mut LuaModuleState, expr: Expr) -> &mut Self {
 		expr.push(state, self);
 		self
 	}
 
-	fn loc_get(&mut self, state: &mut LuantModuleState, loc: Loc) -> &mut Self {
+	fn loc_get(&mut self, state: &mut LuaModuleState, loc: Loc) -> &mut Self {
 		loc.push_get(state, self);
 		self
 	}
 
-	fn loc_set(&mut self, state: &mut LuantModuleState, loc: Loc) -> &mut Self {
+	fn loc_set(&mut self, state: &mut LuaModuleState, loc: Loc) -> &mut Self {
 		loc.push_set(state, self);
 		self
 	}
 
-	fn operations(&mut self, state: &mut LuantModuleState, ops: impl IntoIterator<Item = Op>) -> &mut Self {
+	fn operations(&mut self, state: &mut LuaModuleState, ops: impl IntoIterator<Item = Op>) -> &mut Self {
 		let mut ops = ops.into_iter();
 		while let Some(op) = ops.next() {
 			compile_op(state, &mut ops, self, op);
@@ -46,25 +46,25 @@ impl LuantInstSinkExt for InstructionSink<'_> {
 }
 
 impl Loc {
-	pub fn push_get(self, state: &mut LuantModuleState, seq: &mut InstructionSink) {
+	pub fn push_get(self, state: &mut LuaModuleState, seq: &mut InstructionSink) {
 		match self {
 			Loc::Slot(idx) => { seq.local_get(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
 			Loc::Global(idx) => {
 				seq.global_get(state.module_state.global_table)
-					.luant_str(state, idx)
+					.lua_str(state, idx)
 					.call(state.module_state.extern_fns.table_get_name);
 			},
 		};
 	}
 
-	pub fn push_set(self, state: &mut LuantModuleState, seq: &mut InstructionSink) {
+	pub fn push_set(self, state: &mut LuaModuleState, seq: &mut InstructionSink) {
 		match self {
 			Loc::Slot(idx) => { seq.local_set(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
 			Loc::Global(idx) => {
 				seq.global_get(state.module_state.global_table)
-					.luant_str(state, idx)
+					.lua_str(state, idx)
 					.call(state.module_state.extern_fns.table_set_name);
 			},
 		};
@@ -72,13 +72,13 @@ impl Loc {
 }
 
 impl Expr {
-	pub fn push(self, state: &mut LuantModuleState, seq: &mut InstructionSink) {
+	pub fn push(self, state: &mut LuaModuleState, seq: &mut InstructionSink) {
 		match self {
 			Expr::Constant(Const::Nil) => Value::nil().push(seq),
 			Expr::Constant(Const::Bool(b)) => Value::bool(b).push(seq),
 			Expr::Constant(Const::Number(n)) => Value::float(n.val()).push(seq),
 			Expr::Constant(Const::String(idx)) => {
-				seq.luant_str(state, idx);
+				seq.lua_str(state, idx);
 			},
 			Expr::Slot(idx) => Loc::Slot(idx).push_get(state, seq),
 			Expr::UpValue(idx) => Loc::UpValue(idx).push_get(state, seq),
@@ -98,7 +98,7 @@ impl Expr {
 	}
 }
 
-fn compile_op(state: &mut LuantModuleState, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink, op: Op) {
+fn compile_op(state: &mut LuaModuleState, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink, op: Op) {
 	match op {
 		Op::Add(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.module_state.extern_fns.add).loc_set(state, dst); },
 		Op::Sub(dst, lhs, rhs) => { seq.expr(state, lhs).expr(state, rhs).call(state.module_state.extern_fns.sub).loc_set(state, dst); },
@@ -157,7 +157,7 @@ fn compile_op(state: &mut LuantModuleState, ops: &mut impl Iterator<Item=Op>, se
 			}
 			seq.i32_const(arg_cnt.into())
 				.loc_get(state, Loc::Slot(func_slot))
-				.call_as_luant_fn(&mut state.module_state);
+				.call_as_lua_fn(&mut state.module_state);
 
 			match ret_kind {
 				RetKind::None => { seq.drop(); },
@@ -181,7 +181,7 @@ fn compile_op(state: &mut LuantModuleState, ops: &mut impl Iterator<Item=Op>, se
 	}
 }
 
-fn compile_if(state: &mut LuantModuleState, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink, cond: Expr) {
+fn compile_if(state: &mut LuaModuleState, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink, cond: Expr) {
 	cond.push(state, seq);
 	seq.call(state.module_state.extern_fns.get_truthy);
 
@@ -213,7 +213,7 @@ fn compile_if(state: &mut LuantModuleState, ops: &mut impl Iterator<Item=Op>, se
 	seq.end();
 }
 
-fn compile_loop(state: &mut LuantModuleState, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink) {
+fn compile_loop(state: &mut LuaModuleState, ops: &mut impl Iterator<Item=Op>, seq: &mut InstructionSink) {
 	// The outer block, for breaks.
 	seq.block(BlockType::Empty);
 	// The inner block, for looping.
