@@ -139,7 +139,7 @@ pub fn process_files<I: IntoIterator>(config: &Config, files: I) -> anyhow::Resu
 	};
 
 	let mut wasm_opt_proc = Command::new(wasm_opt_path)
-		.arg("-O4").arg("-c").arg("-g")
+		.arg("-O3").arg("-c")
 		.arg("--enable-multimemory")
 		.arg("--enable-exception-handling")
 		.arg("-o").arg(config.output_module_path.as_ref())
