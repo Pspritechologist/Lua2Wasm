@@ -13,6 +13,9 @@ pub mod expressions;
 mod loops;
 mod debug;
 
+#[cfg(test)]
+mod tests;
+
 pub use functions::{ParsedFunction, Upvalue};
 
 #[derive(Debug)]
