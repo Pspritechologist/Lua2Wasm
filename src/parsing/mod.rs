@@ -64,7 +64,7 @@ pub fn parse<'s, S: ParseSrc + ?Sized>(src: &'s S) -> Result<(Parsed<'s>, LexInt
 		debug: Some(debug),
 		// The global table is always loaded in the very first stack slot.
 		upvalues: Box::new([Upvalue::ParentSlot(0)]),
-		exported: None,
+		// exported: None,
 	};
 
 	Ok((Parsed {
@@ -130,7 +130,7 @@ use expect_tok;
 
 pub type Error<'s> = Box<dyn std::error::Error + 's>;
 
-fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
+fn parse_stmt<'s>(_trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut impl ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
 	match head {
 		Token::LineTerm => (),
 		Token::Label => {
@@ -140,17 +140,16 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 			expect_tok!(lexer, Token::Label)?;
 		},
 		Token::Function => {
-			use bstr::{ByteSlice, BString};
-
 			let span = lexer.src_index();
 			let name = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
 
-			let mut closure = functions::parse_function(lexer, &mut *scope, state, Some(name), span)?;
+			let closure = functions::parse_function(lexer, &mut *scope, state, Some(name), span)?;
 
-			if let Some(attr) = trivia.into_iter().find_map(|s| s.strip_prefix(b"export")) {
-				let name = lexer.resolve_ident(name).to_string();
-				closure.exported = Some((name, BString::from(attr.trim())));
-			}
+			//TODO: Ended up moving away from this, should take a look over it...
+			// if let Some(attr) = trivia.into_iter().find_map(|s| s.strip_prefix(b"export")) {
+			// 	let name = lexer.resolve_ident(name).to_string();
+			// 	closure.exported = Some((name, BString::from(attr.trim())));
+			// }
 
 			let idx = state.push_closure(closure);
 
@@ -160,19 +159,18 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 		},
 		Token::Local => {
 			if lexer.next_if(Token::Function)?.is_some() {
-				use bstr::{ByteSlice, BString};
-
 				let span = lexer.src_index();
 				let name = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
 
 				let dst = scope.new_local(lexer, state, name)?;
 
-				let mut closure = functions::parse_function(lexer, &mut *scope, state, Some(name), span)?;
+				let closure = functions::parse_function(lexer, &mut *scope, state, Some(name), span)?;
 
-				if let Some(attr) = trivia.into_iter().find_map(|s| s.strip_prefix(b"export")) {
-					let name = lexer.resolve_ident(name).to_string();
-					closure.exported = Some((name, BString::from(attr.trim())));
-				}
+				//TODO: Ended up moving away from this, should take a look over it...
+				// if let Some(attr) = trivia.into_iter().find_map(|s| s.strip_prefix(b"export")) {
+				// 	let name = lexer.resolve_ident(name).to_string();
+				// 	closure.exported = Some((name, BString::from(attr.trim())));
+				// }
 
 				let idx = state.push_closure(closure);
 
