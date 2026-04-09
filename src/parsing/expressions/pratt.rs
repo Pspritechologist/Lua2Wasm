@@ -21,7 +21,7 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl 
 				expr
 			},
 			Token::VarArgs => Expr::VarArgs,
-			Token::Function => todo!(),
+			Token::Function => parse_anonymous_function(lexer, scope, state)?,
 			Token::Number(n) => Expr::Constant(Const::Number(n)),
 			Token::Identifier(ident) => Expr::from_named(scope.resolve_name(lexer, state, ident, false)?),
 			Token::String(s) => Expr::Constant(Const::String(state.string_idx(s)?)),
@@ -43,6 +43,16 @@ pub fn parse_expr<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut (impl 
 
 		expr = next_op.parse_infix(lexer, scope, state, expr)?;
 	}
+}
+
+fn parse_anonymous_function<'s>(lexer: &mut Lexer<'s>, mut scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>) -> Result<Expr, Error<'s>> {
+	let closure = crate::parsing::functions::parse_function(lexer, &mut scope, state, None, lexer.src_index())?;
+	let idx = state.push_closure(closure);
+
+	let slot = state.reserve_slot();
+	state.emit(scope, Op::LoadClosure(slot, idx), lexer.src_index());
+
+	Ok(slot.into())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
