@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 
 use crate::bytecode::{Loc, Operation as Op, RetKind};
-use crate::debug::DebugInfo;
 use camento_lexer::{IdentKey, LexInterner, Lexer, Token};
 
 use functions::FuncState;
@@ -155,7 +154,7 @@ fn parse_stmt<'s>(trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>,
 
 			let idx = state.push_closure(closure);
 
-			let name_idx = state.string_idx(lexer.resolve_ident(name), true)?;
+			let name_idx = state.string_idx(camento_lexer::String::raw(lexer.resolve_ident(name).into()))?;
 
 			state.emit(scope, Op::LoadClosure(Loc::Global(name_idx), idx), span);
 		},

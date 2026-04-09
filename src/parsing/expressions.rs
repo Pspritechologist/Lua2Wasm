@@ -169,7 +169,9 @@ pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut 
 		// parse field or array value.
 		let first = match lexer.next_must()? {
 			Token::Identifier(field) => match lexer.next_if(Token::Assign)? {
-				Some(_) => KeyOrArray::Key(Expr::Constant(Const::String(state.string_idx(lexer.resolve_ident(field), true)?))),
+				Some(_) => KeyOrArray::Key(Expr::Constant(Const::String(
+					state.string_idx(camento_lexer::String::raw(lexer.resolve_ident(field).into()))?
+				))),
 				None => KeyOrArray::Array(parse_expr(head, lexer, scope, state)?),
 			},
 			Token::BracketOpen => {
@@ -190,7 +192,7 @@ pub fn parse_table_init<'s>(head: Token<'s>, lexer: &mut Lexer<'s>, scope: &mut 
 				array_index += 1; // Lua is 1-indexed.
 
 				let key = Expr::Constant(Const::Number(Finite::new(array_index as f64)));
-				state.emit(scope, Op::Set(tab_slot.into(), key.into(), entry), span);
+				state.emit(scope, Op::Set(tab_slot.into(), key, entry), span);
 			},
 		}
 

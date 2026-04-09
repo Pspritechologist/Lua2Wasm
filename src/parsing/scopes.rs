@@ -1,9 +1,8 @@
 use crate::bytecode::Loc;
 
-use super::{Error, Op, functions::FuncState};
+use super::{Error, functions::FuncState};
 use camento_lexer::{IdentKey, Lexer};
 use slotmap::SparseSecondaryMap;
-use std::num::NonZero;
 
 /// Encapsulates the state during parsing.\
 /// This trait may be implemented separately to represent
@@ -74,7 +73,7 @@ impl<'s> ParseScope<'s> for RootScope {
 			// The 'main' function of a script always has exactly one upvalue, _ENV, the global environment.
 			Ok(Named::UpValue(0))
 		} else {
-			let idx = state.string_idx(lexer.resolve_ident(name), true)?;
+			let idx = state.string_idx(camento_lexer::String::raw(lexer.resolve_ident(name).into()))?;
 			Ok(Named::Global(idx))
 		}
 	}

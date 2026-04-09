@@ -81,7 +81,7 @@ impl CallType {
 			Token::ParenOpen => CallType::Args,
 			Token::Colon => CallType::Method,
 			Token::BraceOpen => CallType::Table,
-			Token::String((raw, s)) => CallType::String(state.string_idx(s, raw)?),
+			Token::String(s) => CallType::String(state.string_idx(s)?),
 			_ => return Ok(None),
 		}))
 	}
@@ -102,7 +102,7 @@ impl<'s> ParsedIndex {
 		Ok(result_reg.into())
 	}
 	
-	pub fn to_key(&self) -> Result<Expr, Error<'s>> {
+	pub fn to_key(self) -> Result<Expr, Error<'s>> {
 		Ok(self.index_expr)
 	}
 }
@@ -129,7 +129,7 @@ impl IndexType {
 					return Err("Expected identifier after '.'".into());
 				};
 				let ident_name = lexer.resolve_ident(ident);
-				Expr::Constant(Const::String(state.string_idx(ident_name, true)?))
+				Expr::Constant(Const::String(state.string_idx(camento_lexer::String::raw(ident_name.into()))?))
 			},
 		};
 		

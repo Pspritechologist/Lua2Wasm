@@ -1,4 +1,4 @@
-use crate::{bytecode::Loc, debug::{DebugInfo, SrcMap}};
+use crate::{bytecode::Loc, debug::DebugInfo};
 use super::{debug::InfoCollector, VariableScope, ParseScope, Named, LexerExt, Error, Op, expect_tok};
 use camento_lexer::{Lexer, Token, IdentKey};
 use bstr::BStr;
@@ -87,120 +87,15 @@ impl<'a, 's> FuncState<'a, 's> {
 		self.max_slot_use = self.max_slot_use.max(used);
 	}
 
-	pub fn string_idx(&mut self, s: &'s (impl AsRef<[u8]> + ?Sized), raw: bool) -> Result<usize, Error<'s>> {
-		let s = BStr::new(s);
+	pub fn string_idx(&mut self, string: camento_lexer::String<'s>) -> Result<usize, Error<'s>> {
+		let string = string.parse_data()?;
 
-		//TODO:
-		// Technically I think I'm meant to replace any newline-style char within long-form strings with raw newlines?
-		// Seems like a lot of work...
-
-		let s = if raw || !s.contains(&b'\\') { s.into() } else {
-			let mut unescaped = bstr::BString::default();
-			let mut chars = s.iter().cloned().peekable();
-			while let Some(c) = chars.next() {
-				if c == b'\\' {
-					// It's technically impossible for a non-raw string to end with a single backslash.
-					match chars.next().ok_or("Trailing backslash in string")? {
-						b'a' => unescaped.push(b'\x07'),   // bell.
-						b'b' => unescaped.push(b'\x08'),   // back space.
-						b'f' => unescaped.push(b'\x0b'),   // form feed.
-						b'n' => unescaped.push(b'\n'),  // newline.
-						b'r' => unescaped.push(b'\r'),  // carriage return.
-						b't' => unescaped.push(b'\t'),  // horizontal tab.
-						b'v' => unescaped.push(b'\x0b'),   // vertical tab.
-						b'\\' => unescaped.push(b'\\'), // backslash.
-						b'"' => unescaped.push(b'"'),   // double quote.
-						b'\'' => unescaped.push(b'\''), // single quote.
-						b'\n' => unescaped.push(b'\n'), // line continuation ('Short strings' can span multiple lines if each line ends with a backslash).
-						b'z' => while chars.next_if(|c| c.is_ascii_whitespace()).is_some() { }, // skip following whitespace.
-						b'x' => { // hex byte sequences.
-							let hi = chars.next().ok_or("Unexpected end of string in hex escape")?.to_ascii_lowercase();
-							let lo = chars.next().ok_or("Unexpected end of string in hex escape")?.to_ascii_lowercase();
-							if !hi.is_ascii_hexdigit() || !lo.is_ascii_hexdigit() {
-								return Err(format!("Invalid hex escape sequence: \\x{}{}", hi as char, lo as char).into());
-							}
-
-							let hi = hi - if hi.is_ascii_digit() { b'0' } else { b'a' - 10 };
-							let lo = lo - if lo.is_ascii_digit() { b'0' } else { b'a' - 10 };
-							let byte = hi * 16 + lo;
-
-							unescaped.push(byte);
-						},
-						digit if digit.is_ascii_digit() => { // decimal byte sequences.
-							let (a, b, c) = (
-								digit,
-								chars.next().ok_or("Unexpected end of string in decimal escape")?,
-								chars.next().ok_or("Unexpected end of string in decimal escape")?,
-							);
-
-							if !b.is_ascii_digit() || !c.is_ascii_digit() {
-								return Err(format!("Invalid decimal escape sequence: \\{}{}{}", a as char, b as char, c as char).into());
-							}
-
-							let a = a - b'0';
-							let b = b - b'0';
-							let c = c - b'0';
-							let byte = a * 100 + b * 10 + c;
-
-							unescaped.push(byte);
-						},
-						b'u' => { // Unicode code points.
-							if chars.next() != Some(b'{') {
-								return Err("Expected '{' after \\u in Unicode escape".into());
-							}
-
-							let mut codepoint = 0u32;
-
-							let mut next_digit = || {
-								let c = chars.next().ok_or("Unexpected end of string in Unicode escape")?.to_ascii_lowercase();
-								if c == b'}' {
-									return Ok::<_, Error>(false);
-								}
-
-								if !c.is_ascii_hexdigit() {
-									return Err(format!("Invalid character '{}' in Unicode escape", c as char).into());
-								}
-
-								let digit = (c - if c.is_ascii_digit() { b'0' } else { b'a' - 10 }) as u32;
-								codepoint = codepoint * 16 + digit;
-
-								Ok(true)
-							};
-
-							// A limit of three hex digits.
-							if next_digit()? && next_digit()? && next_digit()? {
-								return Err("Too many hex digits in Unicode escape".into());
-							}
-
-							// Lua allows codepoints less than 2^31
-							if codepoint >= 2^31 {
-								return Err(format!("Unicode code point out of range: U+{codepoint:X}").into());
-							}
-
-							let ch = char::from_u32(codepoint).ok_or(format!("Invalid Unicode code point: U+{codepoint:X}"))?;
-
-							unescaped.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes());
-						},
-						other => return Err(format!("Invalid escape sequence: \\{}", other as char).into()),
-					}
-				} else {
-					if c == b'\n' {
-						return Err("Unescaped newline in string".into());
-					}
-
-					unescaped.push(c);
-				}
-			}
-
-			std::borrow::Cow::Owned(unescaped)
-		};
-
-		if let Some(&idx) = self.constants.string_indexes.get(&s) {
+		if let Some(&idx) = self.constants.string_indexes.get(&string) {
 			Ok(idx)
 		} else {
 			let idx = self.constants.strings.len();
-			self.constants.strings.push(s.clone());
-			self.constants.string_indexes.insert(s, idx);
+			self.constants.strings.push(string.clone());
+			self.constants.string_indexes.insert(string, idx);
 			Ok(idx)
 		}
 	}

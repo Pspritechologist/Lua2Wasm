@@ -42,10 +42,12 @@ impl<'s, F: FnOnce(Token<'s>) -> bool> TokPat<'s> for F {
 
 pub struct Lexer<'s> {
 	inner: logos::Lexer<'s, Token<'s>>,
+	#[expect(clippy::type_complexity)]
 	peeked: Option<(Token<'s>, std::ops::Range<usize>, Vec<&'s [u8]>)>,
 }
 
 impl<'s> Lexer<'s> {
+	#[expect(clippy::type_complexity)]
 	pub fn next_with_trivia(&mut self) -> Option<Result<(Token<'s>, Vec<&'s [u8]>), LexError<'s>>> {
 		if let Some((tok, _, trivia)) = self.peeked.take() {
 			return Some(Ok((tok, trivia)));
@@ -207,13 +209,13 @@ fn handle_comment<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> FilterResult<&'s
 	}
 }
 
-fn handle_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> (bool, &'s BStr) {
+fn handle_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> String<'s> {
 	let slice = lex.slice();
 	let s = &slice[1..slice.len() - 1]; // Remove quotes
-	(false, BStr::new(s))
+	String::new(false, BStr::new(s))
 }
 
-fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<(bool, &'s BStr), LexError<'s>> {
+fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<String<'s>, LexError<'s>> {
 	// let equals = lex.slice().matches('=').count();
 	let equals = lex.slice().len() - 2; // "[==[".len() == 4
 	let end_pat = format!("]{}]", "=".repeat(equals)); //TODO: Highly inefficient.
@@ -235,7 +237,7 @@ fn handle_block_string<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Result<(boo
 
 	lex.bump(end + end_pat.len());
 	
-	Ok((true, BStr::new(s)))
+	Ok(String::new(true, BStr::new(s)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Logos, strum::IntoStaticStr)]
@@ -326,15 +328,206 @@ pub enum Token<'s> {
 	)]
 	Identifier(IdentKey),
 
-	//TODO: Handle escaping and interning of strings.
+	/// The boolean represents if the string is raw (i.e. block string) or not.
 	#[regex(br#""([^"]|\\(s:.))*""#, handle_string)]
 	#[regex(br#"'([^']|\\(s:.))*'"#, handle_string)]
 	#[regex(r"\[=*\[", handle_block_string)]
-	String((bool, &'s BStr)),
+	String(String<'s>),
 
 	#[token("true")] True,
 	#[token("false")] False,
 	#[token("nil")] Nil,
+}
+
+/// Represents a Lua string literal from a src file.
+/// `raw` is true if it's a block string, false if it's either a single or double-quoted string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct String<'s> {
+	raw: bool,
+	data: &'s BStr,
+}
+
+/// Possible errors that can occur while parsing a Lua string literal.
+#[derive(Debug, Clone, Copy)]
+pub enum StringParseError {
+	/// An escape sequence that is not recognized by Lua.
+	InvalidEscapeSequence(u8),
+	/// A hex escape sequence that ended before consuming two hex digits.
+	UnexpectedEndOfHexSequence,
+	/// A hex escape sequence that contained non-hex characters.
+	InvalidHexSequence(u8, u8),
+	/// A decimal escape sequence that ended before consuming three digits.
+	UnexpectedEndOfDecimalSequence,
+	/// A decimal escape sequence that contained values out of the 0-9 range.
+	InvalidDecimalSequence(u8, u8, u8),
+	/// A Unicode escape sequence that did not start with a '{' after the '\u'.
+	PoorlyFormedUnicodeEscape,
+	/// A Unicode escape sequence that ended before consuming a closing '}'.
+	UnexpectedEndOfUnicodeEscape,
+	/// A Unicode escape sequence that contained more than three characters before ending with a '}'.
+	UnexpectedContinuationOfUnicodeEscape,
+	/// A Unicode escape sequence that contained an invalid byte.
+	InvalidCharUnicodeEscape(u8),
+	/// A Unicode escape sequence that resolves to a code point that is not valid in Unicode.
+	InvalidUnicodeCodepoint(u32),
+	/// This error should never occur in practice as an unescaped newline would not be
+	/// parsed as a string. Non-raw Lua strings cannot contain new lines.
+	UnescapedNewline,
+	/// A backslash at the end of the string with no character following it.\
+	/// As with [`Self::UnescapedNewline`], this error should never occur in practice as a
+	/// trailing backslash would cause the string to fail to lex in the first place.
+	TrailingBackslash,
+}
+
+impl std::error::Error for StringParseError { }
+impl std::fmt::Display for StringParseError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		use StringParseError::*;
+
+		match *self {
+			InvalidEscapeSequence(c) => write!(f, "Invalid escape sequence: \\{}", c as char),
+			UnexpectedEndOfHexSequence => write!(f, "Unexpected end of string during hex escape"),
+			InvalidHexSequence(hi, lo) => write!(f, "Invalid hex escape sequence: \\x{}{}", hi as char, lo as char),
+			UnexpectedEndOfDecimalSequence => write!(f, "Unexpected end of string during decimal escape"),
+			InvalidDecimalSequence(a, b, c) => write!(f, "Invalid decimal escape sequence: \\{}{}{}", a as char, b as char, c as char),
+			UnescapedNewline => write!(f, "Unescaped newline in string"),
+			PoorlyFormedUnicodeEscape => write!(f, "Expected '{{' after \\u in Unicode escape"),
+			UnexpectedEndOfUnicodeEscape => write!(f, "Unexpected end of string during Unicode escape"),
+			UnexpectedContinuationOfUnicodeEscape => write!(f, "Expected end of Unicode escape sequence after 3 digits"),
+			InvalidCharUnicodeEscape(c) => write!(f, "Invalid character '{}' in Unicode escape", c as char),
+			InvalidUnicodeCodepoint(c) => write!(f, "Invalid Unicode code point: U+{c:X}"),
+			TrailingBackslash => write!(f, "Trailing backslash in string"),
+		}
+	}
+}
+
+impl<'s> String<'s> {
+	pub fn new(raw: bool, data: &'s BStr) -> Self {
+		Self { raw, data }
+	}
+	pub fn raw(data: &'s BStr) -> Self {
+		Self::new(true, data)
+	}
+
+	pub fn is_raw(&self) -> bool {
+		self.raw
+	}
+
+	pub fn data(&self) -> &'s BStr {
+		self.data
+	}
+
+	pub fn parse_data(&self) -> Result<std::borrow::Cow<'s, BStr>, StringParseError> {
+		use StringParseError::*;
+
+		if self.raw || !self.data.contains(&b'\\') {
+			return Ok(self.data.into());
+		}
+
+		let mut buf = bstr::BString::from(Vec::with_capacity(self.data.len()));
+		let mut chars = self.data.iter().cloned().peekable();
+
+		//TODO:
+		// Technically I think I'm meant to replace any newline-style char within long-form strings with raw newlines?
+		// Seems like a lot of work...
+
+		while let Some(c) = chars.next() {
+			if c == b'\\' {
+				// It's technically impossible for a non-raw string to end with a single backslash.
+				match chars.next().ok_or(TrailingBackslash)? {
+					b'a' => buf.push(b'\x07'), // bell.
+					b'b' => buf.push(b'\x08'), // back space.
+					b'f' => buf.push(b'\x0b'), // form feed.
+					b'n' => buf.push(b'\n'),   // newline.
+					b'r' => buf.push(b'\r'),   // carriage return.
+					b't' => buf.push(b'\t'),   // horizontal tab.
+					b'v' => buf.push(b'\x0b'), // vertical tab.
+					b'\\' => buf.push(b'\\'),  // backslash.
+					b'"' => buf.push(b'"'),    // double quote.
+					b'\'' => buf.push(b'\''),  // single quote.
+					b'\n' => buf.push(b'\n'),  // line continuation ('Short strings' can span multiple lines if each line ends with a backslash).
+					b'z' => while chars.next_if(|c| c.is_ascii_whitespace()).is_some() { }, // skip following whitespace.
+					b'x' => { // hex byte sequences.
+						let hi = chars.next().ok_or(UnexpectedEndOfHexSequence)?.to_ascii_lowercase();
+						let lo = chars.next().ok_or(UnexpectedEndOfHexSequence)?.to_ascii_lowercase();
+						if !hi.is_ascii_hexdigit() || !lo.is_ascii_hexdigit() {
+							return Err(InvalidHexSequence(hi, lo));
+						}
+
+						let hi = hi - if hi.is_ascii_digit() { b'0' } else { b'a' - 10 };
+						let lo = lo - if lo.is_ascii_digit() { b'0' } else { b'a' - 10 };
+						let byte = hi * 16 + lo;
+
+						buf.push(byte);
+					},
+					digit if digit.is_ascii_digit() => { // decimal byte sequences.
+						let (a, b, c) = (
+							digit,
+							chars.next().ok_or(UnexpectedEndOfDecimalSequence)?,
+							chars.next().ok_or(UnexpectedEndOfDecimalSequence)?,
+						);
+
+						if !b.is_ascii_digit() || !c.is_ascii_digit() {
+							return Err(InvalidDecimalSequence(a, b, c));
+						}
+
+						let a = a - b'0';
+						let b = b - b'0';
+						let c = c - b'0';
+						let byte = a * 100 + b * 10 + c;
+
+						buf.push(byte);
+					},
+					b'u' => { // Unicode code points.
+						if chars.next() != Some(b'{') {
+							return Err(PoorlyFormedUnicodeEscape);
+						}
+
+						let mut codepoint = 0u32;
+
+						let mut next_digit = || {
+							let c = chars.next().ok_or(UnexpectedEndOfUnicodeEscape)?.to_ascii_lowercase();
+							if c == b'}' {
+								return Ok(false);
+							}
+
+							if !c.is_ascii_hexdigit() {
+								return Err(InvalidCharUnicodeEscape(c));
+							}
+
+							let digit = (c - if c.is_ascii_digit() { b'0' } else { b'a' - 10 }) as u32;
+							codepoint = codepoint * 16 + digit;
+
+							Ok(true)
+						};
+
+						// A limit of three hex digits.
+						if next_digit()? && next_digit()? && next_digit()? {
+							return Err(UnexpectedContinuationOfUnicodeEscape);
+						}
+
+						// Lua allows codepoints less than 2^31
+						if codepoint >= 2^31 {
+							return Err(InvalidUnicodeCodepoint(codepoint));
+						}
+
+						let ch = char::from_u32(codepoint).ok_or(InvalidUnicodeCodepoint(codepoint))?;
+
+						buf.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes());
+					},
+					other => return Err(InvalidEscapeSequence(other)),
+				}
+			} else {
+				if c == b'\n' {
+					return Err(UnescapedNewline);
+				}
+
+				buf.push(c);
+			}
+		}
+
+		Ok(buf.into())
+	}
 }
 
 impl std::fmt::Display for Token<'_> {
@@ -342,7 +535,7 @@ impl std::fmt::Display for Token<'_> {
 		match self {
 			Token::Number(val) => write!(f, "Number({})", val.val()),
 			Token::Identifier(name) => write!(f, "Identifier({name:?})"),
-			Token::String((_, s)) => write!(f, "String('{s}')"),
+			Token::String(String { data, .. }) => write!(f, "String('{data}')"),
 			_ => write!(f, "{}", self.tok_type()),
 		}
 	}
@@ -411,7 +604,7 @@ mod tests {
 			Token::Local,
 			Token::Identifier(lexer.get_ident("str")),
 			Token::Assign,
-			Token::String((false, BStr::new(b"Hello, World!"))),
+			Token::String(String::new(false, BStr::new(b"Hello, World!"))),
 			Token::LineTerm,
 			Token::Label,
 			Token::Identifier(lexer.get_ident("my_label")),
@@ -450,7 +643,7 @@ mod tests {
 			Token::Local,
 			Token::Identifier(lexer.get_ident("s")),
 			Token::Assign,
-			Token::String((false, BStr::new(b"Hello, \xFF World!"))),
+			Token::String(String::new(false, BStr::new(b"Hello, \xFF World!"))),
 			Token::LineTerm,
 		];
 
