@@ -36,43 +36,47 @@ impl CallType {
 
 		Ok(match self {
 			CallType::Args => {
-				let mut head = lexer.next_must()?;
-
 				let func_slot = state.reserve_slot_u8();
 				left.set_to_slot(lexer, scope, state, Loc::Slot(func_slot))?;
 
-				// Special case zero arg calls.
-				if head == Token::ParenClose {
-					return Ok(ParsedCall {
-						func_slot,
-						arg_count: 0,
-						span,
-					});
-				}
-
-				let mut arg_count = 0;
-				let initial_slots_used = state.slots_used();
-
-				// Parse arguments until we hit the closing parenthesis.
-				loop {
-					arg_count += 1;
-					state.set_slots_used(initial_slots_used + arg_count);
-
-					let arg_expr = super::parse_expr(head, lexer, scope, state)?;
-					arg_expr.set_to_slot(lexer, scope, state, Loc::Slot(func_slot + arg_count))?;
-					
-					match lexer.next_must()? {
-						Token::Comma => head = lexer.next_must()?,
-						Token::ParenClose => break,
-						tok => Err(format!("Expected ',' or ')', found {tok:?}"))?,
-					}
-				}
+				let arg_count = Self::parse_params(lexer, scope, state, func_slot + 1)?;
 
 				ParsedCall { func_slot, arg_count, span }
 			},
-			CallType::Method => todo!(),
-			CallType::Table => todo!(),
-			CallType::String(_) => todo!(),
+			CallType::Method => {
+				let method_name = expect_tok!(lexer, Token::Identifier(ident) => ident)?;
+				expect_tok!(lexer, Token::ParenOpen)?;
+				let method_name_idx = state.string_idx(camento_lexer::String::raw(lexer.resolve_ident(method_name).into()))?;
+
+				let func_slot = state.reserve_slot_u8();
+				
+				let obj_slot = state.reserve_slot();
+				left.set_to_slot(lexer, scope, state, obj_slot)?;
+
+				state.emit(scope, Op::Get(Loc::Slot(func_slot), obj_slot.into(), Const::String(method_name_idx).into()), span);
+
+				let arg_count = 1 + Self::parse_params(lexer, scope, state, func_slot + 2)?;
+
+				ParsedCall { func_slot, arg_count, span }
+			},
+			CallType::Table => {
+				let func_slot = state.reserve_slot_u8();
+				left.set_to_slot(lexer, scope, state, Loc::Slot(func_slot))?;
+
+				// This will be in the slot immediately following the function.
+				let arg_slot = super::parse_table_init(Token::BraceOpen, lexer, scope, state)?;
+				debug_assert_eq!(arg_slot, Loc::Slot(func_slot + 1), "Expected table argument to be placed in the slot immediately following the function slot");
+
+				ParsedCall { func_slot, arg_count: 1, span }
+			},
+			CallType::String(idx) => {
+				let func_slot = state.reserve_slot_u8();
+				left.set_to_slot(lexer, scope, state, Loc::Slot(func_slot))?;
+
+				Expr::Constant(Const::String(idx)).to_slot(lexer, scope, state)?;
+
+				ParsedCall { func_slot, arg_count: 1, span }
+			},
 		})
 	}
 
@@ -84,6 +88,35 @@ impl CallType {
 			Token::String(s) => CallType::String(state.string_idx(s)?),
 			_ => return Ok(None),
 		}))
+	}
+
+	fn parse_params<'s>(lexer: &mut Lexer<'s>, scope: &mut (impl ParseScope<'s> + ?Sized), state: &mut FuncState<'_, 's>, args_base_slot: u8) -> Result<u8, Error<'s>> {
+		let mut head = lexer.next_must()?;
+
+		// Special case zero arg calls.
+		if head == Token::ParenClose {
+			return Ok(0);
+		}
+
+		let mut arg_count = 0;
+		let initial_slots_used = state.slots_used();
+
+		// Parse arguments until we hit the closing parenthesis.
+		loop {
+			let arg_expr = super::parse_expr(head, lexer, scope, state)?;
+			arg_expr.set_to_slot(lexer, scope, state, Loc::Slot(args_base_slot + arg_count))?;
+			
+			arg_count += 1;
+			state.set_slots_used(initial_slots_used + arg_count);
+
+			match lexer.next_must()? {
+				Token::Comma => head = lexer.next_must()?,
+				Token::ParenClose => break,
+				tok => Err(format!("Expected ',' or ')', found {tok:?}"))?,
+			}
+		}
+
+		Ok(arg_count)
 	}
 }
 
