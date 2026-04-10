@@ -242,8 +242,9 @@ fn parse_stmt<'s>(_trivia: Vec<&'s [u8]>, head: Token<'s>, lexer: &mut Lexer<'s>
 		Token::Do => parse_do_block(lexer, scope, state)?,
 		Token::If => parse_if_statement(lexer, scope, state)?,
 		Token::While => loops::parse_while(lexer, scope, state)?,
+		Token::Repeat => loops::parse_repeat(lexer, scope, state)?,
 		Token::For => todo!(),
-		Token::Break => scope.emit_break(state, lexer.src_index(), None)?,
+		Token::Break => scope.emit_break(state, lexer.src_index(), None.into())?,
 		Token::Goto => {
 			let span = lexer.src_index();
 			let label = expect_tok!(lexer, Token::Identifier(ident) => ident)?;

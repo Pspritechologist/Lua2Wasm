@@ -1,6 +1,6 @@
-use crate::parsing::LexerExt;
+use crate::parsing::{LexerExt, scopes::BreakCond};
 use super::{Error, ParseScope, Op, VariableScope, FuncState, expect_tok};
-use camento_lexer::{Lexer, Token};
+use camento_lexer::{IdentKey, Lexer, Token};
 
 struct LoopScope<'a, 's> {
 	parent: &'a mut dyn ParseScope<'s>,
@@ -15,8 +15,12 @@ impl<'a, 's> LoopScope<'a, 's> {
 impl<'a, 's> ParseScope<'s> for LoopScope<'a, 's> {
 	fn parent(&mut self) -> &mut dyn ParseScope<'s> { self.parent }
 
-	fn emit_break(&mut self, state: &mut FuncState<'_, 's>, span: usize, cond: Option<super::Expr>) -> Result<(), Error<'s>> {
-		state.emit(self, cond.map_or(Op::Break, Op::BreakIfNot), span);
+	fn emit_break(&mut self, state: &mut FuncState<'_, 's>, span: usize, cond: BreakCond) -> Result<(), Error<'s>> {
+		state.emit(self, match cond {
+			BreakCond::Unconditional => Op::Break,
+			BreakCond::IfTrue(cond) => Op::BreakIf(cond),
+			BreakCond::IfFalse(cond) => Op::BreakIfNot(cond),
+		}, span);
 		Ok(())
 	}
 }
@@ -33,7 +37,7 @@ pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, st
 		Some(false) | //TODO: Don't compile unreachable loops.
 		None => {
 			let span = lexer.src_index();
-			scope.emit_break(state, span, Some(cond))?;
+			scope.emit_break(state, span, BreakCond::IfFalse(cond))?;
 		}
 	}
 
@@ -47,6 +51,33 @@ pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, st
 
 		super::parse_stmt(trivia, tok, lexer, &mut scope, state)?;
 	}
+
+	let mut loop_scope = scope.finalize_scope();
+
+	// Jump back to the start of the loop.
+	state.emit(&mut loop_scope.parent, Op::Continue, lexer.src_index());
+
+	state.emit(&mut loop_scope.parent, Op::EndLoop, lexer.src_index());
+
+	Ok(())
+}
+
+pub fn parse_repeat<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
+	state.emit(scope, Op::StartLoop, lexer.src_index());
+
+	let mut scope = VariableScope::new(LoopScope::new(scope));
+
+	loop {
+		let (tok, trivia) = lexer.next_must_with_trivia()?;
+		if matches!(tok, Token::Until) {
+			break;
+		}
+
+		super::parse_stmt(trivia, tok, lexer, &mut scope, state)?;
+	}
+	
+	let cond = super::parse_expr(lexer.next_must()?, lexer, &mut scope, state)?;
+	scope.emit_break(state, lexer.src_index(), BreakCond::IfTrue(cond))?;
 
 	let mut loop_scope = scope.finalize_scope();
 

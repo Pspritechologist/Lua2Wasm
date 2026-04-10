@@ -13,7 +13,7 @@ pub trait ParseScope<'s> {
 	fn emit_goto(&mut self, state: &mut FuncState<'_, 's>, label: IdentKey, span: usize, closed_base: Option<u8>) -> Result<(), Error<'s>> { self.parent().emit_goto(state, label, span, closed_base) }
 	fn label_exists(&mut self, label: IdentKey) -> bool { self.parent().label_exists(label) }
 	fn merge_missing_labels(&mut self, other: Vec<(IdentKey, usize, Option<u8>)>) { self.parent().merge_missing_labels(other) }
-	fn emit_break(&mut self, state: &mut FuncState<'_, 's>, span: usize, cond: Option<super::Expr>) -> Result<(), Error<'s>> { self.parent().emit_break(state, span, cond) }
+	fn emit_break(&mut self, state: &mut FuncState<'_, 's>, span: usize, cond: BreakCond) -> Result<(), Error<'s>> { self.parent().emit_break(state, span, cond) }
 	fn emit_continue(&mut self, state: &mut FuncState<'_, 's>, span: usize) -> Result<(), Error<'s>> { self.parent().emit_continue(state, span) }
 
 	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Loc, Error<'s>> { self.parent().new_local(lexer, state, name) }
@@ -22,6 +22,22 @@ pub trait ParseScope<'s> {
 	fn needs_closing(&mut self) -> bool { self.parent().needs_closing() }
 
 	fn parent(&'_ mut self) -> &'_ mut dyn ParseScope<'s>;
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakCond {
+	Unconditional,
+	IfFalse(super::Expr),
+	IfTrue(super::Expr),
+}
+impl From<super::Expr> for BreakCond {
+	fn from(value: super::Expr) -> Self {
+		Self::IfFalse(value)
+	}
+}
+impl From<Option<super::Expr>> for BreakCond {
+	fn from(value: Option<super::Expr>) -> Self {
+		value.map_or(Self::Unconditional, Self::IfFalse)
+	}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -57,7 +73,7 @@ impl<'s> ParseScope<'s> for RootScope {
 		unreachable!()
 	}
 
-	fn emit_break(&mut self, _state: &mut FuncState<'_, 's>, _span: usize, _cond: Option<super::Expr>) -> Result<(), Error<'s>> {
+	fn emit_break(&mut self, _state: &mut FuncState<'_, 's>, _span: usize, _cond: BreakCond) -> Result<(), Error<'s>> {
 		Err("Break statement not within a loop".into())
 	}
 	fn emit_continue(&mut self, _state: &mut FuncState<'_, 's>, _span: usize) -> Result<(), Error<'s>> {

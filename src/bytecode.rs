@@ -74,6 +74,7 @@ pub enum Operation {
 	EndIf,
 	StartLoop,
 	Break,
+	BreakIf(Expr),
 	BreakIfNot(Expr),
 	Continue,
 	ContIfNot(Expr),

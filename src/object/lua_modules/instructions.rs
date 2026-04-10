@@ -134,6 +134,9 @@ fn compile_op(state: &mut LuaModuleState, ops: &mut impl Iterator<Item=Op>, seq:
 		Op::StartIf(cond) => compile_if(state, ops, seq, cond),
 		Op::StartLoop => compile_loop(state, ops, seq),
 		Op::Break => { seq.br(1); }, // A depth of 1 points to the outer block, for breaking.
+		Op::BreakIf(cond) => {
+			seq.expr(state, cond).call(state.module_state.extern_fns.get_truthy).br_if(1);
+		},
 		Op::BreakIfNot(cond) => {
 			seq.expr(state, cond).call(state.module_state.extern_fns.get_truthy).i32_eqz().br_if(1);
 		},
