@@ -4,13 +4,14 @@ use crate::parsing::expressions::Expr;
 pub enum Loc {
 	Slot(u8),
 	UpValue(u8),
+	Capture(u8),
 	Global(usize),
 }
 impl Loc {
 	pub fn as_slot(self) -> Option<u8> {
 		match self {
 			Loc::Slot(slot) => Some(slot),
-			Loc::UpValue(_) | Loc::Global(_) => None,
+			Loc::UpValue(_) | Loc::Capture(_) | Loc::Global(_) => None,
 		}
 	}
 

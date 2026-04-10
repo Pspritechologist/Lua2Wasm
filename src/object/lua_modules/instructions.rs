@@ -1,5 +1,5 @@
 use crate::{
-	object::{ClosureRef, InstructionSink, ValueExt},
+	object::{InstructionSink, ValueExt},
 	bytecode::{Loc, Operation as Op, RetKind},
 	parsing::expressions::{Const, Expr},
 };
@@ -46,10 +46,11 @@ impl LuaInstSinkExt for InstructionSink<'_> {
 }
 
 impl Loc {
-	pub fn push_get(self, state: &mut LuaModuleState, seq: &mut InstructionSink) {
+	pub(super) fn push_get(self, state: &mut LuaModuleState, seq: &mut InstructionSink) {
 		match self {
 			Loc::Slot(idx) => { seq.local_get(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
+			Loc::Capture(idx) => todo!(),
 			Loc::Global(idx) => {
 				seq.global_get(state.module_state.global_table)
 					.lua_str(state, idx)
@@ -58,10 +59,11 @@ impl Loc {
 		};
 	}
 
-	pub fn push_set(self, state: &mut LuaModuleState, seq: &mut InstructionSink) {
+	pub(super) fn push_set(self, state: &mut LuaModuleState, seq: &mut InstructionSink) {
 		match self {
 			Loc::Slot(idx) => { seq.local_set(state.locals[&idx]); },
 			Loc::UpValue(idx) => todo!(),
+			Loc::Capture(idx) => todo!(),
 			Loc::Global(idx) => {
 				seq.global_get(state.module_state.global_table)
 					.lua_str(state, idx)
@@ -72,7 +74,7 @@ impl Loc {
 }
 
 impl Expr {
-	pub fn push(self, state: &mut LuaModuleState, seq: &mut InstructionSink) {
+	pub(super) fn push(self, state: &mut LuaModuleState, seq: &mut InstructionSink) {
 		match self {
 			Expr::Constant(Const::Nil) => Value::nil().push(seq),
 			Expr::Constant(Const::Bool(b)) => Value::bool(b).push(seq),
@@ -82,6 +84,7 @@ impl Expr {
 			},
 			Expr::Slot(idx) => Loc::Slot(idx).push_get(state, seq),
 			Expr::UpValue(idx) => Loc::UpValue(idx).push_get(state, seq),
+			Expr::Capture(idx) => Loc::Capture(idx).push_get(state, seq),
 			Expr::Global(idx) => Loc::Global(idx).push_get(state, seq),
 			Expr::VarRet => {
 				seq.i32_const(0)

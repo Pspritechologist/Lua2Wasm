@@ -18,6 +18,7 @@ pub trait ParseScope<'s> {
 
 	fn new_local(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey) -> Result<Loc, Error<'s>> { self.parent().new_local(lexer, state, name) }
 	fn resolve_name(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> { self.parent().resolve_name(lexer, state, name, is_capturing) }
+	fn new_capture(&mut self) -> Result<u8, Error<'s>> { self.parent().new_capture() }
 	fn total_locals(&mut self) -> u8 { self.parent().total_locals() }
 	fn needs_closing(&mut self) -> bool { self.parent().needs_closing() }
 
@@ -47,19 +48,19 @@ pub enum Named {
 	Global(usize),
 }
 
-/// The root parsing scope.\
-/// All methods on [`ParseState`] must be implemented here as
-/// attempting to call `parent()` will panic.
+/// The root parsing scope.
 #[derive(Debug, Clone)]
 pub struct RootScope {
 	env_ident: IdentKey,
+	captures: u8,
 }
 impl RootScope {
-	pub fn new_root<'s>(lexer: &mut Lexer<'s>) -> VariableScope<'s, Self> {
-		VariableScope::new(Self { env_ident: lexer.get_ident("_ENV") })
+	pub fn new_root<'s>(lexer: &mut Lexer<'s>, state: &FuncState) -> VariableScope<'s, Self> {
+		VariableScope::new(Self { env_ident: lexer.get_ident("_ENV"), captures: 0 }, state)
 	}
 }
 
+///? All methods on [`ParseScope`] must be implemented here as attempting to call `parent()` will panic.
 impl<'s> ParseScope<'s> for RootScope {
 	fn parent(&mut self) -> &mut dyn ParseScope<'s> { unreachable!() }
 
@@ -89,17 +90,29 @@ impl<'s> ParseScope<'s> for RootScope {
 			// The 'main' function of a script always has exactly one upvalue, _ENV, the global environment.
 			Ok(Named::UpValue(0))
 		} else {
+			// Otherwise, any unbounded named accesses are globals.
 			let idx = state.string_idx(camento_lexer::String::raw(lexer.resolve_ident(name).into()))?;
 			Ok(Named::Global(idx))
 		}
+	}
+
+	fn new_capture(&mut self) -> Result<u8, Error<'s>> {
+		if self.captures == 255 {
+			return Err("Too many captured variables in closure (max 255)".into());
+		}
+
+		let idx = self.captures;
+		self.captures += 1;
+
+		Ok(idx)
 	}
 
 	fn total_locals(&mut self) -> u8 { 0 }
 }
 
 impl<'s> VariableScope<'s, RootScope> {
-	pub fn finalize(self, state: &mut FuncState<'_, 's>, lexer: &Lexer<'s>) -> Result<(), Error<'s>> {
-		self.into_inner(&mut *state, lexer).map(|_| ())
+	pub fn finalize(self, state: &mut FuncState<'_, 's>, lexer: &Lexer<'s>) -> Result<u8, Error<'s>> {
+		self.into_inner(&mut *state, lexer).map(|s| s.captures)
 	}
 }
 
@@ -108,12 +121,27 @@ impl<'s> VariableScope<'s, RootScope> {
 #[derive(Debug, Default)]
 pub struct VariableScope<'s, P: ParseScope<'s>> {
 	parent: P,
-	locals: SparseSecondaryMap<IdentKey, u8>,
+	/// The number of operations already emitted when this scope was created.\
+	/// In other words, the index of the first operation emitted within this scope.
+	ops_base: usize,
+	locals: SparseSecondaryMap<IdentKey, LocalData>,
 	local_count: u8,
 	labels: SparseSecondaryMap<IdentKey, LabelData>,
 	missing_labels: Vec<(IdentKey, usize, Option<u8>)>,
 	has_captured_locals: bool,
 	pd: std::marker::PhantomData<&'s ()>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LocalData {
+	slot: u8,
+	op_index: usize,
+	captured: Option<u8>,
+}
+impl LocalData {
+	fn new(slot: u8, op_index: usize) -> Self {
+		Self { slot, op_index, captured: None }
+	}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -130,9 +158,10 @@ impl LabelData {
 }
 
 impl<'s, P: ParseScope<'s>> VariableScope<'s, P> {
-	pub fn new(parent: P) -> Self {
+	pub fn new(parent: P, state: &FuncState) -> Self {
 		Self {
 			parent,
+			ops_base: state.ops().len(),
 			labels: Default::default(),
 			locals: Default::default(),
 			local_count: 0,
@@ -142,13 +171,19 @@ impl<'s, P: ParseScope<'s>> VariableScope<'s, P> {
 		}
 	}
 
-	pub fn finalize_scope(self) -> P {
+	/// Used to finalize a nested scope, such as an if, do, or while.
+	pub fn finalize_scope(mut self, state: &mut FuncState<'_, 's>) -> P {
+		self.handle_locals(state);
+
 		let Self { mut parent, missing_labels, .. } = self;
 		parent.merge_missing_labels(missing_labels);
 		parent
 	}
 
-	pub fn into_inner(self, _state: &mut FuncState<'_, 's>, lexer: &Lexer<'s>) -> Result<P, Error<'s>> {
+	/// Used to finalize a non-nested scope, such as a function.
+	pub fn into_inner(mut self, state: &mut FuncState<'_, 's>, lexer: &Lexer<'s>) -> Result<P, Error<'s>> {
+		self.handle_locals(state);
+
 		let Self { parent, missing_labels, .. } = self;
 
 		// Ensure all missing labels were resolved.
@@ -157,6 +192,78 @@ impl<'s, P: ParseScope<'s>> VariableScope<'s, P> {
 		}
 
 		Ok(parent)
+	}
+
+	fn handle_locals<'a>(&mut self, state: &mut FuncState<'a, 's>) {
+		// A simple visitor setup, used to modify the operations based on what
+		// locals end up being captured.
+		// It's kinda silly to have this all crammed in here, but this was never intended
+		// to be a multipass compiler.
+
+		struct LocalsVisitor<'a> {
+			locals: &'a SparseSecondaryMap<IdentKey, LocalData>,
+			op_index: usize,
+		}
+		#[auto_impl::auto_impl(&mut)]
+		trait VisitLocals {
+			fn visit(&mut self, v: &LocalsVisitor);
+		}
+		impl<A: VisitLocals, B: VisitLocals> VisitLocals for (A, B) {
+			fn visit(&mut self, v: &LocalsVisitor) { self.0.visit(v); self.1.visit(v); }
+		}
+		impl<A: VisitLocals, B: VisitLocals, C: VisitLocals> VisitLocals for (A, B, C) {
+			fn visit(&mut self, v: &LocalsVisitor) { self.0.visit(v); self.1.visit(v); self.2.visit(v); }
+		}
+		impl VisitLocals for super::Op {
+			fn visit(&mut self, v: &LocalsVisitor) {
+				use super::Op;
+				match self {
+					Op::LoadTab(d) | Op::LoadClosure(d, _) => d.visit(v),
+					Op::Set(t, k, r) => (t, k, r).visit(v),
+					Op::Get(d, l, r) |
+					Op::Add(d, l, r) | Op::Sub(d, l, r) | Op::Mul(d, l, r) | Op::Div(d, l, r) | Op::Mod(d, l, r) | Op::Pow(d, l, r) |
+					Op::Eq(d, l, r) | Op::Neq(d, l, r) | Op::Lt(d, l, r) | Op::Lte(d, l, r) | Op::Gt(d, l, r) | Op::Gte(d, l, r) |
+					Op::BitAnd(d, l, r) | Op::BitOr(d, l, r) | Op::BitXor(d, l, r) | Op::BitShL(d, l, r) | Op::BitShR(d, l, r) |
+					Op::Concat(d, l, r) => (d, l, r).visit(v),
+					Op::Neg(d, e) | Op::Not(d, e) | Op::BitNot(d, e) | Op::Len(d, e) |
+					Op::Copy(d, e) => (d, e).visit(v),
+					Op::StartIf(e) | Op::ElseIf(e) | Op::BreakIf(e) | Op::BreakIfNot(e) | Op::ContIfNot(e) => e.visit(v),
+					Op::Call { .. } | Op::Ret { .. } |
+					Op::Else | Op::EndIf | Op::StartLoop | Op::Break |
+					Op::Continue | Op::EndLoop => (),
+					Op::Close(_) => todo!(),
+				}
+			}
+		}
+
+		// These are the meaningful impls.
+
+		impl VisitLocals for super::Expr {
+			fn visit(&mut self, v: &LocalsVisitor) {
+				if let super::Expr::Slot(s) = self && let Some(local_data) = v.locals.values().find(|l| l.slot == *s) {
+					//TODO: I'm not 100% sure this `>` check is correct. When does a capture become a capture?
+					if v.op_index > local_data.op_index && let Some(capture) = local_data.captured {
+						*self = super::Expr::Capture(capture);
+					}
+				}
+			}
+		}
+		impl VisitLocals for super::Loc {
+			fn visit(&mut self, v: &LocalsVisitor) {
+				if let super::Loc::Slot(s) = self && let Some(local_data) = v.locals.values().find(|l| l.slot == *s) {
+					//TODO: I'm not 100% sure this `>` check is correct. When does a capture become a capture?
+					if v.op_index > local_data.op_index && let Some(capture) = local_data.captured {
+						*self = super::Loc::Capture(capture);
+					}
+				}
+			}
+		}
+
+		let mut visitor = LocalsVisitor { locals: &self.locals, op_index: self.ops_base };
+		for op in &mut state.ops_mut()[self.ops_base..] {
+			visitor.op_index += 1;
+			op.visit(&visitor);
+		}
 	}
 
 	pub fn local_base(&mut self) -> u8 {
@@ -186,9 +293,12 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 	}
 
 	fn resolve_name(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> {
-		if let Some(&slot) = self.locals.get(name) {
+		if let Some(LocalData { slot, captured, .. }) = self.locals.get_mut(name) {
 			self.has_captured_locals |= is_capturing;
-			return Ok(Named::Local(slot));
+			if is_capturing && captured.is_none() {
+				*captured = Some(self.parent.new_capture()?);
+			}
+			return Ok(Named::Local(*slot));
 		}
 
 		self.parent.resolve_name(lexer, state, name, is_capturing)

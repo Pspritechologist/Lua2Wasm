@@ -21,6 +21,7 @@ pub struct ParsedFunction {
 	pub frame_size: u8,
 	pub param_count: u8,
 	pub upvalues: Box<[Upvalue]>,
+	pub captures: u8,
 	// pub exported: Option<(String, bstr::BString)>,
 }
 
@@ -131,6 +132,7 @@ impl<'a, 's> FuncState<'a, 's> {
 struct ClosureScope<'a, 's> {
 	outer_scope: &'a mut dyn ParseScope<'s>,
 	upvalues: slotmap::SparseSecondaryMap<IdentKey, (u8, Upvalue)>,
+	captures: u8,
 }
 impl<'a, 's> ClosureScope<'a, 's> {
 	fn new(outer_scope: &'a mut dyn ParseScope<'s>, lexer: &mut Lexer<'s>) -> Self {
@@ -138,13 +140,22 @@ impl<'a, 's> ClosureScope<'a, 's> {
 			outer_scope,
 			// The 0th Upvalue of a function is always the global environment.
 			upvalues: FromIterator::from_iter([(lexer.get_ident("_ENV"), (0, Upvalue::ParentUpValue(0)))]),
+			captures: 0,
 		}
+	}
+
+	fn insert_up_value(&mut self, name: IdentKey, upval: Upvalue) -> Result<u8, Error<'s>> {
+		let idx = self.upvalues.len().try_into().map_err(|_| "Too many upvalues :(")?;
+		self.upvalues.insert(name, (idx, upval));
+		Ok(idx)
 	}
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Upvalue {
+	/// An Upvalue located in the parent function's stack frame, by index.
 	ParentSlot(u8),
+	/// An Upvalue located via the parent function's own UpValues, by index.
 	ParentUpValue(u8),
 }
 
@@ -182,18 +193,21 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 		}
 
 		Ok(match self.outer_scope.resolve_name(lexer, state, name, true)? {
-			Named::Local(slot) => {
-				let upval_idx = self.upvalues.len().try_into().expect("Too many upvalues :(");
-				self.upvalues.insert(name, (upval_idx, Upvalue::ParentSlot(slot)));
-				Named::UpValue(upval_idx)
-			},
-			Named::UpValue(idx) => {
-				let upval_idx = self.upvalues.len().try_into().expect("Too many upvalues :(");
-				self.upvalues.insert(name, (upval_idx, Upvalue::ParentUpValue(idx)));
-				Named::UpValue(upval_idx)
-			},
+			Named::Local(slot) => Named::UpValue(self.insert_up_value(name, Upvalue::ParentSlot(slot))?),
+			Named::UpValue(idx) => Named::UpValue(self.insert_up_value(name, Upvalue::ParentUpValue(idx))?),
 			Named::Global(name) => Named::Global(name),
 		})
+	}
+
+	fn new_capture(&mut self) -> Result<u8, Error<'s>> {
+		if self.captures == 255 {
+			return Err("Too many captured variables in closure (max 255)".into());
+		}
+
+		let idx = self.captures;
+		self.captures += 1;
+
+		Ok(idx)
 	}
 
 	fn total_locals(&mut self) -> u8 { 0 }
@@ -201,7 +215,7 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 
 pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>, state: &mut FuncState<'_, 's>, name: Option<super::IdentKey>, span: usize) -> Result<ParsedFunction, Error<'s>> {
 	let mut closure_state = FuncState::new(state.constants);
-	let mut closure_scope = VariableScope::new(ClosureScope::new(&mut scope, lexer));
+	let mut closure_scope = VariableScope::new(ClosureScope::new(&mut scope, lexer), &closure_state);
 
 	expect_tok!(lexer, Token::ParenOpen)?;
 
@@ -237,7 +251,11 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 		closure_state.emit(&mut closure_scope, Op::empty_ret(), lexer.src_index());
 	}
 
-	let upvalues = closure_scope.into_inner(&mut closure_state, lexer)?.upvalues;
+	let (upvalues, captures) = {
+		let inner = closure_scope.into_inner(&mut closure_state, lexer)?;
+		(inner.upvalues, inner.captures)
+	};
+
 	let upvalues = {
 		let mut buf = Box::new_uninit_slice(upvalues.len());
 		let mut assert_buf = Vec::new();
@@ -270,6 +288,7 @@ pub fn parse_function<'s>(lexer: &mut Lexer<'s>, mut scope: impl ParseScope<'s>,
 		debug: Some(debug),
 		frame_size: closure_state.max_slot_use,
 		upvalues,
+		captures,
 		// exported: None,
 	};
 

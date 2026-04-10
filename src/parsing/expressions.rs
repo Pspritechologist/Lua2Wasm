@@ -44,6 +44,7 @@ pub enum Expr {
 	Constant(Const),
 	Slot(u8),
 	UpValue(u8),
+	Capture(u8),
 	Global(usize),
 	VarRet,
 	VarArgs,
@@ -65,6 +66,7 @@ impl Expr {
 		match loc {
 			Loc::Slot(slot) => Expr::Slot(slot),
 			Loc::UpValue(idx) => Expr::UpValue(idx),
+			Loc::Capture(idx) => Expr::Capture(idx),
 			Loc::Global(ident) => Expr::Global(ident),
 		}
 	}
@@ -74,6 +76,7 @@ impl Expr {
 			Expr::Slot(slot) => Loc::Slot(slot),
 			Expr::UpValue(idx) => Loc::UpValue(idx),
 			Expr::Global(ident) => Loc::Global(ident),
+			Expr::Capture(idx) => Loc::Capture(idx),
 			Expr::Constant(_) | Expr::VarRet |
 			Expr::VarArgs => return None,
 		})
@@ -114,6 +117,7 @@ impl Expr {
 		match self {
 			Expr::Constant(_) |
 			Expr::UpValue(_) |
+			Expr::Capture(_) |
 			Expr::Global(_) |
 			Expr::VarRet |
 			Expr::VarArgs => {

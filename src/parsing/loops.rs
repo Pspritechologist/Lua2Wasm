@@ -30,7 +30,7 @@ pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, st
 
 	let cond = super::parse_expr(lexer.next_must()?, lexer, scope, state)?;
 
-	let mut scope = VariableScope::new(LoopScope::new(scope));
+	let mut scope = VariableScope::new(LoopScope::new(scope), state);
 
 	match cond.as_const().map(|c| c.is_truthy()) {
 		Some(true) => (), // This is an infinite loop and no check need be compiled.
@@ -52,7 +52,7 @@ pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, st
 		super::parse_stmt(trivia, tok, lexer, &mut scope, state)?;
 	}
 
-	let mut loop_scope = scope.finalize_scope();
+	let mut loop_scope = scope.finalize_scope(state);
 
 	// Jump back to the start of the loop.
 	state.emit(&mut loop_scope.parent, Op::Continue, lexer.src_index());
@@ -65,7 +65,7 @@ pub fn parse_while<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, st
 pub fn parse_repeat<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, state: &mut FuncState<'_, 's>) -> Result<(), Error<'s>> {
 	state.emit(scope, Op::StartLoop, lexer.src_index());
 
-	let mut scope = VariableScope::new(LoopScope::new(scope));
+	let mut scope = VariableScope::new(LoopScope::new(scope), state);
 
 	loop {
 		let (tok, trivia) = lexer.next_must_with_trivia()?;
@@ -79,7 +79,7 @@ pub fn parse_repeat<'s>(lexer: &mut Lexer<'s>, scope: &mut dyn ParseScope<'s>, s
 	let cond = super::parse_expr(lexer.next_must()?, lexer, &mut scope, state)?;
 	scope.emit_break(state, lexer.src_index(), BreakCond::IfTrue(cond))?;
 
-	let mut loop_scope = scope.finalize_scope();
+	let mut loop_scope = scope.finalize_scope(state);
 
 	// Jump back to the start of the loop.
 	state.emit(&mut loop_scope.parent, Op::Continue, lexer.src_index());
