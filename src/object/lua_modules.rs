@@ -12,11 +12,24 @@ struct LuaModuleState {
 
 	strings: Box<[StringRef]>,
 	closures: Box<[Option<ClosureRef>]>,
+}
 
-	// Per-function data
+struct LuaFunctionState {
+	local_arg_count: u32,
+	local_last_shtack_ptr: u32,
 	locals: std::collections::BTreeMap<u8, u32>,
 	/// The distance from the last loop.
 	loop_depth: u32,
+}
+impl LuaFunctionState {
+	pub fn new(local_arg_count: u32, local_last_shtack_ptr: u32) -> Self {
+		Self {
+			local_arg_count,
+			local_last_shtack_ptr,
+			locals: Default::default(),
+			loop_depth: 0,
+		}
+	}
 }
 
 impl super::HasModuleState for LuaModuleState {
@@ -28,8 +41,6 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, pa
 		module_state: ModuleState::new_module(),
 		closures: vec![None; parsed.constants.closures().len() + 1].into_boxed_slice(),
 		strings: Default::default(),
-		locals: Default::default(),
-		loop_depth: 0,
 	};
 
 	state.strings = {
@@ -101,22 +112,21 @@ fn compile_lua_function(state: &mut LuaModuleState, func: &ParsedFunction) -> Cl
 }
 
 fn lua_function_compiler(func: &ParsedFunction) -> impl FnOnce(&mut LuaModuleState, &mut InstructionSink<'_>, u32) { |state, seq, current_fn| {
-	let arg_cnt = 0;
+	// Zero for the arg count as the input param, 1 for the local where we store the shtack ptr.
+	let mut f_state = LuaFunctionState::new(0, 1);
 
 	{
-		let mut temps = 0;
-		let mut name_buf = String::new();
+		let locals_offset = 2; // Account for the argument slot at 0 and the previous shtack pointer at slot 1.
+
 		let mut local_names = NameMap::new();
+		local_names.append(0, "__arg_count");
+		local_names.append(1, "__prev_shtack_ptr");
+		
 		for (i, slot) in (0..func.frame_size).enumerate() {
-			state.locals.insert(slot, i as u32 + 1); // Account for the argument slot at 0.
+			let slot_index = i as u32 + locals_offset;
+			f_state.locals.insert(slot, slot_index);
 			if let Some(debug) = func.debug.as_ref() {
-				local_names.append(i as u32 + 1, debug.get_local_name(slot).unwrap_or_else(|| {
-					use std::fmt::Write;
-					temps += 1;
-					name_buf.clear();
-					write!(&mut name_buf, "temp_{temps}").unwrap();
-					&name_buf
-				}));
+				local_names.append(slot_index, debug.get_local_name(slot).unwrap_or("<temp>"));
 			}
 		}
 
@@ -126,38 +136,36 @@ fn lua_function_compiler(func: &ParsedFunction) -> impl FnOnce(&mut LuaModuleSta
 	if func.param_count > 0 {
 		seq
 			// Get the number of arguments passed...
-			.local_get(arg_cnt)
+			.local_get(f_state.local_arg_count)
 			// And the number of arguments expected...
 			.i32_const(func.param_count.into())
 			// ... And then both again
-			.local_get(arg_cnt)
+			.local_get(f_state.local_arg_count)
 			.i32_const(func.param_count.into())
 			// Check if the number of arguments passed is less than the number of arguments expected.
 			.i32_lt_u()
 			// Choose the lower value.
 			.typed_select(ValType::I32)
 			// And store it for later use.
-			.local_set(arg_cnt);
+			.local_set(f_state.local_arg_count);
 
 		seq.block(BlockType::Empty);
 		for i in 0..func.param_count {
 			seq
-				.local_get(arg_cnt)
+				.local_get(f_state.local_arg_count)
 				.i32_const(i.into())
 				.i32_le_u()
 				.br_if(0)
 				.global_get(state.module_state.shtack_ptr)
 				.i64_load(MemArg { align: 3, offset: u64::from(i) * 8, memory_index: state.module_state.shtack_mem })
-				.local_set(state.locals[&i]);
+				.local_set(f_state.locals[&i]);
 		}
 		seq.end();
 	}
 
-	seq.operations(state, func.operations.iter().copied());
+	seq.operations(state, &mut f_state, func.operations.iter().copied());
 
 	if func.operations.last().is_none_or(|op| !matches!(op, Operation::Ret { .. })) {
 		seq.i32_const(0).return_();
 	}
-
-	state.locals.clear();
 } }
