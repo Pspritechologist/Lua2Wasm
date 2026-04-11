@@ -294,9 +294,18 @@ impl<'s, P: ParseScope<'s>> ParseScope<'s> for VariableScope<'s, P> {
 
 	fn resolve_name(&mut self, lexer: &Lexer<'s>, state: &mut FuncState<'_, 's>, name: IdentKey, is_capturing: bool) -> Result<Named, Error<'s>> {
 		if let Some(LocalData { slot, captured, .. }) = self.locals.get_mut(name) {
-			self.has_captured_locals |= is_capturing;
-			if is_capturing && captured.is_none() {
-				*captured = Some(self.parent.new_capture()?);
+			if is_capturing {
+				self.has_captured_locals = true;
+				// This is a little weird because we're basically lying about this being a local when it's actually a capture.
+				// It *should* be fine since we explicitly check `is_capturing` so the caller should know what to expect.
+				return Ok(Named::Local(match captured {
+					Some(capture) => *capture,
+					None => {
+						let capture = self.parent.new_capture()?;
+						*captured = Some(capture);
+						capture
+					},
+				}));
 			}
 			return Ok(Named::Local(*slot));
 		}

@@ -193,7 +193,8 @@ impl<'s> ParseScope<'s> for ClosureScope<'_, 's> {
 		}
 
 		Ok(match self.outer_scope.resolve_name(lexer, state, name, true)? {
-			Named::Local(slot) => Named::UpValue(self.insert_up_value(name, Upvalue::ParentSlot(slot))?),
+			// When `is_capturing` is true, the value of a `Named::Local` is actually a capture, and not a local.
+			Named::Local(capture) => Named::UpValue(self.insert_up_value(name, Upvalue::ParentSlot(capture))?),
 			Named::UpValue(idx) => Named::UpValue(self.insert_up_value(name, Upvalue::ParentUpValue(idx))?),
 			Named::Global(name) => Named::Global(name),
 		})
