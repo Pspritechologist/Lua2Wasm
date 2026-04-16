@@ -10,7 +10,7 @@ impl InstructionSink<'_> {
 	// }
 
 	pub fn const_val(&mut self, value: impl Into<value::Value>) -> &mut Self {
-		value.into().push(self);
+		value.into().push_to_stack(self);
 		self
 	}
 
@@ -90,10 +90,9 @@ impl InstructionSink<'_> {
 			.throw_raw(u32::MAX)
 	}
 
-	pub fn push_function(&mut self, state: &mut ModuleState, closure: Symbol) -> &mut Self {
+	pub fn push_function_ptr(&mut self, _state: &mut ModuleState, closure: Symbol) -> &mut Self {
 		self.reloc(RelocEntry::i32const_indirect_fn(closure))
 			.i32_const(i32::MAX)
-			.call(state.extern_fns.static_function)
 	}
 
 	fn reloc(&mut self, entries: impl IntoIterator<Item = RelocEntry>) -> &mut Self {

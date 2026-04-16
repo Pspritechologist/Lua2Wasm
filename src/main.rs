@@ -52,11 +52,6 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 				global_name: b"init".into(),
 				func_sig: wasm_encoder::FuncType::new([], []),
 			},
-			ExportData {
-				export_name: "deinit".into(),
-				global_name: b"deinit".into(),
-				func_sig: wasm_encoder::FuncType::new([], []),
-			},
 		],
 	}, [LuaPath(in_path)])?;
 

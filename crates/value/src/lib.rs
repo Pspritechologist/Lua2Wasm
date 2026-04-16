@@ -94,9 +94,9 @@ impl Value {
 
 	/// # SAFETY
 	/// The caller must ensure the value is properly tagged after construction.
-	pub unsafe fn idx(idx: usize) -> Self {
+	pub unsafe fn idx(idx: u32) -> Self {
 		let mut bytes = [0; 8];
-		let idx = u32::try_from(idx).unwrap().to_ne_bytes();
+		let idx = idx.to_ne_bytes();
 		bytes[4..8].copy_from_slice(&idx);
 		Self::from_i64(i64::from_ne_bytes(bytes))
 	}
@@ -154,4 +154,14 @@ from_num!(i64, u64, isize, usize, i32, u32, i16, u16, i8, u8, f64, f32);
 
 impl From<bool> for Value {
 	fn from(b: bool) -> Self { Self::bool(b) }
+}
+
+impl From<()> for Value {
+	fn from((): ()) -> Self { Self::nil() }
+}
+
+impl<V: Into<Value>> From<Option<V>> for Value {
+	fn from(value: Option<V>) -> Self {
+		value.map_or(Self::nil(), |v| v.into())
+	}
 }

@@ -8,7 +8,10 @@ mod bytecode;
 mod debug;
 mod object;
 
+#[cfg(not(debug_assertions))]
 static RUST_RUNTIME_LIB: &[u8] = include_bytes!("../target/wasm32-unknown-unknown/release/libcamento_runtime.a");
+#[cfg(debug_assertions)]
+static RUST_RUNTIME_LIB: &[u8] = include_bytes!("../target/wasm32-unknown-unknown/testing/libcamento_runtime.a");
 
 #[derive(Debug)]
 pub struct Config<'c> {

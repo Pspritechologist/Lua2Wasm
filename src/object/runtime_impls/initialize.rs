@@ -67,7 +67,8 @@ pub fn generate_runtime_object() -> Vec<u8> {
 			.global_set(state.global_table);
 
 		let mut add_fn = |name: StringRef, func| {
-			seq.push_function(state, func)
+			seq.push_function_ptr(state, func)
+				.call(state.extern_fns.static_function)
 				.local_get(global_tab)
 				.static_str(state, name.sym, name.len)
 				.call(state.extern_fns.table_set_name);

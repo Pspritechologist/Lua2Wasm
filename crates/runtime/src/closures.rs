@@ -1,5 +1,4 @@
-use core::ptr::{self, NonNull};
-
+use core::ptr;
 use alloc::boxed::Box;
 use macro_rules_attribute::apply;
 use value::Value;
@@ -20,26 +19,31 @@ impl Closure {
 		Self { inner: ptr }
 	}
 
-	fn new_empty_closure(function: LuaFn, upvalue_count: usize) -> *mut Self {
+	fn new_empty_closure(function: LuaFn, upvalue_count: usize) -> Self {
 		let dst: Box<slice_dst::SliceWithHeader<LuaFn, UpValue>> =
 			slice_dst::SliceWithHeader::new(function, core::iter::repeat_n(UpValue::null(), upvalue_count));
 		let ptr = Box::into_raw(dst); //TODO: Gc.
-		
-		// SAFETY: `Self` is transparent over `SliceWithHeader<LuaFn, UpValue>`.
-		// `cast` doesn't like unsized types for some reason, thus the `as`...
-		ptr as *mut Self
+
+		Self { inner: ptr }
 	}
 
-	fn take_nth_upvalue_into(&mut self, other: ShtackVal, from: usize, into: usize) {
-		let upvalue = unsafe { &*other.read().to_closure().inner }.slice[from];
-		self.upvalues()[into] = upvalue;
+	fn from_slice(function: LuaFn, upvalues: &[UpValue]) -> Self {
+		let dst: Box<slice_dst::SliceWithHeader<LuaFn, UpValue>> =
+			slice_dst::SliceWithHeader::from_slice(function, upvalues);
+		let ptr = Box::into_raw(dst); //TODO: Gc.
+
+		Self { inner: ptr }
 	}
 
 	pub fn get_fn(&self) -> LuaFn {
 		unsafe { &*self.inner }.header
 	}
 
-	fn upvalues(&mut self) -> &mut [UpValue] {
+	fn upvalues(&self) -> &[UpValue] {
+		&unsafe { &*self.inner }.slice
+	}
+
+	fn upvalues_mut(&mut self) -> &mut [UpValue] {
 		&mut unsafe { &mut *self.inner }.slice
 	}
 }
@@ -88,6 +92,36 @@ impl UpValue {
 
 // Extern API
 #[apply(crate::internal)]
-pub fn new_closure(start: *mut Value, len: usize) -> *mut UpValue {
-	ptr::null_mut()
+pub fn new_closure(function: LuaFn, upvalues: usize) -> *mut () {
+	Closure::new_empty_closure(function, upvalues).inner.cast()
+}
+#[apply(crate::internal)]
+pub fn new_main_closure(function: LuaFn, env_ptr: ShtackVal) -> Value {
+	let closure = Closure::from_slice(function, &[UpValue::new_open(env_ptr.ptr())]);
+	unsafe { Value::idx(closure.inner.addr() as u32) }.with_tag(value::ValueTag::Closure)
+}
+#[apply(crate::internal)]
+pub fn set_nth_upvalue(ptr: *mut (), slot: usize, upvalue_slot: ShtackVal) -> *mut () {
+	let mut closure = Closure::from_idx(ptr.addr() as u32);
+	closure.upvalues_mut()[slot] = UpValue::new_open(upvalue_slot.ptr());
+	ptr
+}
+#[apply(crate::internal)]
+pub fn take_nth_upvalue_into(ptr: *mut (), other: ShtackVal, from: usize, into: usize) -> *mut () {
+	let mut closure = Closure::from_idx(ptr.addr() as u32);
+	let upvalue = unsafe { &*other.read().to_closure().inner }.slice[from];
+	closure.upvalues_mut()[into] = upvalue;
+	ptr
+}
+#[apply(crate::internal)]
+pub fn finalize_closure(closure: *mut ()) -> Value {
+	unsafe { Value::idx(closure as u32) }.with_tag(value::ValueTag::Closure)
+}
+#[apply(crate::internal)]
+pub fn read_upvalue(closure: ShtackVal, idx: usize) -> Value {
+	closure.read().to_closure().upvalues()[idx].read()
+}
+#[apply(crate::internal)]
+pub fn write_upvalue(closure: ShtackVal, idx: usize, value: Value) {
+	closure.read().to_closure().upvalues_mut()[idx].write(value);
 }

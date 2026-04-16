@@ -23,51 +23,23 @@ pub fn generate_exports_object(config: &Config) -> Result<Vec<u8>> {
 	};
 
 	for export in &config.exports {
-		if config.entry_point.as_export().is_some_and(|e| e == export.export_name) {
-			generated_entry_point = true;
-
-			let sig = state.types_sect.len();
-			state.types_sect.ty().func_type(&export.func_sig);
-
-			try_compile_function(state, &export.export_name, SymbolTab::WASM_SYM_EXPORTED, [(1, ValType::I32)], sig, |state, seq, _| {
-				let tmp_local: u32 = export.func_sig.params().len().try_into().unwrap();
-
-				seq.block(wasm_encoder::BlockType::Result(ValType::I64))
-					.try_table(wasm_encoder::BlockType::Empty, state.error_tag, 0);
-
-				cast_args(state, seq, export.func_sig.params())?;
-
-				seq.i32_const(export.func_sig.params().len().try_into().unwrap())
-					.call(main_fn_sym);
-
-				seq.local_set(tmp_local);
-
-				cast_results(state, seq, tmp_local, export.func_sig.results())?;
-
-				seq.return_().end().unreachable().end();
-
-				//TODO: This is currently hardcoded to support the error API of our
-				//TODO: testing binary. This should allow custom top-level error handling.
-				seq.call(state.extern_fns.put_error).unreachable(); // Error case.
-
-				Ok(())
-			})?;
-
-			continue;
+		match config.entry_point.as_export().is_some_and(|e| e == export.export_name) {
+			true => {
+				generated_entry_point = true;
+				generate_init_fn(state, export, main_fn_sym)?;
+			},
+			false => generate_export_function(state, export)?,
 		}
-
-		generate_export_function(state, export)?;
 	}
 
 	// If we can't find a matching export item for the entrypoint, we assume a standard
 	// entrypoint with no inputs and no outputs.
 	if !generated_entry_point && let Some(entry_point) = config.entry_point.as_export() {
-		let sig = state.types_sect.len();
-		state.types_sect.ty().func_type(&FuncType::new([], []));
-
-		compile_function(state, entry_point, SymbolTab::WASM_SYM_EXPORTED, [(1, ValType::I32)], sig, |_, seq, _| {
-			seq.i32_const(0).call(main_fn_sym);
-		});
+		generate_init_fn(state, &ExportData {
+			export_name: entry_point.into(),
+			global_name: entry_point.as_bytes().into(),
+			func_sig: FuncType::new([], []),
+		}, main_fn_sym)?;
 	}
 
 	Ok(state.build_object()?.finish())
@@ -98,12 +70,11 @@ fn generate_export_function(state: &mut ModuleState, export: &ExportData) -> Res
 			// Pass the argument count and the shtack pointer.
 			.i32_const(export.func_sig.params().len().try_into().unwrap())
 			.i32_const(8 * 2)
-			// Get the function we're trying to call.
+			// Get the function we're trying to call and store it as the second value in the shtack.
+			.i32_const(8)
 			.global_get(state.global_table)
 			.static_str(state, lua_global_name, export.global_name.len().try_into().unwrap())
 			.call(state.extern_fns.table_get_name)
-			// Set it as second item in the shtack...
-			.i32_const(8)
 			.i64_store(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
 			// ... and then load it back... (wasm-opt will make this not suck I'm sure...)
 			.i32_const(8)
@@ -123,6 +94,44 @@ fn generate_export_function(state: &mut ModuleState, export: &ExportData) -> Res
 
 		Ok(())
 	}).map(|_| ())
+}
+
+fn generate_init_fn(state: &mut ModuleState, export: &ExportData, main_fn_sym: Symbol) -> Result<()> {
+	let sig = state.types_sect.len();
+	state.types_sect.ty().func_type(&export.func_sig);
+
+	try_compile_function(state, &export.export_name, SymbolTab::WASM_SYM_EXPORTED, [(1, ValType::I32)], sig, |state, seq, _| {
+		let tmp_local: u32 = export.func_sig.params().len().try_into().unwrap();
+
+		seq.block(wasm_encoder::BlockType::Result(ValType::I64))
+			.try_table(wasm_encoder::BlockType::Empty, state.error_tag, 0);
+
+		cast_args(state, seq, export.func_sig.params())?;
+
+		seq.i32_const(8)
+			.push_function_ptr(state, main_fn_sym)
+			.i32_const(0)
+			.call(state.extern_fns.new_main_closure)
+			.i64_store(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem });
+		
+		// Pass the argument count and the shtack pointer.
+		seq.i32_const(export.func_sig.params().len().try_into().unwrap())
+			.i32_const(8 * 2)
+			.call(main_fn_sym)
+			.local_set(tmp_local);
+
+		cast_results(state, seq, tmp_local, export.func_sig.results())?;
+
+		seq.return_().end().unreachable().end();
+
+		//TODO: This is currently hardcoded to support the error API of our
+		//TODO: testing binary. This should allow custom top-level error handling.
+		seq.call(state.extern_fns.put_error).unreachable(); // Error case.
+
+		Ok(())
+	})?;
+	
+	Ok(())
 }
 
 fn cast_args(state: &mut ModuleState, seq: &mut InstructionSink, params: &[ValType]) -> Result<()> {
@@ -150,11 +159,11 @@ fn cast_args(state: &mut ModuleState, seq: &mut InstructionSink, params: &[ValTy
 	Ok(())
 }
 
-fn cast_results(state: &mut ModuleState, seq: &mut InstructionSink, ret_count: u32, results: &[ValType]) -> Result<()> {
+fn cast_results(state: &mut ModuleState, seq: &mut InstructionSink, loc_ret_count: u32, results: &[ValType]) -> Result<()> {
 	for (i, ret) in results.iter().enumerate() {
 		let i: u32 = i.try_into().unwrap();
 
-		seq.local_get(ret_count)
+		seq.local_get(loc_ret_count)
 			.i32_const(i.cast_signed())
 			.i32_gt_u()
 			.if_(wasm_encoder::BlockType::Result(*ret));

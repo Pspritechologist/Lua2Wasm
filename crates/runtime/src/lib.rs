@@ -26,9 +26,9 @@ mod binds {
 
 	//TODO: Name prefixes.
 	unsafe extern "C" {
-		fn throw(object: Value) -> !;
-		fn read_shtack_val(ptr: *const Value) -> Value;
-		fn write_shtack_val(ptr: *mut Value, value: Value);
+		fn __camento_throw(object: Value) -> !;
+		fn __camento_read_shtack_val(ptr: *const Value) -> Value;
+		fn __camento_write_shtack_val(ptr: *mut Value, value: Value);
 	}
 
 	#[link(wasm_import_module = "debug")]
@@ -43,7 +43,7 @@ mod binds {
 	}
 
 	pub fn error(object: Value) -> ! {
-		unsafe { throw(object) }
+		unsafe { __camento_throw(object) }
 	}
 
 	pub fn put_error(string: &[u8]) {
@@ -60,15 +60,17 @@ mod binds {
 	}
 
 	#[repr(transparent)]
+	#[derive(Debug, Clone, Copy)]
 	pub struct ShtackVal(*mut Value);
 	impl ShtackVal {
 		pub fn new(ptr: *mut Value) -> Self { Self(ptr) }
 		pub fn read(&self) -> Value {
-			unsafe { read_shtack_val(self.0) }
+			unsafe { __camento_read_shtack_val(self.0) }
 		}
 		pub fn write(&self, value: Value) {
-			unsafe { write_shtack_val(self.0, value) }
+			unsafe { __camento_write_shtack_val(self.0, value) }
 		}
+		pub fn ptr(self) -> *mut Value { self.0 }
 	}
 }
 
@@ -106,6 +108,11 @@ macro_rules! internal {
 use internal;
 
 trait ValExt {
+	fn function(func: LuaFn) -> Value {
+		let idx = func as u32;
+		// SAFETY: `func` is a LuaFn and we tag it as Function.
+		unsafe { Value::idx(idx) }.with_tag(ValueTag::Function)
+	}
 	fn str(value: &'static (impl AsRef<[u8]> + ?Sized)) -> Value {
 		let s = value.as_ref();
 		
@@ -167,8 +174,8 @@ pub fn static_str(addr: u32, len: u32) -> Value {
 }
 
 #[apply(internal)]
-pub fn static_function(addr: usize) -> Value {
-	unsafe { Value::idx(addr) }.with_tag(ValueTag::Function)
+pub fn static_function(func: LuaFn) -> Value {
+	Value::function(func)
 }
 
 #[apply(internal)]

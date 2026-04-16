@@ -9,9 +9,20 @@ use wasm_encoder::{
 pub fn compile_supporting_functions(state: &mut ModuleState) {
 	let ty = state.types_sect.len();
 	state.types_sect.ty().function([ValType::I64], []);
-	
-	compile_function(state, "throw", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |state, seq, _| {
+	compile_function(state, "__camento_throw", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |state, seq, _| {
 		seq.local_get(0).throw(state.error_tag);
+	});
+	
+	let ty = state.types_sect.len();
+	state.types_sect.ty().function([ValType::I32], [ValType::I64]);
+	compile_function(state, "__camento_read_shtack_val", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |state, seq, _| {
+		seq.local_get(0).i64_load(wasm_encoder::MemArg { align: 3, offset: 0, memory_index: state.shtack_mem });
+	});
+
+	let ty = state.types_sect.len();
+	state.types_sect.ty().function([ValType::I32, ValType::I64], []);
+	compile_function(state, "__camento_write_shtack_val", SymbolTab::WASM_SYM_BINDING_WEAK, [], ty, |state, seq, _| {
+		seq.local_get(0).local_get(1).i64_store(wasm_encoder::MemArg { align: 3, offset: 0, memory_index: state.shtack_mem });
 	});
 }
 
@@ -112,6 +123,27 @@ extern_fns! {
 		/// Doesn't type check input as a table, and assumes a string key. For internal use.\
 		/// This takes `value, table, key` unlike other functions for impl reasons.
 		table_set_name: tab_set_name(I64, I64, I64);
+
+		// Upvalue and closure handling.
+		/// Allows creating an entry-point style closure with a single upvalue representing the environment.\
+		/// This returns the closure as a complete Value.\
+		/// `(function: LuaFn, env_ptr: ShtackVal) -> Value`
+		new_main_closure(I32, I32) -> I64;
+		/// Crates a new Closure and retursn the ptr, allowing creating a closure with a specified number of upvalues, which must all be set manually before use.\
+		/// `finalize_closure` must be called before the closure can be used, which returns the complete Value.\
+		/// `(function: *const fn, upvalues: usize) -> *mut ()`
+		new_closure(I32, I32) -> I32;
+		/// `(closure: *mut (), slot: usize, upvalue_slot: ShtackVal) -> *mut ()`
+		set_nth_upvalue(I32, I32, I32) -> I32;
+		/// `(closure: *mut (), other: ShtackVal, from: usize, into: usize) -> *mut ()`
+		take_nth_upvalue_into(I32, I32, I32, I32) -> I32;
+		/// Consumes a Closure's pointer and returns the complete Value.\
+		/// `(closure: *mut ()) -> Value`
+		finalize_closure(I32) -> I64;
+		/// `(closure: ShtackVal, idx: usize) -> Value`
+		read_upvalue(I32, I32) -> I64;
+		/// `(closure: ShtackVal, idx: usize, value: Value)`
+		write_upvalue(I32, I32, I64);
 
 		// These aren't real. Testing.
 		put_error(I64);

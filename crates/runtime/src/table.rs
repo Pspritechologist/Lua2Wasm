@@ -22,7 +22,7 @@ impl TabValueExt for Value {
 	}
 
 	fn table(table: Table) -> Self {
-		let idx = table.get_ptr() as usize;
+		let idx = table.get_ptr() as u32;
 		let mut val = unsafe { Value::idx(idx) };
 		val.set_tag(ValueTag::Table);
 		val

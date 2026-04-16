@@ -243,10 +243,10 @@ fn compile_function<S: HasModuleState, L: IntoIterator<Item = (u32, ValType)>>(
 }
 
 pub trait ValueExt {
-	fn push(self, seq: &mut InstructionSink);
+	fn push_to_stack(self, seq: &mut InstructionSink);
 }
 impl ValueExt for value::Value {
-	fn push(self, seq: &mut InstructionSink) {
+	fn push_to_stack(self, seq: &mut InstructionSink) {
 		seq.i64_const(self.as_i64());
 	}
 }
