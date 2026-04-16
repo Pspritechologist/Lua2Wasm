@@ -216,6 +216,7 @@ dependencies = [
  "libm",
  "macro_rules_attribute",
  "pastey",
+ "slice-dst",
  "talc",
  "value",
  "zmij",
@@ -1551,6 +1552,15 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "slice-dst"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93a9d7bbfeec8bb3296a8685fbfe89532de4a1f75e691083bae0a2c5de5b313b"
+dependencies = [
+ "autocfg",
+]
 
 [[package]]
 name = "slotmap"

@@ -47,7 +47,6 @@ struct ModuleState {
 	dyn_call_ty: u32,
 	error_tag: Symbol,
 	call_tab: Symbol,
-	shtack_ptr: Symbol,
 	extern_fns: ExternFns,
 	global_table: Symbol,
 	module_table: Symbol,
@@ -67,14 +66,12 @@ impl ModuleState {
 
 		import_sect.import("env", "__linear_memory", MemoryType { memory64: false, shared: false, minimum: 1, page_size_log2: None, maximum: None });
 
-		global_sect.global(GlobalType { val_type: ValType::I32, mutable: true, shared: false }, &ConstExpr::i32_const(0));
 		global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
 		global_sect.global(GlobalType { val_type: ValType::I64, mutable: true, shared: false }, &ConstExpr::i64_const(0));
-		let shtack_ptr = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 0, Some("__camento_shtack_ptr"));
-		let global_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 1, Some("__camento_global_table"));
-		let module_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 2, Some("__camento_module_table"));
+		let global_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 0, Some("__camento_global_table"));
+		let module_table = symbol_table.global(SymbolTab::WASM_SYM_BINDING_WEAK, 1, Some("__camento_module_table"));
 
-		types_sect.ty().function([ValType::I32], [ValType::I32]);
+		types_sect.ty().function([ValType::I32, ValType::I32], [ValType::I32]);
 
 		import_sect.import("env", "__indirect_function_table", TableType {
 			element_type: RefType::FUNCREF,
@@ -95,7 +92,6 @@ impl ModuleState {
 		Self {
 			global_table,
 			module_table,
-			shtack_ptr,
 			error_tag,
 			call_tab,
 			dyn_call_ty: 0,

@@ -1,4 +1,4 @@
-use super::{Value, ValueTag};
+use super::{Value, ValueTag, ValExt};
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 use hashbrown::HashTable;
@@ -131,6 +131,19 @@ fn as_index(value: Value) -> Option<usize> {
 impl Table {
 	pub fn new() -> Self {
 		Self { inner: Box::into_raw(Default::default()) }
+	}
+
+	pub fn from_iter<I, K, V>(iter: I) -> Self
+	where
+		I: IntoIterator<Item = (K, V)>,
+		K: Into<value::Value>,
+		V: Into<value::Value>,
+	{
+		let mut table = Table::new();
+		for (k, v) in iter {
+			table.set(k.into(), v.into());
+		}
+		table
 	}
 
 	#[inline(never)]

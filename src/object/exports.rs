@@ -94,10 +94,21 @@ fn generate_export_function(state: &mut ModuleState, export: &ExportData) -> Res
 
 		cast_args(state, seq, export.func_sig.params())?;
 
-		seq.i32_const(export.func_sig.params().len().try_into().unwrap())
+		seq
+			// Pass the argument count and the shtack pointer.
+			.i32_const(export.func_sig.params().len().try_into().unwrap())
+			.i32_const(8 * 2)
+			// Get the function we're trying to call.
 			.global_get(state.global_table)
 			.static_str(state, lua_global_name, export.global_name.len().try_into().unwrap())
 			.call(state.extern_fns.table_get_name)
+			// Set it as second item in the shtack...
+			.i32_const(8)
+			.i64_store(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
+			// ... and then load it back... (wasm-opt will make this not suck I'm sure...)
+			.i32_const(8)
+			.i64_load(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
+			// Finally perform the call.
 			.call_as_lua_fn(state);
 
 		seq.local_set(tmp_local);
@@ -118,7 +129,10 @@ fn cast_args(state: &mut ModuleState, seq: &mut InstructionSink, params: &[ValTy
 	for (i, param) in params.iter().enumerate() {
 		let i: u32 = i.try_into().unwrap();
 
-		seq.global_get(state.shtack_ptr);
+		// This is an entrypoint and so we need decide where in the shtack we set the pointer.
+		// The first item in the stack is always the initial global table, followed immediately by
+		// the main function itself. The first shtack frame then begins after that.
+		seq.i32_const(8 * 2);
 
 		seq.local_get(i);
 		match param {
@@ -130,7 +144,7 @@ fn cast_args(state: &mut ModuleState, seq: &mut InstructionSink, params: &[ValTy
 			ValType::Ref(_) => return Err(anyhow::anyhow!("Unsupported export parameter type: {param:?}")),
 		};
 
-		seq.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
+		seq.i64_store(MemArg { align: 3, offset: u64::from(i) * 8, memory_index: state.shtack_mem });
 	}
 
 	Ok(())
@@ -146,7 +160,9 @@ fn cast_results(state: &mut ModuleState, seq: &mut InstructionSink, ret_count: u
 			.if_(wasm_encoder::BlockType::Result(*ret));
 		{
 			// We have a value to convert...
-			seq.global_get(state.shtack_ptr)
+			
+			// Returns from functions begin overlapping the first argument passed.
+			seq.i32_const(8 * 2)
 				.i64_load(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.shtack_mem });
 
 			match ret {

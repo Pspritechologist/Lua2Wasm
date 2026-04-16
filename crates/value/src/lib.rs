@@ -57,6 +57,10 @@ impl Value {
 		data[0] = (data[0] & 0xF0) | (tag as u8 & 0x0F);
 		self.data = i64::from_ne_bytes(data);
 	}
+	pub fn with_tag(mut self, tag: ValueTag) -> Self {
+		self.set_tag(tag);
+		self
+	}
 	pub fn get_tag(&self) -> ValueTag {
 		ValueTag::from_u8(self.data.to_ne_bytes()[0] & 0x0F)
 	}
@@ -75,27 +79,17 @@ impl Value {
 	// 	v
 	// }
 	pub fn float(n: f64) -> Self {
-		let mut v = Self { data: i64::from_ne_bytes(n.to_ne_bytes()) };
-		v.set_tag(ValueTag::Number);
-		v
+		Self { data: i64::from_ne_bytes(n.to_ne_bytes()) }
+			.with_tag(ValueTag::Number)
 	}
 	pub fn bool(b: bool) -> Self {
-		let mut v = Self::from_i64(if b { 0x10 } else { 0 });
-		v.set_tag(ValueTag::Bool);
-		v
+		Self::from_i64(if b { 0x10 } else { 0x00 })
+			.with_tag(ValueTag::Bool)
 	}
 	pub fn string(addr: u32, len: u32) -> Self {
 		//? Strings store their length in big-endian.
 		let bytes = ((addr as i64) << 32) | (len.to_be() as i64);
-		let mut v = Self::from_i64(bytes);
-		v.set_tag(ValueTag::String);
-		v
-	}
-	pub fn function(idx: usize) -> Self {
-		let bytes = (u32::try_from(idx).expect(":(") as i64) << 32;
-		let mut v = Self::from_i64(bytes);
-		v.set_tag(ValueTag::Function);
-		v
+		Self::from_i64(bytes).with_tag(ValueTag::String)
 	}
 
 	/// # SAFETY
@@ -119,11 +113,8 @@ impl Value {
 	pub fn as_bool(self) -> Option<bool> {
 		(self.get_tag() == ValueTag::Bool).then(|| self.to_bool())
 	}
-	pub fn as_str(&self) -> Option<&ByteStr> {
-		(self.get_tag() == ValueTag::String).then(|| self.to_str())
-	}
-	pub fn as_function(self) -> Option<extern "C" fn(usize) -> usize> {
-		(self.get_tag() == ValueTag::Function).then(|| self.to_function())
+	pub fn as_addr_len(&self) -> Option<(u32, u32)> {
+		(self.get_tag() == ValueTag::String).then(|| self.to_addr_len())
 	}
 
 	pub fn to_num(self) -> f64 {
@@ -133,19 +124,12 @@ impl Value {
 		// Checks if the first non-tag bit is set.
 		(self.data.to_ne_bytes()[0] & 0x10) != 0
 	}
-	pub fn to_str(&self) -> &ByteStr {
+	pub fn to_addr_len(&self) -> (u32, u32) {
 		let bytes = self.meaningful_bits();
-		let ptr = u32::from_ne_bytes(bytes[4..8].try_into().unwrap()) as *const u8;
+		let addr = u32::from_ne_bytes(bytes[4..8].try_into().unwrap());
 		//? Strings store the length in big-endian to avoid getting eaten by the tag.
-		let len = u32::from_be_bytes(bytes[0..4].try_into().unwrap()) as usize;
-		let data = unsafe { core::slice::from_raw_parts(ptr, len) };
-		ByteStr::new(data)
-	}
-	pub fn to_function(self) -> extern "C" fn(usize) -> usize {
-		let bytes = self.meaningful_bits();
-		let ptr = u32::from_ne_bytes(bytes[4..8].try_into().unwrap()) as usize;
-		let ptr = ptr as *const u8;
-		unsafe { core::mem::transmute(ptr) }
+		let len = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
+		(addr, len)
 	}
 	
 	pub fn to_idx(self) -> u32 {
@@ -153,11 +137,8 @@ impl Value {
 		u32::from_ne_bytes(bytes[4..8].try_into().unwrap())
 	}
 
-	pub fn equals(self, other: Self) -> bool {
-		match (self.get_tag(), other.get_tag()) {
-			(ValueTag::String, ValueTag::String) => self.to_str() == other.to_str(),
-			_ => self.data == other.data,
-		}
+	pub fn is_truthy(self) -> bool {
+		!self.is_nil() && self.as_bool().unwrap_or(true)
 	}
 }
 

@@ -1,6 +1,7 @@
 #![no_std]
 #![feature(
 	linkage,
+	ptr_metadata,
 	trim_prefix_suffix,
 	slice_concat_ext,
 	bstr,
@@ -9,21 +10,25 @@
 #[global_allocator]
 static ALLOCATOR: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
-use crate::table::TabValueExt;
+use crate::{closures::LuaFn, table::TabValueExt};
 use alloc::{bstr::ByteString, vec::Vec};
 use macro_rules_attribute::apply;
 use value::{Value, ValueTag};
 use core::bstr::ByteStr;
 
 mod table;
+mod closures;
 
 extern crate alloc;
 
 mod binds {
 	use super::Value;
 
+	//TODO: Name prefixes.
 	unsafe extern "C" {
 		fn throw(object: Value) -> !;
+		fn read_shtack_val(ptr: *const Value) -> Value;
+		fn write_shtack_val(ptr: *mut Value, value: Value);
 	}
 
 	#[link(wasm_import_module = "debug")]
@@ -52,6 +57,18 @@ mod binds {
 		let ptr = string.as_ptr();
 		let len = string.len();
 		unsafe { put_str(ptr, len) }
+	}
+
+	#[repr(transparent)]
+	pub struct ShtackVal(*mut Value);
+	impl ShtackVal {
+		pub fn new(ptr: *mut Value) -> Self { Self(ptr) }
+		pub fn read(&self) -> Value {
+			unsafe { read_shtack_val(self.0) }
+		}
+		pub fn write(&self, value: Value) {
+			unsafe { write_shtack_val(self.0, value) }
+		}
 	}
 }
 
@@ -86,6 +103,7 @@ macro_rules! internal {
 		}
 	} };
 }
+use internal;
 
 trait ValExt {
 	fn str(value: &'static (impl AsRef<[u8]> + ?Sized)) -> Value {
@@ -96,8 +114,52 @@ trait ValExt {
 
 		Value::string(ptr, len)
 	}
+
+	fn to_closure(self) -> closures::Closure;
+	fn as_closure(self) -> Option<closures::Closure>;
+	fn to_function(self) -> LuaFn;
+	fn as_function(self) -> Option<LuaFn>;
+	fn to_str(&self) -> &ByteStr;
+	fn as_str(&self) -> Option<&ByteStr>;
+
+	fn equals(self, other: Self) -> bool;
 }
-impl ValExt for Value {}
+impl ValExt for Value {
+
+	fn equals(self, other: Self) -> bool {
+		match (self.get_tag(), other.get_tag()) {
+			(ValueTag::String, ValueTag::String) => self.to_str() == other.to_str(),
+			_ => self.as_i64() == other.as_i64(),
+		}
+	}
+
+	fn to_closure(self) -> closures::Closure {
+		closures::Closure::from_idx(self.to_idx())
+	}
+	fn as_closure(self) -> Option<closures::Closure> {
+		(self.get_tag() == ValueTag::Closure).then(|| self.to_closure())
+	}
+
+	fn to_function(self) -> LuaFn {
+		let bytes = self.meaningful_bits();
+		let ptr = u32::from_ne_bytes(bytes[4..8].try_into().unwrap()) as usize;
+		let ptr = ptr as *const u8;
+		unsafe { core::mem::transmute(ptr) }
+	}
+	fn as_function(self) -> Option<LuaFn> {
+		(self.get_tag() == ValueTag::Function).then(|| self.to_function())
+	}
+
+	fn to_str(&self) -> &ByteStr {
+		let (addr, len) = self.to_addr_len();
+		let ptr = addr as usize as *const u8;
+		let data = unsafe { core::slice::from_raw_parts(ptr, len as usize) };
+		ByteStr::new(data)
+	}
+	fn as_str(&self) -> Option<&ByteStr> {
+		(self.get_tag() == ValueTag::String).then(|| self.to_str())
+	}
+}
 
 #[apply(internal)]
 pub fn static_str(addr: u32, len: u32) -> Value {
@@ -106,7 +168,7 @@ pub fn static_str(addr: u32, len: u32) -> Value {
 
 #[apply(internal)]
 pub fn static_function(addr: usize) -> Value {
-	Value::function(addr)
+	unsafe { Value::idx(addr) }.with_tag(ValueTag::Function)
 }
 
 #[apply(internal)]
@@ -217,7 +279,7 @@ pub fn gte(a: Value, b: Value) -> Value {
 
 #[apply(internal)]
 pub fn not(a: Value) -> Value {
-	Value::bool(__camento_get_truthy(a) != 1)
+	Value::bool(!a.is_truthy())
 }
 
 
@@ -284,25 +346,17 @@ pub fn len(a: Value) -> Value {
 
 
 #[apply(internal)]
-pub fn get_fn(func: Value) -> extern "C" fn(usize) -> usize {
+pub fn get_fn(func: Value) -> LuaFn {
 	match func.get_tag() {
-		ValueTag::Function => {
-			func.to_function()
-		},
-		ValueTag::Closure => {
-			binds::error(Value::str("Attempted to call a closure, which is not supported yet"));
-		},
+		ValueTag::Function => func.to_function(),
+		ValueTag::Closure => func.to_closure().get_fn(),
 		_ => binds::error(new_string(["Attempted to call a non-function value: ".as_bytes(), fmt_value(&func, &mut Default::default())].concat())),
 	}
 }
 
 #[apply(internal)]
 pub fn get_truthy(value: Value) -> i32 {
-	match value.get_tag() {
-		ValueTag::Nil => 0,
-		ValueTag::Bool => if value.to_bool() { 1 } else { 0 },
-		_ => 1,
-	}
+	if value.is_truthy() { 1 } else { 0 }
 }
 
 #[apply(internal)]

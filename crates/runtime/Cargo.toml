@@ -17,3 +17,4 @@ libm = "0.2.0"
 talc = "4.4.3"
 macro_rules_attribute = "0.2.2"
 pastey = "0.2.1"
+slice-dst = { version = "1.6.0", default-features = false }

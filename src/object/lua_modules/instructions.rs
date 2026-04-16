@@ -162,9 +162,10 @@ fn compile_op(state: &mut LuaModuleState, f_state: &mut LuaFunctionState, ops: &
 }
 
 fn compile_call(state: &mut LuaModuleState, f_state: &mut LuaFunctionState, seq: &mut InstructionSink, func_slot: u8, arg_cnt: u8, ret_kind: RetKind) {
-	for i in 0..arg_cnt {
+	for i in 0..arg_cnt + 1 {
+		// Copy the function and the args into the shadow stack.
 		seq.global_get(state.module_state.shtack_ptr)
-			.loc_get(state, f_state, Loc::Slot(func_slot + i + 1))
+			.loc_get(state, f_state, Loc::Slot(func_slot + i))
 			.i64_store(MemArg { align: 3, offset: i as u64 * 8, memory_index: state.module_state.shtack_mem });
 	}
 	seq.i32_const(arg_cnt.into())

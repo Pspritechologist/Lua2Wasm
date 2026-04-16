@@ -16,16 +16,18 @@ struct LuaModuleState {
 
 struct LuaFunctionState {
 	local_arg_count: u32,
-	local_last_shtack_ptr: u32,
+	local_shtack_ptr: u32,
 	locals: std::collections::BTreeMap<u8, u32>,
 	/// The distance from the last loop.
 	loop_depth: u32,
+
+	captures: u8,
 }
 impl LuaFunctionState {
-	pub fn new(local_arg_count: u32, local_last_shtack_ptr: u32) -> Self {
+	pub fn new(local_arg_count: u32, local_shtack_ptr: u32) -> Self {
 		Self {
 			local_arg_count,
-			local_last_shtack_ptr,
+			local_shtack_ptr,
 			locals: Default::default(),
 			loop_depth: 0,
 		}
@@ -67,13 +69,11 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, pa
 		debug.set_func_name("<main>");
 	}
 
-	let main_fn = compile_function(
+	let main_fn = compile_lua_function_ext(
 		state,
+		&main_fn,
 		crate::object::ENTRY_POINT_NAME,
 		if as_main { SymbolTab::WASM_SYM_BINDING_EMPTY } else { SymbolTab::WASM_SYM_BINDING_LOCAL },
-		[(main_fn.frame_size.into(), ValType::I64)],
-		state.module_state.dyn_call_ty,
-		lua_function_compiler(&main_fn)
 	);
 	state.closures[0] = Some(main_fn);
 
@@ -100,12 +100,18 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, pa
 
 fn compile_lua_function(state: &mut LuaModuleState, func: &ParsedFunction) -> ClosureRef {
 	let name = func.debug.as_ref().and_then(|d| d.func_name()).unwrap_or("<anonymous closure>");
-	
+	compile_lua_function_ext(state, func, name, SymbolTab::WASM_SYM_BINDING_LOCAL)
+}
+
+fn compile_lua_function_ext(state: &mut LuaModuleState, func: &ParsedFunction, name: &str, flags: u32) -> ClosureRef {
 	compile_function(
 		state,
 		name,
-		SymbolTab::WASM_SYM_BINDING_LOCAL,
-		[(func.frame_size.into(), ValType::I64)],
+		flags,
+		[
+			(1, ValType::I32), // ...
+			(func.frame_size.into(), ValType::I64),
+		],
 		state.module_state.dyn_call_ty,
 		lua_function_compiler(func)
 	)
@@ -116,11 +122,12 @@ fn lua_function_compiler(func: &ParsedFunction) -> impl FnOnce(&mut LuaModuleSta
 	let mut f_state = LuaFunctionState::new(0, 1);
 
 	{
-		let locals_offset = 2; // Account for the argument slot at 0 and the previous shtack pointer at slot 1.
+		let locals_offset = 3; // Account for the argument slot at 0 and the shtack pointer at slot 1.
 
 		let mut local_names = NameMap::new();
 		local_names.append(0, "__arg_count");
-		local_names.append(1, "__prev_shtack_ptr");
+		local_names.append(1, "__shtack_ptr");
+		local_names.append(2, "__vaargs"); //TODO!!
 		
 		for (i, slot) in (0..func.frame_size).enumerate() {
 			let slot_index = i as u32 + locals_offset;
@@ -134,21 +141,6 @@ fn lua_function_compiler(func: &ParsedFunction) -> impl FnOnce(&mut LuaModuleSta
 	}
 
 	if func.param_count > 0 {
-		seq
-			// Get the number of arguments passed...
-			.local_get(f_state.local_arg_count)
-			// And the number of arguments expected...
-			.i32_const(func.param_count.into())
-			// ... And then both again
-			.local_get(f_state.local_arg_count)
-			.i32_const(func.param_count.into())
-			// Check if the number of arguments passed is less than the number of arguments expected.
-			.i32_lt_u()
-			// Choose the lower value.
-			.typed_select(ValType::I32)
-			// And store it for later use.
-			.local_set(f_state.local_arg_count);
-
 		seq.block(BlockType::Empty);
 		for i in 0..func.param_count {
 			seq
@@ -156,7 +148,7 @@ fn lua_function_compiler(func: &ParsedFunction) -> impl FnOnce(&mut LuaModuleSta
 				.i32_const(i.into())
 				.i32_le_u()
 				.br_if(0)
-				.global_get(state.module_state.shtack_ptr)
+				.local_get(f_state.local_shtack_ptr)
 				.i64_load(MemArg { align: 3, offset: u64::from(i) * 8, memory_index: state.module_state.shtack_mem })
 				.local_set(f_state.locals[&i]);
 		}
