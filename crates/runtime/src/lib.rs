@@ -109,7 +109,7 @@ use internal;
 
 trait ValExt {
 	fn function(func: LuaFn) -> Value {
-		let idx = func as u32;
+		let idx = func as usize as u32;
 		// SAFETY: `func` is a LuaFn and we tag it as Function.
 		unsafe { Value::idx(idx) }.with_tag(ValueTag::Function)
 	}
@@ -132,7 +132,6 @@ trait ValExt {
 	fn equals(self, other: Self) -> bool;
 }
 impl ValExt for Value {
-
 	fn equals(self, other: Self) -> bool {
 		match (self.get_tag(), other.get_tag()) {
 			(ValueTag::String, ValueTag::String) => self.to_str() == other.to_str(),
@@ -503,6 +502,14 @@ pub fn print_str(value: Value) {
 }
 
 #[panic_handler]
-fn on_panic(_info: &core::panic::PanicInfo) -> ! {
-	unsafe { core::hint::unreachable_unchecked() }
+fn on_panic(info: &core::panic::PanicInfo) -> ! {
+	if cfg!(debug_assertions) {
+		if let Some(msg) = info.message().as_str() {
+			binds::put_error(msg.as_bytes());
+		}
+
+		core::arch::wasm32::unreachable();
+	} else {
+		unsafe { core::hint::unreachable_unchecked() }
+	}
 }

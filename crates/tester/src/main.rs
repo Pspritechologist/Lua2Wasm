@@ -7,11 +7,13 @@ use std::{bstr::ByteStr, process::Command};
 mod errors;
 
 fn main() -> Result<()> {
-	if !Command::new("./output_wasm.sh")
-		.status()
-		.context("Running output_wasm.sh")?
-		.success() {
-		return Err(anyhow::anyhow!("output_wasm.sh failed"));
+	if !std::env::args_os().any(|arg| arg == "skip") {
+		if !Command::new("./output_wasm.sh")
+			.status()
+			.context("Running output_wasm.sh")?
+			.success() {
+			return Err(anyhow::anyhow!("output_wasm.sh failed"));
+		}
 	}
 
 	let bytes = std::fs::read("output/camento.wasm").context("Reading WASM file")?;
