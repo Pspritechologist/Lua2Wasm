@@ -66,6 +66,11 @@ pub fn generate_runtime_object() -> Vec<u8> {
 			.local_tee(global_tab)
 			.global_set(state.global_table);
 
+		// Set the global table as the first item in the shtack.
+		seq.i32_const(0)
+			.local_get(global_tab)
+			.i64_store(wasm_encoder::MemArg { align: 3, offset: 0, memory_index: state.shtack_mem });
+
 		let mut add_fn = |name: StringRef, func| {
 			seq.push_function_ptr(state, func)
 				.call(state.extern_fns.static_function)

@@ -53,6 +53,7 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 				func_sig: wasm_encoder::FuncType::new([], []),
 			},
 		],
+		export_shadow_stack: Some("shtack".into()),
 	}, [LuaPath(in_path)])?;
 
 	Ok(())

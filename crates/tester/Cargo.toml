@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bstr.workspace = true
+# value.workspace = true
 
 wasmer = { version = "7.0.0", features = [ ] }
 anyhow = "1.0.101"

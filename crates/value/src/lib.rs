@@ -1,7 +1,4 @@
 #![no_std]
-#![feature(bstr)]
-
-use core::bstr::ByteStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueTag {
@@ -36,6 +33,23 @@ impl ValueTag {
 
 	pub fn as_u8(self) -> u8 {
 		self as u8
+	}
+
+	pub fn name(self) -> &'static str {
+		match self {
+			ValueTag::Nil => "Nil",
+			ValueTag::Bool => "Bool",
+			ValueTag::Number => "Number",
+			ValueTag::String => "String",
+			ValueTag::Table => "Table",
+			ValueTag::Closure => "Closure",
+			ValueTag::Function => "Function",
+		}
+	}
+}
+impl core::fmt::Display for ValueTag {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		self.name().fmt(f)
 	}
 }
 
@@ -121,10 +135,18 @@ impl Value {
 		f64::from_ne_bytes(self.meaningful_bits())
 	}
 	pub fn to_bool(self) -> bool {
+		if cfg!(debug_assertions) && self.get_tag() != ValueTag::Bool {
+			panic!("Attempted to convert a non-boolean value to a boolean");
+		}
+
 		// Checks if the first non-tag bit is set.
 		(self.data.to_ne_bytes()[0] & 0x10) != 0
 	}
 	pub fn to_addr_len(&self) -> (u32, u32) {
+		if cfg!(debug_assertions) && self.get_tag() != ValueTag::String {
+			panic!("Attempted to convert a non-string value to an address-length pair");
+		}
+
 		let bytes = self.meaningful_bits();
 		let addr = u32::from_ne_bytes(bytes[4..8].try_into().unwrap());
 		//? Strings store the length in big-endian to avoid getting eaten by the tag.

@@ -14,6 +14,9 @@ pub trait TabValueExt {
 }
 impl TabValueExt for Value {
 	fn to_table(self) -> Table {
+		if cfg!(debug_assertions) && self.get_tag() != ValueTag::Table {
+			panic!("Attempted to convert non-table value to table: {}", crate::fmt_value(&self, &mut Default::default()));
+		}
 		unsafe { Table::from_raw(self.to_idx() as _) }
 	}
 

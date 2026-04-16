@@ -27,8 +27,8 @@ mod binds {
 	//TODO: Name prefixes.
 	unsafe extern "C" {
 		fn __camento_throw(object: Value) -> !;
-		fn __camento_read_shtack_val(ptr: *const Value) -> Value;
-		fn __camento_write_shtack_val(ptr: *mut Value, value: Value);
+		fn __camento_read_shtack_val(ptr: u32) -> Value;
+		fn __camento_write_shtack_val(ptr: u32, value: Value);
 	}
 
 	#[link(wasm_import_module = "debug")]
@@ -61,16 +61,16 @@ mod binds {
 
 	#[repr(transparent)]
 	#[derive(Debug, Clone, Copy)]
-	pub struct ShtackVal(*mut Value);
+	pub struct ShtackVal(u32);
 	impl ShtackVal {
-		pub fn new(ptr: *mut Value) -> Self { Self(ptr) }
+		pub fn new(index: u32) -> Self { Self(index) }
 		pub fn read(&self) -> Value {
 			unsafe { __camento_read_shtack_val(self.0) }
 		}
 		pub fn write(&self, value: Value) {
 			unsafe { __camento_write_shtack_val(self.0, value) }
 		}
-		pub fn ptr(self) -> *mut Value { self.0 }
+		pub fn ptr(self) -> u32 { self.0 }
 	}
 }
 
@@ -140,6 +140,9 @@ impl ValExt for Value {
 	}
 
 	fn to_closure(self) -> closures::Closure {
+		if cfg!(debug_assertions) && self.get_tag() != ValueTag::Closure {
+			binds::error(Value::str("Attempted to convert a non-closure value to a closure"));
+		}
 		closures::Closure::from_idx(self.to_idx())
 	}
 	fn as_closure(self) -> Option<closures::Closure> {
@@ -147,6 +150,10 @@ impl ValExt for Value {
 	}
 
 	fn to_function(self) -> LuaFn {
+		if cfg!(debug_assertions) && self.get_tag() != ValueTag::Function {
+			binds::error(Value::str("Attempted to convert a non-function value to a function"));
+		}
+
 		let bytes = self.meaningful_bits();
 		let ptr = u32::from_ne_bytes(bytes[4..8].try_into().unwrap()) as usize;
 		let ptr = ptr as *const u8;
@@ -157,6 +164,10 @@ impl ValExt for Value {
 	}
 
 	fn to_str(&self) -> &ByteStr {
+		if cfg!(debug_assertions) && self.get_tag() != ValueTag::String {
+			panic!("Attempted to convert a non-string value to a string");
+		}
+
 		let (addr, len) = self.to_addr_len();
 		let ptr = addr as usize as *const u8;
 		let data = unsafe { core::slice::from_raw_parts(ptr, len as usize) };
@@ -504,9 +515,8 @@ pub fn print_str(value: Value) {
 #[panic_handler]
 fn on_panic(info: &core::panic::PanicInfo) -> ! {
 	if cfg!(debug_assertions) {
-		if let Some(msg) = info.message().as_str() {
-			binds::put_error(msg.as_bytes());
-		}
+		let msg = alloc::format!("{}", info.message());
+		binds::put_error(msg.as_bytes());
 
 		core::arch::wasm32::unreachable();
 	} else {

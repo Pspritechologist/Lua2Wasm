@@ -21,7 +21,7 @@ impl Closure {
 
 	fn new_empty_closure(function: LuaFn, upvalue_count: usize) -> Self {
 		let dst: Box<slice_dst::SliceWithHeader<LuaFn, UpValue>> =
-			slice_dst::SliceWithHeader::new(function, core::iter::repeat_n(UpValue::null(), upvalue_count));
+			slice_dst::SliceWithHeader::new(function, core::iter::repeat_n(UpValue::invalid(), upvalue_count));
 		let ptr = Box::into_raw(dst); //TODO: Gc.
 
 		Self { inner: ptr }
@@ -49,18 +49,18 @@ impl Closure {
 }
 
 #[repr(C, packed)]
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpValue {
 	closed: bool,
-	data: *mut Value,
+	data: u32,
 }
 
 impl UpValue {
-	const fn null() -> Self {
-		Self { closed: false, data: ptr::null_mut() }
+	const fn invalid() -> Self {
+		Self { closed: true, data: u32::MAX }
 	}
 
-	fn new_open(data: *mut Value) -> Self {
+	fn new_open(data: u32) -> Self {
 		Self { closed: false, data }
 	}
 
@@ -68,7 +68,7 @@ impl UpValue {
 		debug_assert!(!self.closed, "UpValue is already closed");
 		let value = self.read();
 		let boxed = Box::into_raw(Box::new(value)); //TODO: Gc.
-		self.data = boxed;
+		self.data = boxed as u32;
 		self.closed = true;
 	}
 
@@ -77,15 +77,15 @@ impl UpValue {
 		//TODO: In future, it may be worthwhile to the shtack exist within the same
 		//TODO: linear memory that Rust uses.
 		match self.closed {
-			false => unsafe { ptr::read_volatile(self.data) },
-			true => ShtackVal::new(self.data).read(),
+			false => ShtackVal::new(self.data).read(),
+			true => unsafe { ptr::read_volatile(self.data as *const _) },
 		}
 	}
 
 	fn write(&mut self, value: Value) {
 		match self.closed {
-			false => unsafe { ptr::write_volatile(self.data, value) },
-			true => ShtackVal::new(self.data).write(value),
+			false => ShtackVal::new(self.data).write(value),
+			true => unsafe { ptr::write_volatile(self.data as *mut _, value) },
 		}
 	}
 }
@@ -110,11 +110,20 @@ pub fn set_nth_upvalue(ptr: *mut (), slot: usize, upvalue_slot: ShtackVal) -> *m
 pub fn take_nth_upvalue_into(ptr: *mut (), other: ShtackVal, from: usize, into: usize) -> *mut () {
 	let mut closure = Closure::from_idx(ptr.addr() as u32);
 	let upvalue = unsafe { &*other.read().to_closure().inner }.slice[from];
+	debug_assert_ne!(upvalue, UpValue::invalid(), "Attempted to take an uninitialized upvalue from another closure");
+
 	closure.upvalues_mut()[into] = upvalue;
 	ptr
 }
 #[apply(crate::internal)]
 pub fn finalize_closure(closure: *mut ()) -> Value {
+	if cfg!(debug_assertions) {
+		let closure = Closure::from_idx(closure.addr() as u32);
+		for (i, upvalue) in closure.upvalues().iter().enumerate() {
+			assert_ne!(*upvalue, UpValue::invalid(), "UpValue at index '{i}/{}' is uninitialized", closure.upvalues().len());
+		}
+	}
+
 	unsafe { Value::idx(closure as u32) }.with_tag(value::ValueTag::Closure)
 }
 #[apply(crate::internal)]

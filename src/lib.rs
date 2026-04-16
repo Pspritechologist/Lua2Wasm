@@ -25,6 +25,8 @@ pub struct Config<'c> {
 	pub wasm_opt_path: Option<Cow<'c, OsStr>>,
 
 	pub exports: Vec<ExportData<'static>>,
+
+	pub export_shadow_stack: Option<Cow<'c, str>>,
 }
 
 #[derive(Debug, Clone)]
@@ -134,7 +136,7 @@ pub fn process_files<I: IntoIterator>(config: &Config, files: I) -> anyhow::Resu
 
 	let old_module = std::fs::read(&temp_module_path).with_context(|| format!("Failed to read output module file '{}'", config.output_module_path.display()))?;
 
-	let new_module = add_second_memory(&old_module)?;
+	let new_module = post_process(config, &old_module)?;
 
 	let Some(wasm_opt_path) = &config.wasm_opt_path else {
 		std::fs::write(&config.output_module_path, new_module).with_context(|| format!("Failed to write output module file '{}'", config.output_module_path.display()))?;
@@ -160,60 +162,85 @@ pub fn process_files<I: IntoIterator>(config: &Config, files: I) -> anyhow::Resu
 	Ok(())
 }
 
-/// Finds the tail of the memory section in a wasm module, where new memories can be inserted.
-fn add_second_memory(wasm: &[u8]) -> Result<Vec<u8>> {
+fn post_process(config: &Config, wasm: &[u8]) -> Result<Vec<u8>> {
 	const MEMORY_SECTION_ID: u8 = 5;
+	const EXPORT_SECTION_ID: u8 = 7;
 
 	if wasm.len() < 8 {
 		return Err(anyhow::anyhow!("Wasm module is too small to be valid"));
 	}
 
-	// Find the tail end of the memory section.
+	let mut new_module = Vec::with_capacity(wasm.len() + 10);
+	new_module.extend_from_slice(&wasm[..8]);
+
+	// Find the tail end of the memory section or export section.
 	let mut cursor = 8usize;
-	let mem_offset = loop {
-		if cursor >= wasm.len() {
-			return Err(anyhow::anyhow!("Failed to find memory section in wasm module"));
-		}
-
+	loop {
 		let section_id = wasm[cursor];
-		cursor += 1;
+		new_module.push(section_id);
 
-		if section_id == MEMORY_SECTION_ID {
-			break cursor;
-		}
+		cursor += 1;
 
 		let content_len = leb128fmt::decode_uint_slice::<u32, 32>(wasm, &mut cursor).context("Failed to decode value while looking for memory")? as usize;
 
+		match section_id {
+			MEMORY_SECTION_ID => handle_memory_section(config, &mut new_module, &wasm[cursor..cursor + content_len])?,
+			EXPORT_SECTION_ID => handle_export_section(config, &mut new_module, &wasm[cursor..cursor + content_len])?,
+			_ => {
+				wasm_encoder::Encode::encode(&(content_len as u32), &mut new_module);
+				new_module.extend_from_slice(&wasm[cursor..cursor + content_len]);
+			},
+		}
+
 		cursor += content_len;
+
+		if cursor >= wasm.len() {
+			break;
+		}
 	};
-	
-	let len_offset = mem_offset;
-	let mem_len = leb128fmt::decode_uint_slice::<u32, 32>(wasm, &mut cursor).context("Failed to decode memory section length")? as usize;
-
-	let mem_count = wasm[cursor] as usize;
-	assert_eq!(mem_count, 1, "Expected exactly one memory in the output module");
-
-	let mem_end_offset = cursor + mem_len;
-
-	cursor += 1;
-
-	let content_offset = cursor;
-
-	let mut new_module = Vec::with_capacity(wasm.len() + 3);
-	new_module.extend_from_slice(&wasm[..len_offset]);
-
-	// Encode the new length of the memory section, which is the old length + 3 (the size of one memory entry).
-	wasm_encoder::Encode::encode(&(mem_len + 3), &mut new_module);
-
-	new_module.push(2); // The new memory count, which is the old count + 1.
-
-	new_module.extend_from_slice(&wasm[content_offset..mem_end_offset]);
-
-	wasm_encoder::Encode::encode(&wasm_encoder::MemoryType { minimum: 1, maximum: Some(1), memory64: false, shared: false, page_size_log2: None }, &mut new_module);
-
-	new_module.extend_from_slice(&wasm[mem_end_offset..]);
 
 	Ok(new_module)
+}
+
+fn handle_memory_section(_config: &Config, new_module: &mut Vec<u8>, section: &[u8]) -> Result<()> {
+	let mem_count = section[0] as usize;
+	assert_eq!(mem_count, 1, "Expected exactly one memory in the output module");
+
+	// Encode the new length of the memory section, which is the old length + 3 (the size of one memory entry).
+	wasm_encoder::Encode::encode(&(section.len() + 3), new_module);
+	new_module.push(2); // The new memory count, which is the old count + 1.
+	new_module.extend_from_slice(&section[1..]); // The rest of the memory section, which is unchanged.
+	wasm_encoder::Encode::encode(&wasm_encoder::MemoryType { minimum: 1, maximum: Some(1), memory64: false, shared: false, page_size_log2: None }, new_module); // The new memory entry.
+
+	Ok(())
+}
+
+fn handle_export_section(config: &Config, new_module: &mut Vec<u8>, section: &[u8]) -> Result<()> {
+	let Some(name) = config.export_shadow_stack.as_ref() else {
+		// If no shadow stack export is specified, we can just copy the export section as is.
+		wasm_encoder::Encode::encode(&(section.len() as u32), new_module);
+		new_module.extend_from_slice(section);
+		return Ok(());
+	};
+
+	let mut cursor = 0;
+
+	let export_count = leb128fmt::decode_uint_slice::<u32, 32>(section, &mut cursor).context("Failed to decode export count")? as usize;
+
+	let mut new_section = Vec::with_capacity(section.len() + 10);
+
+	wasm_encoder::Encode::encode(&((export_count as u32) + 1), &mut new_section); // The new export count, which is the old count + 1.
+	new_section.extend_from_slice(&section[cursor..]); // The rest of the export section, which is unchanged.
+
+	// Encode the new export, which exports the shadow stack memory.
+	wasm_encoder::Encode::encode(&(name.len() as u32), &mut new_section);
+	new_section.extend_from_slice(name.as_bytes());
+	wasm_encoder::Encode::encode(&wasm_encoder::ExportKind::Memory, &mut new_section);
+	wasm_encoder::Encode::encode(&1u32, &mut new_section); // The export index.
+
+	wasm_encoder::Encode::encode(new_section.as_slice(), new_module);
+
+	Ok(())
 }
 
 fn parse_lua_file(lua_file: &impl LuaFile, as_main: bool) -> Result<wasm_encoder::Module> {
