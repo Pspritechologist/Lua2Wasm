@@ -1,4 +1,4 @@
-use crate::object::{ModuleState, ValueExt, linking::{RelocEntry, Symbol}};
+use crate::object::{ModuleState, IntoPushedValue, linking::{RelocEntry, Symbol}};
 use super::InstructionSink;
 use wasm_encoder::BlockType;
 
@@ -10,7 +10,7 @@ impl InstructionSink<'_> {
 	// }
 
 	pub fn const_val(&mut self, value: impl Into<value::Value>) -> &mut Self {
-		value.into().push_to_stack(self);
+		value.into().push((), self);
 		self
 	}
 
