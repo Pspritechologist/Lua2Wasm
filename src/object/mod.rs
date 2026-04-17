@@ -28,7 +28,7 @@ impl InitPriorities {
 	const INIT_RUNTIME: u32 = 50;
 }
 
-pub struct ModuleState {
+struct ModuleState {
 	symbol_table: SymbolTab,
 	types_sect: TypeSection,
 	import_sect: ImportSection,
@@ -242,14 +242,11 @@ fn compile_function<S: HasModuleState, L: IntoIterator<Item = (u32, ValType)>>(
 	}).unwrap()
 }
 
-pub(crate) trait IntoPushedValue {
-	type State<'a>;
-	fn push(self, state: Self::State<'_>, seq: &mut InstructionSink);
+pub trait ValueExt {
+	fn push_to_stack(self, seq: &mut InstructionSink);
 }
-
-impl IntoPushedValue for value::Value {
-	type State<'a> = ();
-	fn push(self, (): Self::State<'_>, seq: &mut InstructionSink) {
+impl ValueExt for value::Value {
+	fn push_to_stack(self, seq: &mut InstructionSink) {
 		seq.i64_const(self.as_i64());
 	}
 }

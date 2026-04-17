@@ -7,14 +7,14 @@ use anyhow::Result;
 
 mod instructions;
 
-pub struct LuaModuleState {
+struct LuaModuleState {
 	module_state: ModuleState,
 
 	strings: Box<[StringRef]>,
 	closures: Box<[Option<(ClosureRef, Box<[Upvalue]>)>]>,
 }
 
-pub struct LuaFunctionState {
+struct LuaFunctionState {
 	/// The number of arguments passed into this function call.
 	local_arg_count: u32,
 	/// A pointer to the base of the shtack frame for this function.
