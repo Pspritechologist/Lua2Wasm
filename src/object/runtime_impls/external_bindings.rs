@@ -73,9 +73,6 @@ macro_rules! extern_fns {
 
 extern_fns! {
 	pub struct ExternFns {
-		static_str(I32, I32) -> I64;
-		static_function(I32) -> I64;
-
 		add(I64, I64) -> I64;
 		sub(I64, I64) -> I64;
 		mul(I64, I64) -> I64;

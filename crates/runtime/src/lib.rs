@@ -183,16 +183,6 @@ impl ValExt for Value {
 }
 
 #[apply(internal)]
-pub fn static_str(addr: u32, len: u32) -> Value {
-	Value::string(addr, len)
-}
-
-#[apply(internal)]
-pub fn static_function(func: LuaFn) -> Value {
-	Value::function(func)
-}
-
-#[apply(internal)]
 pub fn add(a: Value, b: Value) -> Value {
 	match (a.get_tag(), b.get_tag()) {
 		(ValueTag::Number, ValueTag::Number) => Value::float(a.to_num() + b.to_num()),

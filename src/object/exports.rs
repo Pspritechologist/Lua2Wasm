@@ -73,7 +73,7 @@ fn generate_export_function(state: &mut ModuleState, export: &ExportData) -> Res
 			// Get the function we're trying to call and store it as the second value in the shtack.
 			.i32_const(8)
 			.global_get(state.global_table)
-			.static_str(state, lua_global_name, export.global_name.len().try_into().unwrap())
+			.static_str(lua_global_name, export.global_name.len().try_into().unwrap())
 			.call(state.extern_fns.table_get_name)
 			.i64_store(MemArg { align: 3, offset: 0, memory_index: state.shtack_mem })
 			// ... and then load it back... (wasm-opt will make this not suck I'm sure...)

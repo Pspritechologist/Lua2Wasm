@@ -2,7 +2,7 @@ use wasm_encoder::ValType;
 
 use crate::object::{
 	ModuleState, StringRef, InitPriorities, runtime_impls, compile_function,
-	instructions::InstructionSink,
+	instructions::{InstructionSink, operations::{LuaStaticFunction, SetTabName, WasmLocal}},
 	linking::SymbolTab,
 };
 
@@ -72,17 +72,13 @@ pub fn generate_runtime_object() -> Vec<u8> {
 			.i64_store(wasm_encoder::MemArg { align: 3, offset: 0, memory_index: state.shtack_mem });
 
 		let mut add_fn = |name: StringRef, func| {
-			seq.push_function_ptr(state, func)
-				.call(state.extern_fns.static_function)
-				.local_get(global_tab)
-				.static_str(state, name.sym, name.len)
-				.call(state.extern_fns.table_set_name);
+			seq.push(state, SetTabName::new(WasmLocal(global_tab), name, LuaStaticFunction(func)));
 		};
 
 		// Load the 'error' function into it.
-		add_fn(internal_strings.error, std_error.sym);
+		add_fn(internal_strings.error, std_error);
 		// Load the 'pcall' function into it.
-		add_fn(internal_strings.pcall, std_pcall.sym);
+		add_fn(internal_strings.pcall, std_pcall);
 	});
 
 	state.init_fns.add(init_fn.sym, InitPriorities::INIT_RUNTIME);

@@ -95,7 +95,7 @@ pub fn produce_lua_obj_file<'s>(module_name: impl AsRef<[u8]>, as_main: bool, pa
 			.i32_const(0)
 			.call(state.module_state.extern_fns.new_main_closure)
 			.global_get(state.module_state.module_table)
-			.static_str(&mut state.module_state, module_name_sym, module_name.len().try_into().unwrap())
+			.static_str(module_name_sym, module_name.len().try_into().unwrap())
 			.call(state.module_state.extern_fns.table_set_name);
 	});
 	
