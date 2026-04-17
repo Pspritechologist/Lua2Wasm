@@ -1,0 +1,136 @@
+use crate::object::{InstructionSink, IntoPushedValue, ModuleState};
+use crate::parsing::Upvalue;
+
+impl IntoPushedValue for crate::object::StringRef {
+	fn push(self, state: &mut ModuleState, seq: &mut InstructionSink) {
+		seq.static_str(state, self.sym, self.len);
+	}
+}
+
+pub struct NewTable;
+impl IntoPushedValue for NewTable {
+	fn push(self, state: &mut ModuleState, seq: &mut InstructionSink) {
+		seq.call(state.extern_fns.table_load);
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BinOp<L, R>(pub L, pub R, pub crate::object::linking::Symbol);
+impl<L: IntoPushedValue, R: IntoPushedValue> IntoPushedValue for BinOp<L, R> {
+	fn push(self, state: &mut ModuleState, seq: &mut InstructionSink) {
+		let Self(lhs, rhs, f) = self;
+		seq.push(state, lhs)
+			.push(state, rhs)
+			.call(f);
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnOp<L>(pub L, pub crate::object::linking::Symbol);
+impl<L: IntoPushedValue> IntoPushedValue for UnOp<L> {
+	fn push(self, state: &mut ModuleState, seq: &mut InstructionSink) {
+		let Self(lhs, f) = self;
+		seq.push(state, lhs)
+			.call(f);
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LuaStaticFunction(crate::object::ClosureRef);
+impl IntoPushedValue for LuaStaticFunction {
+	fn push(self, state: &mut ModuleState, seq: &mut InstructionSink) {
+		let LuaStaticFunction(closure) = self;
+		seq.push_function_ptr(state, closure.sym)
+			.call(state.extern_fns.static_function);
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LuaClosure<'a> {
+	pub sym: crate::object::Symbol,
+	pub upvalues: &'a [Upvalue],
+	pub local_shtack_base: u32,
+	pub local_shtack_fn: u32,
+}
+impl IntoPushedValue for LuaClosure<'_> {
+	fn push(self, state: &mut ModuleState, seq: &mut InstructionSink) {
+		let LuaClosure {
+			sym,
+			upvalues,
+			local_shtack_base,
+			local_shtack_fn,
+		} = self;
+
+		seq.push_function_ptr(state, sym)
+			.i32_const(upvalues.len() as i32)
+			.call(state.extern_fns.new_closure);
+
+		for (i, &upval) in upvalues.iter().enumerate() {
+			match upval {
+				Upvalue::ParentSlot(idx) => {
+					seq.i32_const(i as i32)
+						.local_get(local_shtack_base)
+						.i32_const(idx.into())
+						.i32_add()
+						.call(state.extern_fns.set_nth_upvalue);
+				},
+				Upvalue::ParentUpValue(idx) => {
+					seq.local_get(local_shtack_fn)
+						.i32_const(idx.into())
+						.i32_const(i as i32)
+						.call(state.extern_fns.take_nth_upvalue_into);
+				},
+			}
+		}
+
+		seq.call(state.extern_fns.finalize_closure);
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WasmLocal(pub u32);
+impl IntoPushedValue for WasmLocal {
+	fn push(self, _: &mut ModuleState, seq: &mut InstructionSink) {
+		seq.local_get(self.0);
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GetTabField<T, K> {
+	pub tab: T,
+	pub key: K,
+}
+impl<T, K> GetTabField<T, K> {
+	pub fn new(tab: T, key: K) -> Self {
+		Self { tab, key }
+	}
+}
+impl<T: IntoPushedValue, K: IntoPushedValue> IntoPushedValue for GetTabField<T, K> {
+	fn push(self, state: &mut ModuleState, seq: &mut InstructionSink) {
+		let Self { tab, key } = self;
+		seq.push(state, tab)
+			.push(state, key)
+			.call(state.extern_fns.table_get);
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetTabField<T, K, V> {
+	pub tab: T,
+	pub key: K,
+	pub value: V,
+}
+impl<T, K, V> SetTabField<T, K, V> {
+	pub fn new(tab: T, key: K, value: V) -> Self {
+		Self { tab, key, value }
+	}
+}
+impl<T: IntoPushedValue, K: IntoPushedValue, V: IntoPushedValue> IntoPushedValue for SetTabField<T, K, V> {
+	fn push(self, state: &mut ModuleState, seq: &mut InstructionSink) {
+		let Self { tab, key, value } = self;
+		seq.push(state, tab)
+			.push(state, key)
+			.push(state, value)
+			.call(state.extern_fns.table_set);
+	}
+}

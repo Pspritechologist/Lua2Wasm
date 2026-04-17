@@ -242,11 +242,18 @@ fn compile_function<S: HasModuleState, L: IntoIterator<Item = (u32, ValType)>>(
 	}).unwrap()
 }
 
-pub trait ValueExt {
-	fn push_to_stack(self, seq: &mut InstructionSink);
+trait IntoPushedValue {
+	fn push(self, state: &mut ModuleState, seq: &mut InstructionSink);
 }
-impl ValueExt for value::Value {
-	fn push_to_stack(self, seq: &mut InstructionSink) {
+
+impl IntoPushedValue for value::Value {
+	fn push(self, _state: &mut ModuleState, seq: &mut InstructionSink) {
 		seq.i64_const(self.as_i64());
+	}
+}
+
+impl<T, F: FnOnce(&mut ModuleState, &mut InstructionSink) -> T> IntoPushedValue for F {
+	fn push(self, state: &mut ModuleState, seq: &mut InstructionSink) {
+		self(state, seq);
 	}
 }

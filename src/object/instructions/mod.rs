@@ -5,6 +5,7 @@ use wasm_encoder::{
 
 use crate::object::linking::RelocEntry;
 
+pub mod operations;
 mod instructions_ext;
 mod functions;
 

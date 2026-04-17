@@ -1,17 +1,15 @@
-use crate::object::{ModuleState, ValueExt, linking::{RelocEntry, Symbol}};
+use crate::object::{IntoPushedValue, ModuleState, linking::{RelocEntry, Symbol}};
 use super::InstructionSink;
 use wasm_encoder::BlockType;
 
 impl InstructionSink<'_> {
-	// fn i32_const_r(&mut self, x: i32) -> &mut Self {
-	// 	self.sink.push(0x41);
-	// 	x.encode(self.sink);
-	// 	self
-	// }
+	pub fn push(&mut self, state: &mut ModuleState, value: impl IntoPushedValue) -> &mut Self {
+		value.push(state, self);
+		self
+	}
 
 	pub fn const_val(&mut self, value: impl Into<value::Value>) -> &mut Self {
-		value.into().push_to_stack(self);
-		self
+		self.i64_const(value.into().as_i64())
 	}
 
 	pub fn static_str(&mut self, state: &mut ModuleState, symbol: Symbol, len: u32) -> &mut Self {
