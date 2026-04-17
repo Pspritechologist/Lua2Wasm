@@ -8,6 +8,7 @@ extern crate alloc;
 
 pub trait TabValueExt {
 	fn to_table(self) -> Table;
+	#[expect(clippy::wrong_self_convention)]
 	fn as_table(self) -> Option<Table>;
 	fn table(table: Table) -> Self;
 	fn new_table() -> Self;

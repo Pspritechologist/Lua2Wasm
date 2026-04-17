@@ -1,7 +1,7 @@
 use wasm_encoder::{EntityType, FuncType, MemArg, ValType};
 use anyhow::{Result, Ok};
 use std::borrow::Cow;
-use crate::{Config, object::{InstructionSink, ModuleState, linking::{Symbol, SymbolTab}, compile_function, try_compile_function}};
+use crate::{Config, object::{InstructionSink, ModuleState, linking::{Symbol, SymbolTab}, try_compile_function}};
 
 #[derive(Debug, Clone)]
 pub struct ExportData<'a> {

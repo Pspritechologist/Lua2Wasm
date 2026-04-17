@@ -108,6 +108,7 @@ macro_rules! internal {
 use internal;
 
 trait ValExt {
+	#[expect(unused)]
 	fn function(func: LuaFn) -> Value {
 		let idx = func as usize as u32;
 		// SAFETY: `func` is a LuaFn and we tag it as Function.
@@ -123,10 +124,13 @@ trait ValExt {
 	}
 
 	fn to_closure(self) -> closures::Closure;
+	#[expect(unused, clippy::wrong_self_convention)]
 	fn as_closure(self) -> Option<closures::Closure>;
 	fn to_function(self) -> LuaFn;
+	#[expect(unused, clippy::wrong_self_convention)]
 	fn as_function(self) -> Option<LuaFn>;
 	fn to_str(&self) -> &ByteStr;
+	#[expect(unused)]
 	fn as_str(&self) -> Option<&ByteStr>;
 
 	fn equals(self, other: Self) -> bool;

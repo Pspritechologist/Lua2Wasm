@@ -26,6 +26,7 @@ impl Drop for InstructionSink<'_> {
 	}
 }
 
+#[allow(unused)]
 impl<'a> InstructionSink<'a> {
 	/// Create an instruction encoder pointing to the given byte sink.
 	pub(crate) fn new(func: &'a mut wasm_encoder::Function, relocations: &'a mut Vec<RelocEntry>) -> Self {

@@ -206,6 +206,7 @@ impl SymbolTab {
 	///
 	/// Hidden symbols are not to be exported when performing the final link,
 	/// but may be linked to other modules.
+	#[expect(unused)]
 	pub const WASM_SYM_VISIBILITY_HIDDEN: u32 = SymbolTable::WASM_SYM_VISIBILITY_HIDDEN;
 
 	/// This symbol is not defined.
@@ -230,5 +231,6 @@ impl SymbolTab {
 
 	/// This symbol is intended to be included in the linker output, regardless
 	/// of whether it is used by the program.
+	#[expect(unused)]
 	pub const WASM_SYM_NO_STRIP: u32 = SymbolTable::WASM_SYM_NO_STRIP;
 }
