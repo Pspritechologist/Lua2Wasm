@@ -100,6 +100,9 @@ impl<'s> ConstantMap<'s> {
 
 	pub fn strings(&self) -> &[Cow<'s, bstr::BStr>] { &self.strings }
 	pub fn closures(&self) -> &[functions::ParsedFunction] { &self.closures }
+	pub fn take_closures(&mut self) -> Vec<functions::ParsedFunction> {
+		std::mem::take(&mut self.closures)
+	}
 }
 
 trait LexerExt<'s> {
